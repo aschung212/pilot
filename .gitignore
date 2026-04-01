@@ -1,0 +1,14 @@
+# Project-specific config (contains paths, team names, webhooks)
+project.env
+
+# Output artifacts
+outputs/
+*.log
+
+# macOS
+.DS_Store
+
+# Credentials
+credentials.toml
+*.key
+*.pem
