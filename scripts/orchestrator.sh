@@ -14,10 +14,13 @@
 set -euo pipefail
 
 [ -f "$HOME/.zshenv" ] && source "$HOME/.zshenv" 2>/dev/null || true
+REAL_SCRIPT="$(readlink "$0" 2>/dev/null || echo "$0")"
+SCRIPT_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
+[ -f "$SCRIPT_DIR/../project.env" ] && source "$SCRIPT_DIR/../project.env"
 
 SCRIPTS="$HOME/Documents/Scripts"
 DATE=$(date +%Y-%m-%d)
-OUTPUT_DIR="$HOME/Documents/Claude/outputs"
+OUTPUT_DIR="${OUTPUT_DIR:-$HOME/Documents/Claude/outputs}"
 LOG="$OUTPUT_DIR/lift-overnight-$DATE.log"
 RUNTIME_CSV="$OUTPUT_DIR/lift-runtime.csv"
 

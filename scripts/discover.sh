@@ -10,6 +10,9 @@ set -euo pipefail
 
 # Source env vars when run by launchd (no login shell)
 [ -f "$HOME/.zshenv" ] && source "$HOME/.zshenv" 2>/dev/null || true
+REAL_SCRIPT="$(readlink "$0" 2>/dev/null || echo "$0")"
+SCRIPT_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
+[ -f "$SCRIPT_DIR/../project.env" ] && source "$SCRIPT_DIR/../project.env"
 
 # Slack webhook — zero tokens
 SLACK_WEBHOOK_URL="${SLACK_WEBHOOK_URL:-}"
@@ -23,10 +26,10 @@ slack_send() {
   fi
 }
 
-REPO="/Users/aaron/development/lift"
+REPO="${REPO_PATH:-/Users/aaron/development/lift}"
 DATE=$(date +%Y-%m-%d)
 DAY_OF_WEEK=$(date +%u)  # 1=Monday, 7=Sunday
-OUTPUT_DIR="$HOME/Documents/Claude/outputs"
+OUTPUT_DIR="${OUTPUT_DIR:-$HOME/Documents/Claude/outputs}"
 SEARCH_LOG="$OUTPUT_DIR/lift-discovery-log.md"
 RUN_LOG="$OUTPUT_DIR/lift-discover-$DATE.md"
 
@@ -90,14 +93,15 @@ echo "🔍 Lift Discovery Agent — $DATE — Focus: $FOCUS" | tee "$RUN_LOG"
 
 # Get current feature list and backlog for context
 cd "$REPO"
-CURRENT_FEATURES=$(grep -A50 '## Feature Summary' "$HOME/Documents/Obsidian Vault/20_Learning/Vibe Coding Projects/Lift - Workout Tracker PWA.md" 2>/dev/null | head -40 || echo "Could not read feature list")
-EXISTING_BACKLOG=$(linear issue list --project Lift --all-assignees --sort priority --team MAS --state backlog --state unstarted --state started --no-pager 2>&1 | sed 's/\x1b\[[0-9;]*m//g' || echo "Could not fetch backlog")
-COMPLETED_ISSUES=$(linear issue list --project Lift --all-assignees --sort priority --team MAS --state completed --no-pager 2>&1 | sed 's/\x1b\[[0-9;]*m//g' || echo "None")
+FEATURES_FILE="${PRODUCT_FEATURES_FILE:-$HOME/Documents/Obsidian Vault/20_Learning/Vibe Coding Projects/Lift - Workout Tracker PWA.md}"
+CURRENT_FEATURES=$(grep -A50 '## Feature Summary' "$FEATURES_FILE" 2>/dev/null | head -40 || echo "Could not read feature list")
+EXISTING_BACKLOG=$(linear issue list --project "$LINEAR_PROJECT" --all-assignees --sort priority --team "$LINEAR_TEAM" --state backlog --state unstarted --state started --no-pager 2>&1 | sed 's/\x1b\[[0-9;]*m//g' || echo "Could not fetch backlog")
+COMPLETED_ISSUES=$(linear issue list --project "$LINEAR_PROJECT" --all-assignees --sort priority --team "$LINEAR_TEAM" --state completed --no-pager 2>&1 | sed 's/\x1b\[[0-9;]*m//g' || echo "None")
 PREVIOUS_SEARCHES=$(tail -100 "$SEARCH_LOG" 2>/dev/null || echo "No previous searches")
 LAST_RUN_DATE=$(grep "\[$FOCUS\]" "$SEARCH_LOG" 2>/dev/null | tail -1 | cut -d' ' -f1 || echo "never")
 
 # Fetch canceled issues with full details — these represent rejected product directions
-CANCELED_IDS=$({ linear issue list --project Lift --all-assignees --sort priority --team MAS --state canceled --no-pager 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep -oE 'MAS-[0-9]+'; } || true)
+CANCELED_IDS=$({ linear issue list --project "$LINEAR_PROJECT" --all-assignees --sort priority --team "$LINEAR_TEAM" --state canceled --no-pager 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep -oE 'MAS-[0-9]+'; } || true)
 CANCELED_DETAILS=""
 for cid in $CANCELED_IDS; do
   detail=$(linear issue view "$cid" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' || true)
@@ -108,7 +112,7 @@ $detail
 done
 
 # Product decisions file — Aaron maintains this in Obsidian
-DECISIONS_FILE="$HOME/Documents/Obsidian Vault/20_Learning/Vibe Coding Projects/Lift - Product Decisions.md"
+DECISIONS_FILE="${PRODUCT_DECISIONS_FILE:-$HOME/Documents/Obsidian Vault/20_Learning/Vibe Coding Projects/Lift - Product Decisions.md}"
 PRODUCT_DECISIONS=$(cat "$DECISIONS_FILE" 2>/dev/null || echo "No product decisions file found")
 
 # Focus-specific search instructions
@@ -305,7 +309,7 @@ DISCOVER_DURATION=$((DISCOVER_END - DISCOVER_START))
 # Create Linear issues for discoveries — skip if Claude already created them inline
 DISCOVER_COUNT=0
 DISCOVER_PRIORITIES=""
-CLAUDE_CREATED=$(grep -c 'linear.app/masterchung/issue/MAS-' "$RUN_LOG" 2>/dev/null | tail -1 | tr -d ' ' || echo "0")
+CLAUDE_CREATED=$(grep -c "linear.app/$LINEAR_ORG/issue/${LINEAR_TEAM}-" "$RUN_LOG" 2>/dev/null | tail -1 | tr -d ' ' || echo "0")
 if [ "$CLAUDE_CREATED" -gt 0 ]; then
   echo "  ℹ️  Claude already created $CLAUDE_CREATED issues inline — skipping duplicate creation." | tee -a "$RUN_LOG"
 else
@@ -314,7 +318,7 @@ else
     title=$(echo "$marker" | sed 's/LINEAR_DISCOVER:[1-4]://')
     desc=${desc:-No description}
     echo "  📋 Creating: $title (P$priority)" | tee -a "$RUN_LOG"
-    linear issue create --team MAS --project Lift --title "$title" --description "Source: Discovery agent ($FOCUS focus, $DATE). $desc" --priority "$priority" 2>&1 | tee -a "$RUN_LOG"
+    linear issue create --team "$LINEAR_TEAM" --project "$LINEAR_PROJECT" --title "$title" --description "Source: Discovery agent ($FOCUS focus, $DATE). $desc" --priority "$priority" 2>&1 | tee -a "$RUN_LOG"
   done
 fi
 DISCOVER_COUNT=$({ grep -oE 'LINEAR_DISCOVER:[1-4]:' "$RUN_LOG" 2>/dev/null || true; } | wc -l | tr -d ' ')
@@ -335,7 +339,7 @@ with open('$RUN_LOG') as f:
 # Extract titles from LINEAR_DISCOVER lines
 titles = re.findall(r'LINEAR_DISCOVER:[1-4]:([^|]+)', log)
 # Extract Linear URLs with issue IDs
-urls = re.findall(r'(https://linear\.app/masterchung/issue/(MAS-\d+)[^\s)\"]*)', log)
+urls = re.findall(r'(https://linear\.app/[^/]+/issue/([A-Z]+-\d+)[^\s)\"]*)', log)
 
 # Pair them up (best effort — same order)
 lines = []

@@ -17,6 +17,9 @@ set -uo pipefail
 # Note: not using -e (errexit) because individual issue failures should not abort the loop
 
 [ -f "$HOME/.zshenv" ] && source "$HOME/.zshenv" 2>/dev/null || true
+REAL_SCRIPT="$(readlink "$0" 2>/dev/null || echo "$0")"
+SCRIPT_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
+[ -f "$SCRIPT_DIR/../project.env" ] && source "$SCRIPT_DIR/../project.env"
 
 SLACK_WEBHOOK_URL="${SLACK_WEBHOOK_URL:-}"
 slack_send() {
@@ -28,9 +31,9 @@ slack_send() {
   fi
 }
 
-REPO="/Users/aaron/development/lift"
+REPO="${REPO_PATH:-/Users/aaron/development/lift}"
 DATE=$(date +%Y-%m-%d)
-OUTPUT_DIR="$HOME/Documents/Claude/outputs"
+OUTPUT_DIR="${OUTPUT_DIR:-$HOME/Documents/Claude/outputs}"
 TRIAGE_LOG="$OUTPUT_DIR/lift-triage-$DATE.md"
 DRY_RUN="${1:-}"
 
@@ -39,11 +42,11 @@ mkdir -p "$OUTPUT_DIR"
 echo "🔍 Lift Triage Agent — $DATE" | tee "$TRIAGE_LOG"
 
 # Load product decisions for context
-DECISIONS_FILE="$HOME/Documents/Obsidian Vault/20_Learning/Vibe Coding Projects/Lift - Product Decisions.md"
+DECISIONS_FILE="${PRODUCT_DECISIONS_FILE:-$HOME/Documents/Obsidian Vault/20_Learning/Vibe Coding Projects/Lift - Product Decisions.md}"
 PRODUCT_DECISIONS=$(cat "$DECISIONS_FILE" 2>/dev/null || echo "No product decisions file found")
 
 # Get all backlog/unstarted issues
-ALL_ISSUES=$(linear issue list --project Lift --all-assignees --sort priority --team MAS --state backlog --state unstarted --no-pager 2>&1 | sed 's/\x1b\[[0-9;]*m//g')
+ALL_ISSUES=$(linear issue list --project "$LINEAR_PROJECT" --all-assignees --sort priority --team "$LINEAR_TEAM" --state backlog --state unstarted --no-pager 2>&1 | sed 's/\x1b\[[0-9;]*m//g')
 ISSUE_IDS=$(echo "$ALL_ISSUES" | grep -oE 'MAS-[0-9]+' || true)
 
 if [ -z "$ISSUE_IDS" ]; then
@@ -144,7 +147,7 @@ $IMPL_PLAN
 _Automated triage — suggested starting point, not a mandate. Read the codebase and deviate if you find a better approach._" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' || true
       # Move to Unstarted = ready for builder
       linear issue update "$issue_id" --state unstarted 2>&1 | sed 's/\x1b\[[0-9;]*m//g' || true
-      RESULTS+="  • ✅ <https://linear.app/masterchung/issue/$issue_id|$issue_id>: $ISSUE_TITLE\n"
+      RESULTS+="  • ✅ <https://linear.app/$LINEAR_ORG/issue/$issue_id|$issue_id>: $ISSUE_TITLE\n"
       ;;
     ENHANCE)
       ENHANCED=$((ENHANCED + 1))
@@ -167,7 +170,7 @@ _Automated triage — suggested starting point, not a mandate. Read the codebase
       fi
       # Move to Unstarted = ready for builder
       linear issue update "$issue_id" --state unstarted 2>&1 | sed 's/\x1b\[[0-9;]*m//g' || true
-      RESULTS+="  • ✨ <https://linear.app/masterchung/issue/$issue_id|$issue_id>: $ISSUE_TITLE (enhanced)\n"
+      RESULTS+="  • ✨ <https://linear.app/$LINEAR_ORG/issue/$issue_id|$issue_id>: $ISSUE_TITLE (enhanced)\n"
       ;;
     SKIP)
       SKIPPED=$((SKIPPED + 1))
@@ -180,7 +183,7 @@ $REASON
 _Automated triage — Aaron can override by moving to Unstarted._" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' || true
       # Move to low priority but don't cancel — Aaron decides
       linear issue update "$issue_id" --priority 4 2>&1 | sed 's/\x1b\[[0-9;]*m//g' || true
-      RESULTS+="  • ⏭️ <https://linear.app/masterchung/issue/$issue_id|$issue_id>: $ISSUE_TITLE (skip)\n"
+      RESULTS+="  • ⏭️ <https://linear.app/$LINEAR_ORG/issue/$issue_id|$issue_id>: $ISSUE_TITLE (skip)\n"
       ;;
     FLAG)
       FLAGGED=$((FLAGGED + 1))
@@ -191,7 +194,7 @@ $REASON
 
 ---
 _Automated triage — this issue needs a human decision before the builder can proceed._" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' || true
-      RESULTS+="  • 🚩 <https://linear.app/masterchung/issue/$issue_id|$issue_id>: $ISSUE_TITLE (needs input)\n"
+      RESULTS+="  • 🚩 <https://linear.app/$LINEAR_ORG/issue/$issue_id|$issue_id>: $ISSUE_TITLE (needs input)\n"
       ;;
   esac
 done

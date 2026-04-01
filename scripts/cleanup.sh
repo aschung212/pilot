@@ -14,6 +14,9 @@
 set -uo pipefail
 
 [ -f "$HOME/.zshenv" ] && source "$HOME/.zshenv" 2>/dev/null || true
+REAL_SCRIPT="$(readlink "$0" 2>/dev/null || echo "$0")"
+SCRIPT_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
+[ -f "$SCRIPT_DIR/../project.env" ] && source "$SCRIPT_DIR/../project.env"
 
 DRY_RUN="${1:-}"
 DATE=$(date +%Y-%m-%d)
@@ -47,7 +50,7 @@ DEDUPED=0
 
 # ── Step 1: Archive completed and canceled issues ──────────────────────────
 for state in completed canceled; do
-  IDS=$(linear issue list --project Lift --all-assignees --sort priority --team MAS --state "$state" --no-pager 2>&1 \
+  IDS=$(linear issue list --project "$LINEAR_PROJECT" --all-assignees --sort priority --team "$LINEAR_TEAM" --state "$state" --no-pager 2>&1 \
     | sed 's/\x1b\[[0-9;]*m//g' | grep -oE 'MAS-[0-9]+' || true)
 
   for issue_id in $IDS; do
@@ -65,7 +68,7 @@ done
 
 # ── Step 2: Deduplicate issues (same title, cancel+archive newer ones) ─────
 # Get all open issues with their IDs and titles
-ALL_ISSUES=$(linear issue list --project Lift --all-assignees --sort priority --team MAS \
+ALL_ISSUES=$(linear issue list --project "$LINEAR_PROJECT" --all-assignees --sort priority --team "$LINEAR_TEAM" \
   --state backlog --state unstarted --state started --state triage --no-pager 2>&1 \
   | sed 's/\x1b\[[0-9;]*m//g' || true)
 
@@ -99,7 +102,7 @@ for title, ids in by_title.items():
   if [ "$DRY_RUN" = "--dry-run" ]; then
     echo "  [dry-run] Would cancel+archive duplicate $dup_id"
   else
-    linear issue update "$dup_id" --state canceled --team MAS 2>&1 | sed 's/\x1b\[[0-9;]*m//g' >/dev/null
+    linear issue update "$dup_id" --state canceled --team "$LINEAR_TEAM" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' >/dev/null
     UUID=$(get_uuid "$dup_id")
     if [ -n "$UUID" ]; then
       archive_issue "$UUID"

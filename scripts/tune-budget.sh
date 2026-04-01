@@ -8,9 +8,12 @@
 set -euo pipefail
 
 [ -f "$HOME/.zshenv" ] && source "$HOME/.zshenv" 2>/dev/null || true
+REAL_SCRIPT="$(readlink "$0" 2>/dev/null || echo "$0")"
+SCRIPT_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
+[ -f "$SCRIPT_DIR/../project.env" ] && source "$SCRIPT_DIR/../project.env"
 
-OUTPUT_DIR="$HOME/Documents/Claude/outputs"
-BUDGET_CONF="$HOME/Documents/Scripts/lift-budget.conf"
+OUTPUT_DIR="${OUTPUT_DIR:-$HOME/Documents/Claude/outputs}"
+BUDGET_CONF="${SCRIPT_DIR}/../config/budget.conf"
 USAGE_CSV="$OUTPUT_DIR/lift-usage-tracking.csv"
 METRICS_CSV="$OUTPUT_DIR/lift-metrics.csv"
 RUNTIME_CSV="$OUTPUT_DIR/lift-runtime.csv"

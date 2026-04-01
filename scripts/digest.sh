@@ -10,6 +10,9 @@ set -euo pipefail
 
 # Source env vars when run by launchd (no login shell)
 [ -f "$HOME/.zshenv" ] && source "$HOME/.zshenv" 2>/dev/null || true
+REAL_SCRIPT="$(readlink "$0" 2>/dev/null || echo "$0")"
+SCRIPT_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
+[ -f "$SCRIPT_DIR/../project.env" ] && source "$SCRIPT_DIR/../project.env"
 
 SLACK_WEBHOOK_DAILY_REVIEW="${SLACK_WEBHOOK_DAILY_REVIEW:-}"
 DRY_RUN="${1:-}"
@@ -23,7 +26,7 @@ strip_ansi() {
 # Fetch issues by project and state
 fetch_issues() {
   local project="$1" states="$2"
-  local args=(--project "$project" --all-assignees --sort priority --team MAS --no-pager)
+  local args=(--project "$project" --all-assignees --sort priority --team "${LINEAR_TEAM:-MAS}" --no-pager)
   for state in $states; do
     args+=(--state "$state")
   done
@@ -81,7 +84,7 @@ ${APPS_TOP}
 
 *AI Competency* — ${AI_ACTIVE_COUNT} open
 
-<https://linear.app/masterchung|Open Linear>"
+<https://linear.app/${LINEAR_ORG:-masterchung}|Open Linear>"
 
 if [ "$DRY_RUN" = "--dry-run" ]; then
   echo "$MSG"

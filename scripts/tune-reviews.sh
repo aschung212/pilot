@@ -11,11 +11,14 @@
 set -euo pipefail
 
 [ -f "$HOME/.zshenv" ] && source "$HOME/.zshenv" 2>/dev/null || true
+REAL_SCRIPT="$(readlink "$0" 2>/dev/null || echo "$0")"
+SCRIPT_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
+[ -f "$SCRIPT_DIR/../project.env" ] && source "$SCRIPT_DIR/../project.env"
 
-OUTPUT_DIR="$HOME/Documents/Claude/outputs"
+OUTPUT_DIR="${OUTPUT_DIR:-$HOME/Documents/Claude/outputs}"
 LEARNINGS="$OUTPUT_DIR/lift-review-learnings.md"
 REVIEW_HISTORY="$OUTPUT_DIR/lift-review-history.json"
-REPO="/Users/aaron/development/lift"
+REPO="${REPO_PATH:-/Users/aaron/development/lift}"
 
 # Initialize history if needed
 if [ ! -f "$REVIEW_HISTORY" ]; then
@@ -50,7 +53,7 @@ for pr in merged:
     # Get PR comments
     try:
         comments_raw = subprocess.check_output(
-            ['gh', 'api', f'repos/aschung212/Lift/issues/{pr_num}/comments'],
+            ['gh', 'api', f'repos/$GITHUB_REPO/issues/{pr_num}/comments'],
             cwd=repo, stderr=subprocess.DEVNULL
         ).decode()
         comments = json.loads(comments_raw)

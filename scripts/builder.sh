@@ -15,6 +15,9 @@ set -uo pipefail
 
 # Source env vars when run by launchd (no login shell)
 [ -f "$HOME/.zshenv" ] && source "$HOME/.zshenv" 2>/dev/null || true
+REAL_SCRIPT="$(readlink "$0" 2>/dev/null || echo "$0")"
+SCRIPT_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
+[ -f "$SCRIPT_DIR/../project.env" ] && source "$SCRIPT_DIR/../project.env"
 
 # Slack webhook — zero tokens, zero dependencies
 SLACK_WEBHOOK_URL="${SLACK_WEBHOOK_URL:-}"
@@ -30,9 +33,9 @@ slack_send() {
   fi
 }
 
-REPO="/Users/aaron/development/lift"
+REPO="${REPO_PATH:-/Users/aaron/development/lift}"
 DATE=$(date +%Y-%m-%d)
-OUTPUT_DIR="$HOME/Documents/Claude/outputs"
+OUTPUT_DIR="${OUTPUT_DIR:-$HOME/Documents/Claude/outputs}"
 STOP_AT="${1:-07:00}"
 RUN=0
 MAX_CONSECUTIVE_FAILURES=3
@@ -219,7 +222,7 @@ $(sed -n '/## Plan/,/## /p' "$f" 2>/dev/null | head -20)
 
   # Pull Linear backlog for the Lift project
   # Only pick from Unstarted (triaged + approved) and Started issues — skip raw Backlog
-  LINEAR_ISSUES=$(linear issue list --project Lift --all-assignees --sort priority --team MAS --state unstarted --state started --no-pager 2>&1 | sed 's/\x1b\[[0-9;]*m//g' || echo "Could not fetch Linear issues")
+  LINEAR_ISSUES=$(linear issue list --project "$LINEAR_PROJECT" --all-assignees --sort priority --team "$LINEAR_TEAM" --state unstarted --state started --no-pager 2>&1 | sed 's/\x1b\[[0-9;]*m//g' || echo "Could not fetch Linear issues")
 
   # Fetch full details (description + comments) for top priority issues
   TOP_ISSUE_IDS=$({ echo "$LINEAR_ISSUES" | grep -oE 'MAS-[0-9]+' | head -5; } || true)
@@ -377,32 +380,32 @@ except: pass
         # Create new Linear issues for discovered problems (backlog, not done)
         { grep -oE 'LINEAR_DISCOVER:[1-4]:.*' "$RUN_LOG" 2>/dev/null || true; } | sort -u | while IFS=: read -r _ priority title; do
           echo "  📋 Discovered issue: $title (priority $priority)" | tee -a "$RUN_LOG"
-          linear issue create --team MAS --project Lift --title "$title" --priority "$priority" 2>&1 | tee -a "$RUN_LOG"
+          linear issue create --team "$LINEAR_TEAM" --project "$LINEAR_PROJECT" --title "$title" --priority "$priority" 2>&1 | tee -a "$RUN_LOG"
         done
 
         # Create new Linear issues for work not in the backlog (already done)
         { grep -oE 'LINEAR_CREATE:[1-4]:.*' "$RUN_LOG" 2>/dev/null || true; } | sort -u | while IFS=: read -r _ priority title; do
           echo "  Creating Linear issue: $title (priority $priority)" | tee -a "$RUN_LOG"
-          linear issue create --team MAS --project Lift --title "$title" --priority "$priority" --state "Done" 2>&1 | tee -a "$RUN_LOG"
+          linear issue create --team "$LINEAR_TEAM" --project "$LINEAR_PROJECT" --title "$title" --priority "$priority" --state "Done" 2>&1 | tee -a "$RUN_LOG"
         done
 
         # Handle skipped issues — move to Blocked with a comment explaining why
         { grep -oE 'LINEAR_SKIPPED:MAS-[0-9]+:[^"]*' "$RUN_LOG" 2>/dev/null || true; } | sort -u | while IFS=: read -r _ _ issue_id reason; do
           echo "  Blocking $issue_id: $reason" | tee -a "$RUN_LOG"
-          linear issue update "$issue_id" --state "Blocked" --team MAS 2>&1 | tee -a "$RUN_LOG"
+          linear issue update "$issue_id" --state "Blocked" --team "$LINEAR_TEAM" 2>&1 | tee -a "$RUN_LOG"
           linear issue comment add "$issue_id" --body "Automated run blocked this issue on $DATE: $reason" 2>&1 | tee -a "$RUN_LOG"
         done
 
         # Get the latest commit hash and build GitHub link
         LATEST_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
-        COMMIT_URL="https://github.com/aschung212/Lift/commit/$LATEST_COMMIT"
+        COMMIT_URL="https://github.com/$GITHUB_REPO/commit/$LATEST_COMMIT"
 
         # Update Linear issues based on Claude's output (flexible matching)
         { grep -oE 'LINEAR_DONE:MAS-[0-9]+\|[^"]*' "$RUN_LOG" 2>/dev/null || true; } | sort -u | while IFS='|' read -r marker summary; do
           issue_id=$(echo "$marker" | sed 's/LINEAR_DONE://')
           summary=${summary:-No details provided}
           echo "  Marking $issue_id as Done" | tee -a "$RUN_LOG"
-          linear issue update "$issue_id" --state "Done" --team MAS 2>&1 | tee -a "$RUN_LOG"
+          linear issue update "$issue_id" --state "Done" --team "$LINEAR_TEAM" 2>&1 | tee -a "$RUN_LOG"
           linear issue comment add "$issue_id" --body "Completed by overnight automation on $DATE.
 
 $summary
@@ -413,7 +416,7 @@ $summary
           issue_id=$(echo "$marker" | sed 's/LINEAR_PROGRESS://')
           summary=${summary:-No details provided}
           echo "  Marking $issue_id as In Progress" | tee -a "$RUN_LOG"
-          linear issue update "$issue_id" --state "In Progress" --team MAS 2>&1 | tee -a "$RUN_LOG"
+          linear issue update "$issue_id" --state "In Progress" --team "$LINEAR_TEAM" 2>&1 | tee -a "$RUN_LOG"
           linear issue comment add "$issue_id" --body "In progress — $summary" 2>&1 | tee -a "$RUN_LOG"
         done
         # Slack notification with iteration results
@@ -421,10 +424,10 @@ $summary
         DONE_LINKS=$({ grep -oE 'LINEAR_DONE:MAS-[0-9]+\|[^"]*' "$RUN_LOG" 2>/dev/null || true; } | sort -u | while IFS='|' read -r marker summary; do
           id=$(echo "$marker" | sed 's/LINEAR_DONE://')
           title=$(echo "$summary" | head -c 80)
-          [ -n "$id" ] && echo "  • <https://linear.app/masterchung/issue/$id|$id: ${title:-no description}>"
+          [ -n "$id" ] && echo "  • <https://linear.app/$LINEAR_ORG/issue/$id|$id: ${title:-no description}>"
         done)
         BLOCKED_LINKS=$({ grep -oE 'LINEAR_SKIPPED:MAS-[0-9]+:[^"]*' "$RUN_LOG" 2>/dev/null || true; } | sort -u | while IFS=: read -r _ _ id reason; do
-          [ -n "$id" ] && echo "  • <https://linear.app/masterchung/issue/$id|$id: ${reason:-no reason}>"
+          [ -n "$id" ] && echo "  • <https://linear.app/$LINEAR_ORG/issue/$id|$id: ${reason:-no reason}>"
         done)
         DONE_LIST=$({ grep -oE 'LINEAR_DONE:MAS-[0-9]+' "$RUN_LOG" 2>/dev/null || true; } | sed 's/LINEAR_DONE://' | sort -u)
         BLOCKED_LIST=$({ grep -oE 'LINEAR_SKIPPED:MAS-[0-9]+' "$RUN_LOG" 2>/dev/null || true; } | sed 's/LINEAR_SKIPPED://' | sed 's/:.*//' | sort -u)
@@ -517,7 +520,7 @@ if ! gh pr view "$BRANCH" --json url -q .url >/dev/null 2>&1; then
 Review summaries will be posted as comments by the automated review pipeline." 2>&1 || true
   fi
 fi
-PR_URL=$(cd "$REPO" && gh pr view "$BRANCH" --json url -q .url 2>/dev/null || echo "https://github.com/aschung212/Lift/pull/new/$BRANCH")
+PR_URL=$(cd "$REPO" && gh pr view "$BRANCH" --json url -q .url 2>/dev/null || echo "https://github.com/$GITHUB_REPO/pull/new/$BRANCH")
 
 # Collect per-run summaries
 RUN_SUMMARIES=""
@@ -549,7 +552,7 @@ cat > "$DIGEST" <<DIGEST_EOF
 
 ## Review
 - **PR:** $PR_URL
-- **Linear:** https://linear.app/masterchung → Lift project
+- **Linear:** https://linear.app/$LINEAR_ORG → $LINEAR_PROJECT project
 - **Logs:** ~/Documents/Claude/outputs/lift-enhance-$DATE-run*.md
 
 ## Run-by-Run
@@ -721,7 +724,7 @@ Linear issues closed: $LINEAR_DONE_COUNT
 Linear issues in progress: $LINEAR_PROGRESS_COUNT
 
 Review PR: $PR_URL
-Linear board: https://linear.app/masterchung
+Linear board: https://linear.app/$LINEAR_ORG
 
 Run-by-run:
 $RUN_SUMMARIES
