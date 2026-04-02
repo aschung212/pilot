@@ -23,19 +23,18 @@ strip_ansi() {
   sed 's/\x1b\[[0-9;]*m//g'
 }
 
-# Fetch issues by project and state
+TRACKER="$SCRIPT_DIR/../adapters/tracker.sh"
+
+# Fetch issues by state(s)
 fetch_issues() {
   local project="$1" states="$2"
-  local args=(--project "$project" --all-assignees --sort priority --team "${LINEAR_TEAM:-MAS}" --no-pager)
-  for state in $states; do
-    args+=(--state "$state")
-  done
-  linear issue list "${args[@]}" 2>&1 | strip_ansi
+  # shellcheck disable=SC2086
+  bash "$TRACKER" list $states
 }
 
 # Count issues matching a pattern
 count_lines() {
-  echo "$1" | grep -c 'MAS-' 2>/dev/null || echo "0"
+  echo "$1" | grep -c "${LINEAR_TEAM}-" 2>/dev/null || echo "0"
 }
 
 # --- Lift ---
