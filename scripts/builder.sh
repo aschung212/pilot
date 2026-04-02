@@ -500,7 +500,7 @@ echo ""
 echo "━━━ Overnight session complete ━━━"
 echo "Total iterations: $RUN | Runtime: ${BUILDER_RUNTIME_MIN}m"
 echo "Branch: $BRANCH"
-echo "Review: cd $REPO && git log --oneline main..$BRANCH"
+echo "Review: cd $REPO && git log --oneline origin/${DEFAULT_BRANCH:-master}..$BRANCH"
 echo "Logs: ls $OUTPUT_DIR/lift-enhance-$DATE-run*.md"
 
 # Usage trends
@@ -531,10 +531,10 @@ AVG_ITERS=$(echo "$USAGE_TRENDS" | cut -d',' -f2)
 TREND_DAYS=$(echo "$USAGE_TRENDS" | cut -d',' -f3)
 
 # Build morning digest
-TOTAL_COMMITS=$(git rev-list --count main.."$BRANCH" 2>/dev/null || echo "?")
-FINAL_TESTS=$(cd "$REPO" && npm test -- --reporter=dot 2>&1 | grep -oE '[0-9]+ passed' || echo "unknown")
-LINEAR_DONE_COUNT=$(grep -rh '^LINEAR_DONE:' "$OUTPUT_DIR"/lift-enhance-$DATE-run*.md 2>/dev/null | wc -l | tr -d ' ' || echo "0")
-LINEAR_PROGRESS_COUNT=$(grep -rh '^LINEAR_PROGRESS:' "$OUTPUT_DIR"/lift-enhance-$DATE-run*.md 2>/dev/null | wc -l | tr -d ' ' || echo "0")
+TOTAL_COMMITS=$(git rev-list --count origin/${DEFAULT_BRANCH:-master}.."$BRANCH" 2>/dev/null || echo "?")
+FINAL_TESTS=$(cd "$REPO" && npm test -- --reporter=dot 2>&1 | grep -oE '[0-9]+ passed' | tail -1 || echo "unknown")
+LINEAR_DONE_COUNT=$(grep -rh '^LINEAR_DONE:' "$OUTPUT_DIR"/lift-enhance-$DATE-run*.md 2>/dev/null | wc -l | tr -d ' \n' || echo "0")
+LINEAR_PROGRESS_COUNT=$(grep -rh '^LINEAR_PROGRESS:' "$OUTPUT_DIR"/lift-enhance-$DATE-run*.md 2>/dev/null | wc -l | tr -d ' \n' || echo "0")
 # Ensure a PR exists for the branch (may not if this is a fresh branch)
 if ! gh pr view "$BRANCH" --json url -q .url >/dev/null 2>&1; then
   if [ "$TOTAL_COMMITS" != "?" ] && [ "$TOTAL_COMMITS" -gt 0 ] 2>/dev/null; then
@@ -608,8 +608,8 @@ if [ "$TOTAL_COMMITS" != "?" ] && [ "$TOTAL_COMMITS" -gt 0 ] 2>/dev/null; then
   PR_NUMBER=$(gh pr view "$BRANCH" --json number -q .number 2>/dev/null || echo "")
 
   # Get the full diff for review
-  DIFF=$(git diff main.."$BRANCH" 2>/dev/null | head -5000)
-  COMMIT_LOG=$(git log --oneline main.."$BRANCH" 2>/dev/null)
+  DIFF=$(git diff origin/${DEFAULT_BRANCH:-master}.."$BRANCH" 2>/dev/null | head -5000)
+  COMMIT_LOG=$(git log --oneline origin/${DEFAULT_BRANCH:-master}.."$BRANCH" 2>/dev/null)
 
   # Load reviewer learnings (self-improving context)
   REVIEW_LEARNINGS=$(cat "$OUTPUT_DIR/lift-review-learnings.md" 2>/dev/null || echo "No learnings yet.")
