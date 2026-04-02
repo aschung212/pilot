@@ -1,8 +1,9 @@
 # Shared test helper — sourced by all .bats files
 # Sets up mock environment so tests never hit real external services.
 
-# Paths
-export PILOT_DIR="/Users/aaron/development/pilot"
+# Paths — resolve dynamically so tests work on CI runners too
+_HELPER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export PILOT_DIR="$(cd "$_HELPER_DIR/.." && pwd)"
 export TEST_DIR="$PILOT_DIR/tests"
 export MOCK_DIR="$TEST_DIR/mocks"
 export FIXTURES_DIR="$TEST_DIR/fixtures"
@@ -27,7 +28,7 @@ setup() {
   export SLACK_CHANNEL_AUTOMATION="C_TEST_AUTO"
   export SLACK_CHANNEL_REVIEW="C_TEST_REVIEW"
   export SLACK_CHANNEL_CHANGELOG="C_TEST_LOG"
-  export PILOT_DIR="/Users/aaron/development/pilot"
+  # PILOT_DIR already set at top of file via dynamic resolution
 
   # Clear Slack tokens/webhooks so nothing leaks
   export SLACK_BOT_TOKEN=""
