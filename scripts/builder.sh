@@ -150,34 +150,65 @@ should_continue() {
   return 0
 }
 
-cd "$REPO"
+# Use a git worktree so the builder never touches Aaron's working directory.
+# The main repo at $REPO stays on whatever branch Aaron is using.
+# The builder works in $REPO-builder (a separate checkout of the same repo).
+WORKTREE_DIR="${REPO}-builder"
 
-# Use an existing enhance branch if its PR is still open, otherwise create today's
+cd "$REPO"
+git fetch origin 2>/dev/null || true
+
+# Determine which branch to work on
 EXISTING_BRANCH=$(git branch --list 'enhance/portfolio-improvements-*' | sed 's/^[* ]*//' | tail -1)
 BRANCH=""
 if [ -n "$EXISTING_BRANCH" ]; then
-  # Check if this branch has an open (unmerged) PR
   PR_STATE=$(gh pr view "$EXISTING_BRANCH" --json state -q .state 2>/dev/null || echo "NONE")
   if [ "$PR_STATE" = "OPEN" ] || [ "$PR_STATE" = "NONE" ]; then
     BRANCH="$EXISTING_BRANCH"
-    git checkout "$BRANCH"
   else
-    # PR was merged or closed — clean up and start fresh
-    git checkout master
-    git pull --ff-only origin master 2>/dev/null || true
+    # PR was merged or closed — clean up old branch
     git branch -d "$EXISTING_BRANCH" 2>/dev/null || true
   fi
 fi
 if [ -z "$BRANCH" ]; then
   BRANCH="enhance/portfolio-improvements-$DATE"
-  git checkout master
-  git pull --ff-only origin master 2>/dev/null || true
-  git checkout -b "$BRANCH"
+  # Create the branch from latest master (without checking it out here)
+  git fetch origin master 2>/dev/null || true
+  git branch "$BRANCH" origin/master 2>/dev/null || true
+fi
+
+# Set up or reuse the worktree
+if [ -d "$WORKTREE_DIR" ]; then
+  # Worktree exists — make sure it's on the right branch
+  cd "$WORKTREE_DIR"
+  CURRENT=$(git branch --show-current 2>/dev/null || echo "")
+  if [ "$CURRENT" != "$BRANCH" ]; then
+    git checkout "$BRANCH" 2>/dev/null || true
+  fi
+  git pull --ff-only origin "$BRANCH" 2>/dev/null || true
+else
+  # Create worktree on the builder branch
+  git worktree add "$WORKTREE_DIR" "$BRANCH" 2>&1 || {
+    echo "Failed to create worktree. Falling back to main repo."
+    WORKTREE_DIR="$REPO"
+    cd "$REPO"
+    git checkout "$BRANCH"
+  }
+  cd "$WORKTREE_DIR"
+fi
+
+# From here on, REPO points to the worktree (builder's isolated copy)
+REPO="$WORKTREE_DIR"
+
+# Ensure dependencies are installed in the worktree
+if [ ! -d "$REPO/node_modules" ]; then
+  echo "📦 Installing dependencies in worktree..."
+  cd "$REPO" && npm ci --silent 2>&1 | tail -3
 fi
 
 BUILDER_START=$(date +%s)
-echo "🏋️ Starting Lift overnight enhancer at $(date)"
-echo "   Stop time: $STOP_AT | Branch: $BRANCH"
+echo "🏋️ Starting overnight enhancer at $(date)"
+echo "   Stop time: $STOP_AT | Branch: $BRANCH | Worktree: $REPO"
 echo ""
 
 # Metrics tracking
