@@ -34,25 +34,13 @@ PIPELINE_START_FMT=$(date +%H:%M)
 
 echo "=== Lift Overnight Runner — $DATE $PIPELINE_START_FMT ===" | tee "$LOG"
 
-# Step 1: Discovery agent (quick — finds new issues for the builder)
-echo "[$(date +%H:%M)] Starting discovery agent..." | tee -a "$LOG"
-STAGE_START=$(date +%s)
-if bash "$SCRIPTS/lift-discover.sh" >> "$LOG" 2>&1; then
-  echo "[$(date +%H:%M)] Discovery complete." | tee -a "$LOG"
-else
-  echo "[$(date +%H:%M)] Discovery failed (non-fatal, continuing to builder)." | tee -a "$LOG"
-fi
-DISCOVER_SEC=$(( $(date +%s) - STAGE_START ))
-
-# Step 2: Triage agent (Gemini reviews and enhances issues before builder picks them up)
-echo "[$(date +%H:%M)] Starting triage agent..." | tee -a "$LOG"
-STAGE_START=$(date +%s)
-if bash "$SCRIPTS/lift-triage.sh" >> "$LOG" 2>&1; then
-  echo "[$(date +%H:%M)] Triage complete." | tee -a "$LOG"
-else
-  echo "[$(date +%H:%M)] Triage failed (non-fatal, builder will work with raw issues)." | tee -a "$LOG"
-fi
-TRIAGE_SEC=$(( $(date +%s) - STAGE_START ))
+# Step 1 & 2: Discovery + Triage now run independently via their own launchd plists
+# (com.aaron.pilot-discover — Sun/Tue/Thu 22:00)
+# (com.aaron.pilot-triage — Sun/Tue/Thu 22:30)
+# Commented out here to avoid running twice. Restore if reverting to monolithic mode.
+echo "[$(date +%H:%M)] Discovery + triage run independently (skipping)." | tee -a "$LOG"
+DISCOVER_SEC=0
+TRIAGE_SEC=0
 
 # Step 3: Overnight builder (runs until 7 AM)
 echo "[$(date +%H:%M)] Starting overnight builder (until 07:00)..." | tee -a "$LOG"
