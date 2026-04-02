@@ -1,5 +1,5 @@
 #!/bin/bash
-# Lift Linear Cleanup — archives completed/canceled issues and deduplicates backlog.
+# Issue Tracker Cleanup — archives completed/canceled issues and deduplicates backlog.
 # Runs at the end of each overnight session to preserve free tier capacity.
 #
 # What it does:
@@ -8,8 +8,8 @@
 #   3. Reports what was cleaned up
 #
 # Usage:
-#   ./lift-linear-cleanup.sh              # run cleanup
-#   ./lift-linear-cleanup.sh --dry-run    # preview without changes
+#   ./cleanup.sh              # run cleanup
+#   ./cleanup.sh --dry-run    # preview without changes
 
 set -uo pipefail
 
@@ -18,10 +18,12 @@ REAL_SCRIPT="$(readlink "$0" 2>/dev/null || echo "$0")"
 SCRIPT_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
 [ -f "$SCRIPT_DIR/../project.env" ] && source "$SCRIPT_DIR/../project.env"
 
+TRACKER="$SCRIPT_DIR/../adapters/tracker.sh"
+
 DRY_RUN="${1:-}"
 DATE=$(date +%Y-%m-%d)
 
-# Get Linear API token from CLI config
+# Get Linear API token from CLI config (needed for archive — not in CLI)
 LINEAR_TOKEN=$(grep -v '^default\|^\[' ~/.config/linear/credentials.toml 2>/dev/null | head -1 | sed 's/.*= *"//' | sed 's/"//')
 if [ -z "$LINEAR_TOKEN" ]; then
   echo "  ⚠️ No Linear API token found — skipping cleanup."
@@ -50,8 +52,7 @@ DEDUPED=0
 
 # ── Step 1: Archive completed and canceled issues ──────────────────────────
 for state in completed canceled; do
-  IDS=$(linear issue list --project "$LINEAR_PROJECT" --all-assignees --sort priority --team "$LINEAR_TEAM" --state "$state" --no-pager 2>&1 \
-    | sed 's/\x1b\[[0-9;]*m//g' | grep -oE 'MAS-[0-9]+' || true)
+  IDS=$(bash "$TRACKER" list "$state" | grep -oE "${LINEAR_TEAM}-[0-9]+" || true)
 
   for issue_id in $IDS; do
     if [ "$DRY_RUN" = "--dry-run" ]; then
@@ -67,14 +68,11 @@ for state in completed canceled; do
 done
 
 # ── Step 2: Deduplicate issues (same title, cancel+archive newer ones) ─────
-# Get all open issues with their IDs and titles
-ALL_ISSUES=$(linear issue list --project "$LINEAR_PROJECT" --all-assignees --sort priority --team "$LINEAR_TEAM" \
-  --state backlog --state unstarted --state started --state triage --no-pager 2>&1 \
-  | sed 's/\x1b\[[0-9;]*m//g' || true)
+ALL_ISSUES=$(bash "$TRACKER" list backlog unstarted started triage || true)
 
 # Extract ID and title pairs, find duplicates by title
-echo "$ALL_ISSUES" | grep -oE 'MAS-[0-9]+' | while read -r issue_id; do
-  TITLE=$(linear issue view "$issue_id" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | head -1 | sed 's/^# *MAS-[0-9]*: *//')
+echo "$ALL_ISSUES" | grep -oE "${LINEAR_TEAM}-[0-9]+" | while read -r issue_id; do
+  TITLE=$(bash "$TRACKER" view "$issue_id" | head -1 | sed "s/^# *${LINEAR_TEAM}-[0-9]*: *//")
   echo "$issue_id|$TITLE"
 done | sort -t'|' -k2 | python3 -c "
 import sys
@@ -102,7 +100,7 @@ for title, ids in by_title.items():
   if [ "$DRY_RUN" = "--dry-run" ]; then
     echo "  [dry-run] Would cancel+archive duplicate $dup_id"
   else
-    linear issue update "$dup_id" --state canceled --team "$LINEAR_TEAM" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' >/dev/null
+    bash "$TRACKER" update "$dup_id" --state canceled >/dev/null
     UUID=$(get_uuid "$dup_id")
     if [ -n "$UUID" ]; then
       archive_issue "$UUID"

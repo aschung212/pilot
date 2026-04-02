@@ -1,17 +1,17 @@
 #!/bin/bash
-# Lift Issue Triage Agent — Gemini reviews backlog issues before the overnight builder picks them up.
+# Issue Triage Agent — AI reviews backlog issues before the overnight builder picks them up.
 # Runs between discovery and builder in the overnight chain.
 #
 # For each unreviewed issue:
 #   1. Gathers context (description, codebase state, product decisions, related issues)
-#   2. Gemini reviews and outputs: APPROVE / ENHANCE / SKIP / FLAG
+#   2. AI reviews and outputs: APPROVE / ENHANCE / SKIP / FLAG
 #   3. Approved/Enhanced issues get implementation guidance added as comments
-#   4. Flagged issues are marked for Aaron's manual review
+#   4. Flagged issues are marked for manual review
 #   5. Issues get labeled as triaged so they're not re-reviewed
 #
 # Usage:
-#   ./lift-triage.sh              # triage all unreviewed backlog issues
-#   ./lift-triage.sh --dry-run    # preview without updating Linear
+#   ./triage.sh              # triage all unreviewed backlog issues
+#   ./triage.sh --dry-run    # preview without updating tracker
 
 set -uo pipefail
 # Note: not using -e (errexit) because individual issue failures should not abort the loop
@@ -21,15 +21,8 @@ REAL_SCRIPT="$(readlink "$0" 2>/dev/null || echo "$0")"
 SCRIPT_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
 [ -f "$SCRIPT_DIR/../project.env" ] && source "$SCRIPT_DIR/../project.env"
 
-SLACK_WEBHOOK_URL="${SLACK_WEBHOOK_URL:-}"
-slack_send() {
-  local msg="$1"
-  if [ -n "$SLACK_WEBHOOK_URL" ]; then
-    local payload
-    payload=$(printf '{"text": %s}' "$(echo "$msg" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')")
-    curl -s -X POST "$SLACK_WEBHOOK_URL" -H 'Content-Type: application/json' -d "$payload" >/dev/null 2>&1 &
-  fi
-}
+TRACKER="$SCRIPT_DIR/../adapters/tracker.sh"
+NOTIFY="$SCRIPT_DIR/../adapters/notify.sh"
 
 REPO="${REPO_PATH:-/Users/aaron/development/lift}"
 DATE=$(date +%Y-%m-%d)
@@ -39,25 +32,25 @@ DRY_RUN="${1:-}"
 
 mkdir -p "$OUTPUT_DIR"
 
-echo "🔍 Lift Triage Agent — $DATE" | tee "$TRIAGE_LOG"
+echo "🔍 Triage Agent — $DATE" | tee "$TRIAGE_LOG"
 
 # Load product decisions for context
-DECISIONS_FILE="${PRODUCT_DECISIONS_FILE:-$HOME/Documents/Obsidian Vault/20_Learning/Vibe Coding Projects/Lift - Product Decisions.md}"
+DECISIONS_FILE="${PRODUCT_DECISIONS_FILE:-}"
 PRODUCT_DECISIONS=$(cat "$DECISIONS_FILE" 2>/dev/null || echo "No product decisions file found")
 
 # Get all backlog/unstarted issues
-ALL_ISSUES=$(linear issue list --project "$LINEAR_PROJECT" --all-assignees --sort priority --team "$LINEAR_TEAM" --state backlog --state unstarted --no-pager 2>&1 | sed 's/\x1b\[[0-9;]*m//g')
-ISSUE_IDS=$(echo "$ALL_ISSUES" | grep -oE 'MAS-[0-9]+' || true)
+ALL_ISSUES=$(bash "$TRACKER" list backlog unstarted)
+ISSUE_IDS=$(echo "$ALL_ISSUES" | grep -oE "${LINEAR_TEAM}-[0-9]+" || true)
 
 if [ -z "$ISSUE_IDS" ]; then
   echo "  No issues to triage." | tee -a "$TRIAGE_LOG"
   exit 0
 fi
 
-# Check which issues have already been triaged (have a "Triaged by Gemini" comment)
+# Check which issues have already been triaged (have a "Triaged by" comment)
 UNTRIAGED_IDS=""
 for issue_id in $ISSUE_IDS; do
-  COMMENTS=$(linear issue comment list "$issue_id" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' || true)
+  COMMENTS=$(bash "$TRACKER" comment-list "$issue_id" || true)
   if ! echo "$COMMENTS" | grep -q "Triaged by Gemini\|Re-triaged by Gemini"; then
     UNTRIAGED_IDS+="$issue_id "
   fi
@@ -72,7 +65,7 @@ fi
 UNTRIAGED_COUNT=$(echo "$UNTRIAGED_IDS" | wc -w | tr -d ' ')
 MAX_PER_RUN=10
 echo "  Found $UNTRIAGED_COUNT untriaged issues (processing up to $MAX_PER_RUN)." | tee -a "$TRIAGE_LOG"
-# Cap to avoid blocking the builder — remaining issues get triaged next night
+# Cap to avoid blocking the builder — remaining issues get triaged next run
 UNTRIAGED_IDS=$(echo "$UNTRIAGED_IDS" | tr ' ' '\n' | head -"$MAX_PER_RUN" | xargs)
 
 cd "$REPO"
@@ -89,11 +82,11 @@ for issue_id in $UNTRIAGED_IDS; do
   echo "  ── $issue_id ──" | tee -a "$TRIAGE_LOG"
 
   # Get full issue details
-  ISSUE_DETAIL=$(linear issue view "$issue_id" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' || echo "Could not fetch issue")
-  ISSUE_TITLE=$(echo "$ISSUE_DETAIL" | head -1 | sed 's/^# *MAS-[0-9]*: *//' || echo "$issue_id")
+  ISSUE_DETAIL=$(bash "$TRACKER" view "$issue_id" || echo "Could not fetch issue")
+  ISSUE_TITLE=$(echo "$ISSUE_DETAIL" | head -1 | sed "s/^# *${LINEAR_TEAM}-[0-9]*: *//" || echo "$issue_id")
   [ -z "$ISSUE_TITLE" ] && ISSUE_TITLE="$issue_id"
 
-  # Load triage learnings (self-improving context from Aaron's corrections)
+  # Load triage learnings (self-improving context from past corrections)
   TRIAGE_LEARNINGS=$(cat "$OUTPUT_DIR/lift-triage-learnings.md" 2>/dev/null | head -40 | tr '\n' ' ' || echo "No learnings yet.")
 
   # Build a concise triage prompt — keep under shell arg limits
@@ -134,27 +127,26 @@ SUGGESTED_PRIORITY: 1-4"
     continue
   fi
 
+  ISSUE_URL=$(bash "$TRACKER" issue-url "$issue_id")
+
   case "$VERDICT" in
     APPROVE)
       APPROVED=$((APPROVED + 1))
-      # Add implementation guidance as a comment
       IMPL_PLAN=$(echo "$TRIAGE_RESULT" | sed -n '/IMPLEMENTATION_PLAN:/,/COMPLEXITY:\|SUGGESTED_PRIORITY:\|$/p' | head -10)
-      linear issue comment add "$issue_id" -b "**Triaged by Gemini** ($DATE) — ✅ APPROVED
+      bash "$TRACKER" comment-add "$issue_id" "**Triaged by Gemini** ($DATE) — ✅ APPROVED
 
 $IMPL_PLAN
 
 ---
-_Automated triage — suggested starting point, not a mandate. Read the codebase and deviate if you find a better approach._" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' || true
-      # Move to Unstarted = ready for builder
-      linear issue update "$issue_id" --state unstarted 2>&1 | sed 's/\x1b\[[0-9;]*m//g' || true
-      RESULTS+="  • ✅ <https://linear.app/$LINEAR_ORG/issue/$issue_id|$issue_id>: $ISSUE_TITLE\n"
+_Automated triage — suggested starting point, not a mandate. Read the codebase and deviate if you find a better approach._" || true
+      bash "$TRACKER" update "$issue_id" --state unstarted || true
+      RESULTS+="  • ✅ <${ISSUE_URL}|${issue_id}>: $ISSUE_TITLE\n"
       ;;
     ENHANCE)
       ENHANCED=$((ENHANCED + 1))
-      # Update issue description with enhanced version + add implementation plan
       ENHANCED_DESC=$(echo "$TRIAGE_RESULT" | sed -n '/ENHANCED_DESCRIPTION:/,/IMPLEMENTATION_PLAN:\|$/p' | head -5 | sed 's/ENHANCED_DESCRIPTION: //')
       IMPL_PLAN=$(echo "$TRIAGE_RESULT" | sed -n '/IMPLEMENTATION_PLAN:/,/COMPLEXITY:\|SUGGESTED_PRIORITY:\|$/p' | head -10)
-      linear issue comment add "$issue_id" -b "**Triaged by Gemini** ($DATE) — ✨ ENHANCED
+      bash "$TRACKER" comment-add "$issue_id" "**Triaged by Gemini** ($DATE) — ✨ ENHANCED
 
 **Refined scope:**
 $ENHANCED_DESC
@@ -162,39 +154,36 @@ $ENHANCED_DESC
 $IMPL_PLAN
 
 ---
-_Automated triage — suggested starting point, not a mandate. Read the codebase and deviate if you find a better approach._" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' || true
-      # Update priority if suggested
+_Automated triage — suggested starting point, not a mandate. Read the codebase and deviate if you find a better approach._" || true
       SUGGESTED_P=$(echo "$TRIAGE_RESULT" | grep -oE 'SUGGESTED_PRIORITY: [1-4]' | grep -oE '[1-4]' || true)
       if [ -n "$SUGGESTED_P" ]; then
-        linear issue update "$issue_id" --priority "$SUGGESTED_P" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' || true
+        bash "$TRACKER" update "$issue_id" --priority "$SUGGESTED_P" || true
       fi
-      # Move to Unstarted = ready for builder
-      linear issue update "$issue_id" --state unstarted 2>&1 | sed 's/\x1b\[[0-9;]*m//g' || true
-      RESULTS+="  • ✨ <https://linear.app/$LINEAR_ORG/issue/$issue_id|$issue_id>: $ISSUE_TITLE (enhanced)\n"
+      bash "$TRACKER" update "$issue_id" --state unstarted || true
+      RESULTS+="  • ✨ <${ISSUE_URL}|${issue_id}>: $ISSUE_TITLE (enhanced)\n"
       ;;
     SKIP)
       SKIPPED=$((SKIPPED + 1))
       REASON=$(echo "$TRIAGE_RESULT" | grep -oE 'REASON: .*' | head -1 | sed 's/REASON: //')
-      linear issue comment add "$issue_id" -b "**Triaged by Gemini** ($DATE) — ⏭️ SKIP
+      bash "$TRACKER" comment-add "$issue_id" "**Triaged by Gemini** ($DATE) — ⏭️ SKIP
 
 $REASON
 
 ---
-_Automated triage — Aaron can override by moving to Unstarted._" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' || true
-      # Move to low priority but don't cancel — Aaron decides
-      linear issue update "$issue_id" --priority 4 2>&1 | sed 's/\x1b\[[0-9;]*m//g' || true
-      RESULTS+="  • ⏭️ <https://linear.app/$LINEAR_ORG/issue/$issue_id|$issue_id>: $ISSUE_TITLE (skip)\n"
+_Automated triage — can be overridden by moving to Unstarted._" || true
+      bash "$TRACKER" update "$issue_id" --priority 4 || true
+      RESULTS+="  • ⏭️ <${ISSUE_URL}|${issue_id}>: $ISSUE_TITLE (skip)\n"
       ;;
     FLAG)
       FLAGGED=$((FLAGGED + 1))
       REASON=$(echo "$TRIAGE_RESULT" | grep -oE 'REASON: .*' | head -1 | sed 's/REASON: //')
-      linear issue comment add "$issue_id" -b "**Triaged by Gemini** ($DATE) — 🚩 NEEDS AARON'S INPUT
+      bash "$TRACKER" comment-add "$issue_id" "**Triaged by Gemini** ($DATE) — 🚩 NEEDS INPUT
 
 $REASON
 
 ---
-_Automated triage — this issue needs a human decision before the builder can proceed._" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' || true
-      RESULTS+="  • 🚩 <https://linear.app/$LINEAR_ORG/issue/$issue_id|$issue_id>: $ISSUE_TITLE (needs input)\n"
+_Automated triage — this issue needs a human decision before the builder can proceed._" || true
+      RESULTS+="  • 🚩 <${ISSUE_URL}|${issue_id}>: $ISSUE_TITLE (needs input)\n"
       ;;
   esac
 done
@@ -205,7 +194,7 @@ echo "Approved: $APPROVED | Enhanced: $ENHANCED | Skipped: $SKIPPED | Flagged: $
 
 # Slack notification
 if [ "$DRY_RUN" != "--dry-run" ]; then
-  slack_send "*Triage Agent* — $UNTRIAGED_COUNT issues reviewed
+  bash "$NOTIFY" send-async automation "*Triage Agent* — $UNTRIAGED_COUNT issues reviewed
 ✅ $APPROVED approved | ✨ $ENHANCED enhanced | ⏭️ $SKIPPED skipped | 🚩 $FLAGGED flagged
 $(echo -e "$RESULTS")"
 fi
