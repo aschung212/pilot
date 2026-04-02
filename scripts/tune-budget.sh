@@ -24,10 +24,13 @@ if [ ! -f "$TUNE_LOG" ]; then
   echo "date,iterations_before,iterations_after,tokens_before,tokens_after,cooldown_before,cooldown_after,reasons" > "$TUNE_LOG"
 fi
 
+NOTIFY="$SCRIPT_DIR/../adapters/notify.sh"
+
 # Need at least 3 nights of data to start tuning
 NIGHTS_COUNT=$([ -f "$USAGE_CSV" ] && tail -n +2 "$USAGE_CSV" | cut -d',' -f1 | sort -u | wc -l | tr -d ' ' || echo "0")
 if [ "$NIGHTS_COUNT" -lt 3 ]; then
   echo "📊 Auto-tuner: ${NIGHTS_COUNT}/3 nights of data collected. Skipping tuning until more data."
+  bash "$NOTIFY" send automation "📊 *Budget Tuner* — ${NIGHTS_COUNT}/3 nights collected, skipping" 2>/dev/null
   exit 0
 fi
 
@@ -263,6 +266,7 @@ SKIP=$(echo "$TUNING" | python3 -c "import json,sys; print(json.load(sys.stdin).
 
 if [ "$SKIP" = "True" ]; then
   echo "📊 Auto-tuner: no adjustments needed."
+  bash "$NOTIFY" send automation "📊 *Budget Tuner* — analyzed $NIGHTS_COUNT nights, no adjustments needed ✅" 2>/dev/null
   exit 0
 fi
 

@@ -30,7 +30,7 @@ cd "$REPO"
 MERGED_PRS=$(gh pr list --state merged --limit 10 --json number,mergedAt,headRefName,title 2>/dev/null || echo "[]")
 
 # Process each merged PR that we haven't analyzed yet
-echo "$MERGED_PRS" | python3 -c "
+TUNER_OUTPUT=$(echo "$MERGED_PRS" | python3 -c "
 import json, sys, subprocess, os, re
 from datetime import datetime
 
@@ -161,4 +161,16 @@ with open(learnings_path, 'w') as f:
 
 print(f'  Updated learnings: {len(new_entries)} new PRs analyzed, {total} total in history')
 print(f'  {stats}')
-" 2>&1
+print(f'REVIEW_TUNER_RESULT:new={len(new_entries)},total={total},clean_rate={clean_merges}/{total}')
+" 2>&1)
+
+echo "$TUNER_OUTPUT"
+
+# Post to Slack
+NOTIFY="$SCRIPT_DIR/../adapters/notify.sh"
+if echo "$TUNER_OUTPUT" | grep -q "No new PRs to analyze"; then
+  bash "$NOTIFY" send automation "🔍 *Review Tuner* — no new merged PRs to analyze ✅" 2>/dev/null
+elif echo "$TUNER_OUTPUT" | grep -q "REVIEW_TUNER_RESULT"; then
+  RESULT=$(echo "$TUNER_OUTPUT" | grep "REVIEW_TUNER_RESULT" | sed 's/REVIEW_TUNER_RESULT://')
+  bash "$NOTIFY" send automation "🔍 *Review Tuner* — analyzed PRs ($RESULT). Learnings updated." 2>/dev/null
+fi

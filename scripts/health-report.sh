@@ -198,7 +198,7 @@ cat "$REPORT"
 
 # Post to Slack
 if [ "$DRY_RUN" != "--dry-run" ]; then
-  bash "$NOTIFY" send changelog "📊 *Weekly Health Report — $DATE*
+  HEALTH_MSG="📊 *Weekly Health Report — $DATE*
 *$PERIOD*
 
 *Pipeline:* $NIGHTS nights | ${AVG_MIN}m avg | $COMMITS commits | ${STALL_RATE}% stall rate
@@ -208,7 +208,9 @@ if [ "$DRY_RUN" != "--dry-run" ]; then
 *Tuning:* $TUNE_CHANGES adjustments
 
 $ANOMALIES"
-  echo "📨 Posted to #system-changelog"
+  bash "$NOTIFY" send changelog "$HEALTH_MSG"
+  bash "$NOTIFY" send automation "$HEALTH_MSG"
+  echo "📨 Posted to #system and #lift-automation"
 fi
 
 # Log rotation — archive files older than 14 days
