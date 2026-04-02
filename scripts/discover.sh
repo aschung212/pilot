@@ -19,10 +19,6 @@ NOTIFY="$SCRIPT_DIR/../adapters/notify.sh"
 source "$SCRIPT_DIR/../lib/log.sh"
 LOG_COMPONENT="discover"
 
-slack_send() {
-  bash "$NOTIFY" send-async automation "$1"
-}
-
 REPO="${REPO_PATH:-/Users/aaron/development/lift}"
 DATE=$(date +%Y-%m-%d)
 DAY_OF_WEEK=$(date +%u)  # 1=Monday, 7=Sunday
@@ -86,7 +82,15 @@ else
 fi
 
 DISCOVER_START=$(date +%s)
-echo "🔍 Lift Discovery Agent — $DATE — Focus: $FOCUS" | tee "$RUN_LOG"
+echo "🔍 Discovery Agent — $DATE — Focus: $FOCUS" | tee "$RUN_LOG"
+
+# Start Slack thread for this discovery session
+THREAD_TS=$(bash "$NOTIFY" thread-start automation "🔍 *Discovery — $FOCUS* ($DATE)")
+THREAD_TS=$(echo "$THREAD_TS" | tr -d ' \n')
+
+slack_send() {
+  bash "$NOTIFY" thread-reply automation "$THREAD_TS" "$1"
+}
 
 # Get current feature list and backlog for context
 cd "$REPO"

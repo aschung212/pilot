@@ -36,6 +36,10 @@ mkdir -p "$OUTPUT_DIR"
 
 echo "🔍 Triage Agent — $DATE" | tee "$TRIAGE_LOG"
 
+# Start Slack thread for this triage session
+THREAD_TS=$(bash "$NOTIFY" thread-start automation "🔍 *Triage — $DATE*")
+THREAD_TS=$(echo "$THREAD_TS" | tr -d ' \n')
+
 # Load product decisions for context
 DECISIONS_FILE="${PRODUCT_DECISIONS_FILE:-}"
 PRODUCT_DECISIONS=$(cat "$DECISIONS_FILE" 2>/dev/null || echo "No product decisions file found")
@@ -206,7 +210,7 @@ log_info "Triage complete: $APPROVED approved, $ENHANCED enhanced, $SKIPPED skip
 
 # Slack notification
 if [ "$DRY_RUN" != "--dry-run" ]; then
-  bash "$NOTIFY" send-async automation "*Triage Agent* — $UNTRIAGED_COUNT issues reviewed
+  bash "$NOTIFY" thread-reply automation "$THREAD_TS" "*Triage complete* — $UNTRIAGED_COUNT issues reviewed
 ✅ $APPROVED approved | ✨ $ENHANCED enhanced | ⏭️ $SKIPPED skipped | 🚩 $FLAGGED flagged
 $(echo -e "$RESULTS")"
 fi
