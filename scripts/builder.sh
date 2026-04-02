@@ -25,6 +25,7 @@ NOTIFY="$SCRIPT_DIR/../adapters/notify.sh"
 slack_send() {
   bash "$NOTIFY" send-async automation "$1"
 }
+# thread_send is defined after THREAD_TS is set (below)
 
 REPO="${REPO_PATH:-/Users/aaron/development/lift}"
 DATE=$(date +%Y-%m-%d)
@@ -215,6 +216,16 @@ fi
 BUILDER_START=$(date +%s)
 echo "🏋️ Starting overnight enhancer at $(date)"
 echo "   Stop time: $STOP_AT | Branch: $BRANCH | Worktree: $REPO"
+
+# Start a Slack thread for this session — all updates go under it
+THREAD_TS=$(bash "$NOTIFY" thread-start automation "🏋️ *$PROJECT_NAME Overnight Build — $DATE*
+Branch: \`$BRANCH\` | Stop: $STOP_AT")
+THREAD_TS=$(echo "$THREAD_TS" | tr -d ' \n')
+
+# Helper: post to the thread (falls back to standalone if no thread)
+thread_send() {
+  bash "$NOTIFY" thread-reply automation "$THREAD_TS" "$1"
+}
 echo ""
 
 # Metrics tracking
@@ -383,7 +394,7 @@ except Exception as e:
 " 2>&1)
     if echo "$CLAUDE_RESULT" | grep -q "^⚠️\|^❌"; then
       echo "  $CLAUDE_RESULT" | tee -a "$RUN_LOG"
-      slack_send "🚨 *Builder Run $RUN — Claude issue*
+      thread_send "🚨 *Builder Run $RUN — Claude issue*
 $CLAUDE_RESULT"
     else
       echo "$CLAUDE_RESULT" >> "$RUN_LOG"
@@ -418,6 +429,29 @@ $CLAUDE_RESULT"
         STALLS=0
         echo "✅ Run $RUN finished at $(date) — $NEW_COMMITS new commit(s)" | tee -a "$RUN_LOG"
         git push -u origin "$BRANCH" 2>&1 | tee -a "$RUN_LOG"
+
+        # Check CI status after push (non-blocking — poll for up to 5 min)
+        (
+          sleep 15  # give GitHub time to start the run
+          CI_RUN_ID=""
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            CI_RUN_ID=$(cd "$REPO" && gh run list --branch "$BRANCH" --limit 1 --json databaseId,status -q '.[0].databaseId' 2>/dev/null || echo "")
+            CI_STATUS=$(cd "$REPO" && gh run list --branch "$BRANCH" --limit 1 --json conclusion,status -q '.[0].status' 2>/dev/null || echo "")
+            if [ "$CI_STATUS" = "completed" ]; then
+              CI_CONCLUSION=$(cd "$REPO" && gh run list --branch "$BRANCH" --limit 1 --json conclusion -q '.[0].conclusion' 2>/dev/null || echo "")
+              if [ "$CI_CONCLUSION" = "success" ]; then
+                thread_send "✅ CI passed (run $CI_RUN_ID)"
+              else
+                thread_send "❌ *CI failed* (run $CI_RUN_ID) — check GitHub Actions"
+              fi
+              break
+            fi
+            sleep 30
+          done
+          if [ "$CI_STATUS" != "completed" ]; then
+            thread_send "⏳ CI still running after 5 min (run $CI_RUN_ID) — check manually"
+          fi
+        ) &
 
         # Create new issues for discovered problems (backlog, not done)
         { grep -oE 'LINEAR_DISCOVER:[1-4]:.*' "$RUN_LOG" 2>/dev/null || true; } | sort -u | while IFS=: read -r _ priority title; do
@@ -482,7 +516,7 @@ ${DONE_LINKS:+*Done:*
 $DONE_LINKS}${BLOCKED_LINKS:+
 *Blocked:*
 $BLOCKED_LINKS}"
-        slack_send "$SLACK_MSG"
+        thread_send "$SLACK_MSG"
 
         # Collect metrics for this iteration
         ITER_END=$(date +%s)
@@ -608,9 +642,8 @@ DIGEST_EOF
 
 echo "📋 Morning digest saved to: $DIGEST"
 
-# Send Slack notification
-slack_send "🏋️ *Lift Overnight Build Complete*
-
+# Send completion summary to thread
+thread_send "✅ *Build Complete*
 Iterations: $RUN/$MAX_ITERATIONS_PER_NIGHT | Runtime: ${BUILDER_RUNTIME_MIN}m | Commits: $TOTAL_COMMITS | Tests: $FINAL_TESTS
 Linear: $LINEAR_DONE_COUNT closed, $LINEAR_PROGRESS_COUNT in progress
 📊 Tokens: ${NIGHTLY_OUTPUT_TOKENS} output tonight (avg ${AVG_OUTPUT}/night over ${TREND_DAYS}d)
@@ -736,7 +769,7 @@ _Automated review by overnight pipeline — $(date) — model: ${GEMINI_MODEL}_"
   rm -f "$GEMINI_PROMPT_FILE"
 
   # Notify Slack that reviews are posted
-  slack_send "🔍 *PR Reviews Posted*
+  thread_send "🔍 *PR Reviews Posted*
 Layer 1 (Claude adversarial) + Layer 2 (Gemini architecture/UX) posted to PR.
 $PR_URL"
 
