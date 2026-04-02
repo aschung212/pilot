@@ -777,11 +777,10 @@ Next: Review the PR on GitHub, test locally, merge when satisfied." --max-turns 
 
 echo "✅ Notifications sent."
 
-# Auto-tune budget for next run based on usage history
-echo ""
-echo "── Auto-tuning budget ──"
-bash "$HOME/Documents/Scripts/lift-tune-budget.sh" 2>&1 || echo "⚠️ Budget tuner failed (non-fatal)"
+# Tuners now run independently on their own weekly schedule (Sunday via launchd).
+# See com.aaron.pilot-tune-budget.plist and com.aaron.pilot-tune-reviews.plist.
 
+# Cleanup: archive completed/canceled issues, deduplicate backlog
 echo ""
-echo "── Auto-tuning reviewers ──"
-bash "$HOME/Documents/Scripts/lift-tune-reviews.sh" 2>&1 || echo "⚠️ Review tuner failed (non-fatal)"
+echo "── Running cleanup ──"
+bash "$SCRIPT_DIR/cleanup.sh" 2>&1 || echo "⚠️ Cleanup failed (non-fatal)"
