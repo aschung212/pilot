@@ -16,6 +16,8 @@ SCRIPT_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
 
 TRACKER="$SCRIPT_DIR/../adapters/tracker.sh"
 NOTIFY="$SCRIPT_DIR/../adapters/notify.sh"
+source "$SCRIPT_DIR/../lib/log.sh"
+LOG_COMPONENT="discover"
 
 slack_send() {
   bash "$NOTIFY" send-async automation "$1"

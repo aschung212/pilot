@@ -21,6 +21,8 @@ SCRIPT_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
 
 TRACKER="$SCRIPT_DIR/../adapters/tracker.sh"
 NOTIFY="$SCRIPT_DIR/../adapters/notify.sh"
+source "$SCRIPT_DIR/../lib/log.sh"
+LOG_COMPONENT="builder"
 
 slack_send() {
   bash "$NOTIFY" send-async automation "$1"
@@ -532,6 +534,7 @@ $BLOCKED_LINKS}"
     fi
   else
     FAILURES=$((FAILURES + 1))
+    log_error "Run $RUN failed (failure $FAILURES/$MAX_CONSECUTIVE_FAILURES)"
     echo "❌ Run $RUN failed at $(date) (failure $FAILURES/$MAX_CONSECUTIVE_FAILURES)" | tee -a "$RUN_LOG"
     # Log failed iteration metrics
     ITER_END=$(date +%s)

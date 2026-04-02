@@ -20,6 +20,8 @@ SCRIPT_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
 
 NOTIFY="$SCRIPT_DIR/../adapters/notify.sh"
 TRACKER="$SCRIPT_DIR/../adapters/tracker.sh"
+source "$SCRIPT_DIR/../lib/log.sh"
+LOG_COMPONENT="health-report"
 
 DATE=$(date +%Y-%m-%d)
 DRY_RUN="${1:-}"
@@ -208,3 +210,6 @@ if [ "$DRY_RUN" != "--dry-run" ]; then
 $ANOMALIES"
   echo "📨 Posted to #system-changelog"
 fi
+
+# Log rotation — archive files older than 14 days
+log_rotate

@@ -17,6 +17,9 @@ REAL_SCRIPT="$(readlink "$0" 2>/dev/null || echo "$0")"
 SCRIPT_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
 [ -f "$SCRIPT_DIR/../project.env" ] && source "$SCRIPT_DIR/../project.env"
 
+source "$SCRIPT_DIR/../lib/log.sh" 2>/dev/null || true
+LOG_COMPONENT="adapter:tracker"
+
 STRIP_ANSI='sed s/\x1b\[[0-9;]*m//g'
 
 cmd="${1:-}"
@@ -50,7 +53,11 @@ case "$cmd" in
         *) shift ;;
       esac
     done
-    linear issue create "${create_args[@]}" 2>&1 | $STRIP_ANSI
+    OUTPUT=$(linear issue create "${create_args[@]}" 2>&1 | $STRIP_ANSI)
+    if echo "$OUTPUT" | grep -q "Failed\|Error\|error"; then
+      log_error "create failed: $title — $OUTPUT" 2>/dev/null
+    fi
+    echo "$OUTPUT"
     ;;
 
   update)

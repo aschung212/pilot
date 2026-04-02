@@ -19,6 +19,8 @@ SCRIPT_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
 [ -f "$SCRIPT_DIR/../project.env" ] && source "$SCRIPT_DIR/../project.env"
 
 TRACKER="$SCRIPT_DIR/../adapters/tracker.sh"
+source "$SCRIPT_DIR/../lib/log.sh"
+LOG_COMPONENT="cleanup"
 
 DRY_RUN="${1:-}"
 DATE=$(date +%Y-%m-%d)
@@ -109,8 +111,15 @@ for title, ids in by_title.items():
   fi
 done
 
-# Can't easily get DEDUPED count from subshell, recount
+# Cleanup metrics CSV
+CLEANUP_METRICS_CSV="$OUTPUT_DIR/lift-cleanup-metrics.csv"
+if [ ! -f "$CLEANUP_METRICS_CSV" ]; then
+  echo "date,archived,deduped" > "$CLEANUP_METRICS_CSV"
+fi
+
 if [ "$DRY_RUN" != "--dry-run" ]; then
+  echo "$DATE,$ARCHIVED,$DEDUPED" >> "$CLEANUP_METRICS_CSV"
+  log_info "Cleanup: $ARCHIVED archived, $DEDUPED deduped"
   echo "  ✅ Linear cleanup: $ARCHIVED archived"
 else
   echo "  [dry-run] Cleanup preview complete."

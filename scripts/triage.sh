@@ -23,6 +23,8 @@ SCRIPT_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
 
 TRACKER="$SCRIPT_DIR/../adapters/tracker.sh"
 NOTIFY="$SCRIPT_DIR/../adapters/notify.sh"
+source "$SCRIPT_DIR/../lib/log.sh"
+LOG_COMPONENT="triage"
 
 REPO="${REPO_PATH:-/Users/aaron/development/lift}"
 DATE=$(date +%Y-%m-%d)
@@ -191,6 +193,16 @@ done
 echo "" | tee -a "$TRIAGE_LOG"
 echo "━━━ Triage Complete ━━━" | tee -a "$TRIAGE_LOG"
 echo "Approved: $APPROVED | Enhanced: $ENHANCED | Skipped: $SKIPPED | Flagged: $FLAGGED" | tee -a "$TRIAGE_LOG"
+
+# Triage metrics CSV
+TRIAGE_METRICS_CSV="$OUTPUT_DIR/lift-triage-metrics.csv"
+if [ ! -f "$TRIAGE_METRICS_CSV" ]; then
+  echo "date,total,approved,enhanced,skipped,flagged,model" > "$TRIAGE_METRICS_CSV"
+fi
+if [ "$DRY_RUN" != "--dry-run" ]; then
+  echo "$DATE,$UNTRIAGED_COUNT,$APPROVED,$ENHANCED,$SKIPPED,$FLAGGED,$TRIAGE_MODEL" >> "$TRIAGE_METRICS_CSV"
+fi
+log_info "Triage complete: $APPROVED approved, $ENHANCED enhanced, $SKIPPED skipped, $FLAGGED flagged"
 
 # Slack notification
 if [ "$DRY_RUN" != "--dry-run" ]; then
