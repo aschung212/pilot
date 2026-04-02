@@ -1,0 +1,21 @@
+name: Test Suite
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install bats-core
+        run: brew install bats-core
+
+      - name: Run tests
+        env:
+          _PILOT_TEST_MODE: "1"
+        run: bash tests/run-tests.sh

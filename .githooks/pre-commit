@@ -1,0 +1,15 @@
+#!/bin/bash
+# Pre-commit hook: runs pilot test suite before allowing a commit.
+# Skippable with: git commit --no-verify
+
+echo "🧪 Running pilot tests..."
+
+_PILOT_TEST_MODE=1 bash "$(git rev-parse --show-toplevel)/tests/run-tests.sh" 2>&1
+
+if [ $? -ne 0 ]; then
+  echo ""
+  echo "❌ Tests failed — commit aborted. Fix the failures or skip with --no-verify."
+  exit 1
+fi
+
+echo "✅ All tests passed."
