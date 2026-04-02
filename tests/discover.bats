@@ -3,6 +3,7 @@
 
 load test_helper
 
+# bats test_tags=fast
 @test "discover: queue refill produces correct focus areas" {
   # Simulate the queue refill logic from discover.sh
   QUEUE_FILE="$TEST_TMPDIR/queue.txt"
@@ -49,6 +50,7 @@ QUEUE
   [ "$MON_COUNT" -eq 1 ]
 }
 
+# bats test_tags=fast
 @test "discover: focus_to_label maps correctly" {
   # Test the label mapping function from discover.sh
   focus_to_label() {
@@ -76,6 +78,7 @@ QUEUE
   [ "$(focus_to_label unknown)" = "" ]
 }
 
+# bats test_tags=fast
 @test "discover: LINEAR_DISCOVER line parsing" {
   # Test the regex that parses discovery output
   RUN_LOG="$TEST_TMPDIR/run.md"
@@ -96,6 +99,7 @@ LOG
   [[ "$PRIORITIES" == *"3"* ]]
 }
 
+# bats test_tags=fast
 @test "discover: SEARCH line parsing for log" {
   RUN_LOG="$TEST_TMPDIR/run.md"
   cat > "$RUN_LOG" <<'LOG'
@@ -108,6 +112,7 @@ LOG
   [ "$COUNT" -eq 3 ]
 }
 
+# bats test_tags=fast
 @test "discover: CLI argument overrides focus area" {
   # The script checks: if [ -n "${1:-}" ]; then FOCUS="${1}"
   FOCUS=""

@@ -3,6 +3,7 @@
 
 load test_helper
 
+# bats test_tags=slow
 @test "health-report: python analysis handles empty CSVs" {
   # Create empty CSVs with headers only
   echo "date,pipeline_start,pipeline_end,total_sec,discover_sec,triage_sec,builder_sec" > "$OUTPUT_DIR/lift-runtime.csv"
@@ -44,6 +45,7 @@ PYEOF
   echo "$result" | python3 -c "import json,sys; d=json.load(sys.stdin); assert 'No pipeline runs' in d['anomalies'][0]"
 }
 
+# bats test_tags=fast
 @test "health-report: stall rate anomaly detection" {
   result=$(python3 -c "
 stall_rate = 45
@@ -55,6 +57,7 @@ print(anomalies[0] if anomalies else 'none')
   [[ "$result" == *"High stall rate: 45%"* ]]
 }
 
+# bats test_tags=fast
 @test "health-report: trend emoji logic" {
   green=$(python3 -c "print('🟢' if 15 < 20 else '🟡' if 15 < 40 else '🔴')")
   [ "$green" = "🟢" ]
@@ -66,6 +69,7 @@ print(anomalies[0] if anomalies else 'none')
   [ "$red" = "🔴" ]
 }
 
+# bats test_tags=slow
 @test "health-report: dry-run does not post to Slack" {
   # Create minimal CSVs
   echo "date,pipeline_start,pipeline_end,total_sec,discover_sec,triage_sec,builder_sec" > "$OUTPUT_DIR/lift-runtime.csv"

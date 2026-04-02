@@ -1,10 +1,10 @@
 #!/bin/bash
-# Pre-commit hook: runs pilot test suite before allowing a commit.
-# Skippable with: git commit --no-verify
+# Pre-commit hook: runs fast-tier tests before allowing a commit.
+# Full suite runs in CI on push. Skippable with: git commit --no-verify
 
-echo "🧪 Running pilot tests..."
+echo "🧪 Running fast tests..."
 
-_PILOT_TEST_MODE=1 bash "$(git rev-parse --show-toplevel)/tests/run-tests.sh" 2>&1
+_PILOT_TEST_MODE=1 bash "$(git rev-parse --show-toplevel)/tests/run-tests.sh" --fast 2>&1
 
 if [ $? -ne 0 ]; then
   echo ""
@@ -12,4 +12,4 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 
-echo "✅ All tests passed."
+echo "✅ All fast tests passed."

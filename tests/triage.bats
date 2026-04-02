@@ -33,6 +33,7 @@ teardown() {
 # ── Verdict parsing unit tests ───────────────────────────────────────────────
 # These test the regex patterns used in triage.sh without running the full script
 
+# bats test_tags=fast
 @test "triage: APPROVE verdict parsed correctly" {
   result="VERDICT: APPROVE
 CONFIDENCE: 8
@@ -44,6 +45,7 @@ SUGGESTED_PRIORITY: 2"
   [ "$verdict" = "APPROVE" ]
 }
 
+# bats test_tags=fast
 @test "triage: RESCOPE verdict parsed correctly" {
   result="VERDICT: RESCOPE
 CONFIDENCE: 9
@@ -58,6 +60,7 @@ SUB_ISSUE_2_DESCRIPTION: Add data export functionality to settings"
   [ "$verdict" = "RESCOPE" ]
 }
 
+# bats test_tags=fast
 @test "triage: sub-issue fields parsed from RESCOPE output" {
   result="SUB_ISSUE_1_TITLE: Redesign settings page
 SUB_ISSUE_1_PRIORITY: 2
@@ -78,6 +81,7 @@ SUB_ISSUE_3_DESCRIPTION: Another task"
   [ "$count" -eq 3 ]
 }
 
+# bats test_tags=fast
 @test "triage: max 4 sub-issues enforced by parsing loop" {
   # Even if 5 are provided, the loop only checks 1-4
   result="SUB_ISSUE_1_TITLE: One
@@ -95,6 +99,7 @@ SUB_ISSUE_5_TITLE: Five"
   [ "$count" -eq 4 ]
 }
 
+# bats test_tags=fast
 @test "triage: RESCOPE_GUIDANCE changes with backlog size" {
   # Small backlog — rescope available
   BACKLOG_COUNT=10
@@ -115,6 +120,7 @@ SUB_ISSUE_5_TITLE: Five"
   [[ "$guidance" == "Prefer ENHANCE" ]]
 }
 
+# bats test_tags=fast
 @test "triage: FLAG is default when no verdict parsed" {
   result="Some garbage output with no verdict line"
   verdict=$(echo "$result" | grep -oE 'VERDICT: (APPROVE|ENHANCE|SKIP|FLAG|RESCOPE)' | head -1 | sed 's/VERDICT: //')
@@ -122,6 +128,7 @@ SUB_ISSUE_5_TITLE: Five"
   [ "$verdict" = "FLAG" ]
 }
 
+# bats test_tags=fast
 @test "triage: confidence and complexity parsed" {
   result="VERDICT: APPROVE
 CONFIDENCE: 7
@@ -137,6 +144,7 @@ SUGGESTED_PRIORITY: 2"
 
 # ── Dry run integration test ─────────────────────────────────────────────────
 
+# bats test_tags=fast
 @test "triage: dry-run does not create issues or post to Slack" {
   export MOCK_GEMINI_OUTPUT="VERDICT: APPROVE
 CONFIDENCE: 8

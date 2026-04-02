@@ -14,12 +14,14 @@ _ai_review_setup() {
   export PATH="$TEST_TMPDIR/bin:$PATH"
 }
 
+# bats test_tags=fast
 @test "ai-review: unknown command exits with error" {
   run bash "$REVIEW" nonexistent
   [ "$status" -eq 1 ]
   [[ "$output" == *"Unknown ai-review command"* ]]
 }
 
+# bats test_tags=fast
 @test "ai-review: layer1 produces verdict on clean review" {
   _ai_review_setup
   export MOCK_GEMINI_OUTPUT="REVIEW_CLEAN
@@ -30,6 +32,7 @@ REVIEW_VERDICT:MERGE"
   grep -q "REVIEW_MODEL:" "$OUTPUT_FILE"
 }
 
+# bats test_tags=fast
 @test "ai-review: layer1 with findings produces DO_NOT_MERGE" {
   _ai_review_setup
   export MOCK_GEMINI_OUTPUT="REVIEW_FIX:critical:src/App.vue:Null pointer
@@ -40,6 +43,7 @@ REVIEW_VERDICT:DO_NOT_MERGE"
   grep -q "REVIEW_FIX:critical" "$OUTPUT_FILE"
 }
 
+# bats test_tags=fast
 @test "ai-review: layer1 falls back to claude on gemini failure" {
   _ai_review_setup
   # Make gemini fail
@@ -55,6 +59,7 @@ EOF
   [[ "$output" == *"fallback"* ]]
 }
 
+# bats test_tags=fast
 @test "ai-review: layer1 skips when all models fail" {
   _ai_review_setup
   # Make both fail
@@ -76,6 +81,7 @@ EOF
   grep -q "REVIEW_MODEL:skipped" "$OUTPUT_FILE"
 }
 
+# bats test_tags=fast
 @test "ai-review: ensure_verdict adds REVIEW if missing" {
   _ai_review_setup
   export MOCK_GEMINI_OUTPUT="REVIEW_FIX:low:src/foo.ts:Minor issue"
@@ -84,6 +90,7 @@ EOF
   grep -q "REVIEW_VERDICT:" "$OUTPUT_FILE"
 }
 
+# bats test_tags=fast
 @test "ai-review: layer2 accepts --prior-findings" {
   _ai_review_setup
   export MOCK_GEMINI_OUTPUT="REVIEW_CROSSCHECK:confirmed:Null check is real
@@ -96,6 +103,7 @@ REVIEW_VERDICT:MERGE"
   grep -q "REVIEW_CROSSCHECK:" "$OUTPUT_FILE"
 }
 
+# bats test_tags=fast
 @test "ai-review: layer1 saves prompt for transparency" {
   _ai_review_setup
   export MOCK_GEMINI_OUTPUT="REVIEW_CLEAN
@@ -106,6 +114,7 @@ REVIEW_VERDICT:MERGE"
   [ $? -eq 0 ]
 }
 
+# bats test_tags=fast
 @test "ai-review: gemini rate limit detected as failure" {
   _ai_review_setup
   export MOCK_GEMINI_OUTPUT="exhausted your capacity for model gemini-2.5-flash"

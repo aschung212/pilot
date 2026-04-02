@@ -3,6 +3,7 @@
 
 load test_helper
 
+# bats test_tags=fast
 @test "log: log_info writes correct format" {
   export LOG_COMPONENT="test-component"
   source "$PILOT_DIR/lib/log.sh"
@@ -12,6 +13,7 @@ load test_helper
   [[ "$output" == *"hello world"* ]]
 }
 
+# bats test_tags=fast
 @test "log: log_warn writes WARN level" {
   export LOG_COMPONENT="test-component"
   source "$PILOT_DIR/lib/log.sh"
@@ -20,6 +22,7 @@ load test_helper
   [[ "$output" == *"something off"* ]]
 }
 
+# bats test_tags=fast
 @test "log: log_error writes ERROR level" {
   export LOG_COMPONENT="test-component"
   source "$PILOT_DIR/lib/log.sh"
@@ -28,6 +31,7 @@ load test_helper
   [[ "$output" == *"bad thing"* ]]
 }
 
+# bats test_tags=fast
 @test "log: unified log file is created" {
   export LOG_COMPONENT="test-component"
   source "$PILOT_DIR/lib/log.sh"
@@ -37,6 +41,7 @@ load test_helper
   [ $? -eq 0 ]
 }
 
+# bats test_tags=fast
 @test "log: log format includes timestamp" {
   export LOG_COMPONENT="test-component"
   source "$PILOT_DIR/lib/log.sh"

@@ -5,12 +5,14 @@ load test_helper
 
 NOTIFY="$PILOT_DIR/adapters/notify.sh"
 
+# bats test_tags=fast
 @test "notify: unknown command exits with error" {
   run bash "$NOTIFY" nonexistent
   [ "$status" -eq 1 ]
   [[ "$output" == *"Unknown notify command"* ]]
 }
 
+# bats test_tags=fast
 @test "notify: get_channel_id resolves known channels" {
   # Test by calling send with automation channel — it should resolve the ID
   export SLACK_BOT_TOKEN="xoxb-test-token"
@@ -20,6 +22,7 @@ NOTIFY="$PILOT_DIR/adapters/notify.sh"
   grep -q "C_TEST_AUTO" "$TEST_TMPDIR/mock_calls/curl"
 }
 
+# bats test_tags=fast
 @test "notify: --as flag routes to Bot API" {
   export SLACK_BOT_TOKEN="xoxb-test-token"
   run bash "$NOTIFY" --as builder send automation "test message"
@@ -29,6 +32,7 @@ NOTIFY="$PILOT_DIR/adapters/notify.sh"
   grep -q "chat.postMessage" "$TEST_TMPDIR/mock_calls/curl"
 }
 
+# bats test_tags=fast
 @test "notify: send without token or webhook is a no-op" {
   # No SLACK_BOT_TOKEN, no webhooks — should silently do nothing
   run bash "$NOTIFY" send automation "test"
@@ -37,6 +41,7 @@ NOTIFY="$PILOT_DIR/adapters/notify.sh"
   [ ! -f "$TEST_TMPDIR/mock_calls/curl" ]
 }
 
+# bats test_tags=fast
 @test "notify: thread-start returns timestamp" {
   export SLACK_BOT_TOKEN="xoxb-test-token"
   run bash "$NOTIFY" thread-start automation "Starting thread"
@@ -45,6 +50,7 @@ NOTIFY="$PILOT_DIR/adapters/notify.sh"
   [[ "$output" == *"1234567890.123456"* ]]
 }
 
+# bats test_tags=fast
 @test "notify: thread-reply with empty ts falls back to webhook" {
   export SLACK_WEBHOOK_URL="https://hooks.slack.com/test"
   run bash "$NOTIFY" thread-reply automation "" "fallback message"
@@ -53,6 +59,7 @@ NOTIFY="$PILOT_DIR/adapters/notify.sh"
   [ -f "$TEST_TMPDIR/mock_calls/curl" ]
 }
 
+# bats test_tags=fast
 @test "notify: send falls back to Bot API when webhook fails" {
   export SLACK_WEBHOOK_URL="https://hooks.slack.com/test"
   export SLACK_BOT_TOKEN="xoxb-test-token"

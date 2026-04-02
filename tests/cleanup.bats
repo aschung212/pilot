@@ -3,6 +3,7 @@
 
 load test_helper
 
+# bats test_tags=slow
 @test "cleanup: dedup logic keeps oldest issue" {
   # Simulate the python dedup logic
   input="TEST-100|fix button alignment
@@ -34,6 +35,7 @@ for title, ids in by_title.items():
   ! echo "$dupes" | grep -q "TEST-110"
 }
 
+# bats test_tags=fast
 @test "cleanup: dry-run does not modify issues" {
   # Create fake credentials so cleanup doesn't exit early
   mkdir -p "$TEST_TMPDIR/home/.config/linear"
@@ -48,6 +50,7 @@ for title, ids in by_title.items():
   fi
 }
 
+# bats test_tags=fast
 @test "cleanup: metrics CSV header is correct" {
   CLEANUP_CSV="$TEST_TMPDIR/cleanup-metrics.csv"
   echo "date,archived,deduped" > "$CLEANUP_CSV"
@@ -60,6 +63,7 @@ for title, ids in by_title.items():
   [ "$COUNT" -eq 1 ]
 }
 
+# bats test_tags=fast
 @test "cleanup: exits gracefully without Linear token" {
   # No credentials file
   export HOME="$TEST_TMPDIR/home"

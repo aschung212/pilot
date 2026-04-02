@@ -3,6 +3,7 @@
 
 load test_helper
 
+# bats test_tags=fast
 @test "tune-reviews: history JSON initialized correctly" {
   HISTORY="$TEST_TMPDIR/history.json"
   echo '[]' > "$HISTORY"
@@ -10,6 +11,7 @@ load test_helper
   [ "$result" = "0" ]
 }
 
+# bats test_tags=fast
 @test "tune-reviews: clean merge detection" {
   result=$(python3 -c "
 had_aaron_feedback = False
@@ -26,6 +28,7 @@ print('clean' if merged_clean else 'feedback')
   [ "$result" = "feedback" ]
 }
 
+# bats test_tags=fast
 @test "tune-reviews: clean merge rate calculation" {
   result=$(python3 -c "
 history = [
@@ -42,6 +45,7 @@ print(f'{rate:.0f}')
   [ "$result" = "75" ]
 }
 
+# bats test_tags=fast
 @test "tune-reviews: comment categorization" {
   result=$(python3 -c "
 comments = [
@@ -59,6 +63,7 @@ print(f'{len(claude_findings)},{len(gemini_findings)},{len(aaron_comments)}')
   [ "$result" = "1,1,1" ]
 }
 
+# bats test_tags=fast
 @test "tune-reviews: learnings file format" {
   LEARNINGS="$TEST_TMPDIR/learnings.md"
   cat > "$LEARNINGS" << 'EOF'

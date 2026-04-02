@@ -5,6 +5,7 @@ load test_helper
 
 DIGEST="$PILOT_DIR/scripts/digest.sh"
 
+# bats test_tags=fast
 @test "digest: dry-run prints to stdout without posting" {
   run bash "$DIGEST" --dry-run
   [ "$status" -eq 0 ]
@@ -15,6 +16,7 @@ DIGEST="$PILOT_DIR/scripts/digest.sh"
   [ ! -f "$TEST_TMPDIR/mock_calls/curl" ]
 }
 
+# bats test_tags=fast
 @test "digest: count_lines function counts issue IDs" {
   # Simulate the count_lines function (matches digest.sh's implementation)
   count_lines() {
@@ -31,6 +33,7 @@ TEST-101  P3  Backlog    Add thing"
   [ "$empty_result" = "0" ]
 }
 
+# bats test_tags=fast
 @test "digest: warns when webhook not set" {
   export SLACK_WEBHOOK_DAILY_REVIEW=""
   run bash "$DIGEST"

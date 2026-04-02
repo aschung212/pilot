@@ -3,6 +3,7 @@
 
 load test_helper
 
+# bats test_tags=slow
 @test "tune-budget: skips with insufficient data" {
   # Create usage CSV with only 2 nights
   echo "date,run,input_tokens,output_tokens,cache_read_tokens,cache_create_tokens,nightly_output_total,duration_sec" > "$OUTPUT_DIR/lift-usage-tracking.csv"
@@ -18,6 +19,7 @@ load test_helper
   [[ "$output" == *"2/3 nights"* ]] || [[ "$output" == *"Skipping tuning"* ]]
 }
 
+# bats test_tags=fast
 @test "tune-budget: python analysis raises iterations when hitting cap" {
   result=$(python3 << 'PYEOF'
 import json
@@ -47,6 +49,7 @@ PYEOF
   [ "$new_iters" = "10" ]
 }
 
+# bats test_tags=fast
 @test "tune-budget: python analysis lowers iterations on frequent stalls" {
   result=$(python3 << 'PYEOF'
 import json
@@ -69,6 +72,7 @@ PYEOF
   [ "$new_iters" = "5" ]
 }
 
+# bats test_tags=fast
 @test "tune-budget: token cap has floor of 200K and ceiling of 1M" {
   result=$(python3 -c "
 suggested = 50000  # very low
@@ -87,6 +91,7 @@ print(suggested)
   [ "$result" = "1000000" ]
 }
 
+# bats test_tags=fast
 @test "tune-budget: cooldown increases on high failure rate" {
   result=$(python3 -c "
 import json

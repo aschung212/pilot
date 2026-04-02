@@ -5,6 +5,7 @@ load test_helper
 
 TRACKER="$PILOT_DIR/adapters/tracker.sh"
 
+# bats test_tags=fast
 @test "tracker: list passes states to linear CLI" {
   run bash "$TRACKER" list backlog unstarted
   [ "$status" -eq 0 ]
@@ -15,18 +16,21 @@ TRACKER="$PILOT_DIR/adapters/tracker.sh"
   grep -q -- "--team TEST" "$TEST_TMPDIR/mock_calls/linear"
 }
 
+# bats test_tags=fast
 @test "tracker: list with --project override" {
   run bash "$TRACKER" list --project OtherProject backlog
   [ "$status" -eq 0 ]
   grep -q -- "--project OtherProject" "$TEST_TMPDIR/mock_calls/linear"
 }
 
+# bats test_tags=fast
 @test "tracker: view passes issue ID" {
   run bash "$TRACKER" view TEST-100
   [ "$status" -eq 0 ]
   grep -q "issue view TEST-100" "$TEST_TMPDIR/mock_calls/linear"
 }
 
+# bats test_tags=fast
 @test "tracker: create passes title, priority, and optional flags" {
   run bash "$TRACKER" create "Fix the bug" 2 --state unstarted --description "A bug fix"
   [ "$status" -eq 0 ]
@@ -36,6 +40,7 @@ TRACKER="$PILOT_DIR/adapters/tracker.sh"
   grep -q -- "--description A bug fix" "$TEST_TMPDIR/mock_calls/linear"
 }
 
+# bats test_tags=fast
 @test "tracker: update passes state and priority" {
   run bash "$TRACKER" update TEST-100 --state completed --priority 1
   [ "$status" -eq 0 ]
@@ -44,24 +49,28 @@ TRACKER="$PILOT_DIR/adapters/tracker.sh"
   grep -q -- "--priority 1" "$TEST_TMPDIR/mock_calls/linear"
 }
 
+# bats test_tags=fast
 @test "tracker: comment-add passes issue ID and body" {
   run bash "$TRACKER" comment-add TEST-100 "This is a comment"
   [ "$status" -eq 0 ]
   grep -q "issue comment add TEST-100" "$TEST_TMPDIR/mock_calls/linear"
 }
 
+# bats test_tags=fast
 @test "tracker: issue-url returns correct URL" {
   run bash "$TRACKER" issue-url TEST-100
   [ "$status" -eq 0 ]
   [ "$output" = "https://linear.app/testorg/issue/TEST-100" ]
 }
 
+# bats test_tags=fast
 @test "tracker: board-url returns correct URL" {
   run bash "$TRACKER" board-url
   [ "$status" -eq 0 ]
   [ "$output" = "https://linear.app/testorg" ]
 }
 
+# bats test_tags=fast
 @test "tracker: unknown command exits with error" {
   run bash "$TRACKER" nonexistent
   [ "$status" -eq 1 ]
