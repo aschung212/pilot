@@ -833,4 +833,6 @@ echo "✅ Notifications sent."
 # Cleanup: archive completed/canceled issues, deduplicate backlog
 echo ""
 echo "── Running cleanup ──"
-bash "$SCRIPT_DIR/cleanup.sh" 2>&1 || echo "⚠️ Cleanup failed (non-fatal)"
+CLEANUP_OUTPUT=$(bash "$SCRIPT_DIR/cleanup.sh" 2>&1 || echo "⚠️ Cleanup failed (non-fatal)")
+echo "$CLEANUP_OUTPUT"
+thread_send "🧹 $CLEANUP_OUTPUT"

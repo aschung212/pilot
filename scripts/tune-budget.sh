@@ -316,12 +316,8 @@ CONF
 
 echo "  ✅ Updated lift-budget.conf"
 
-# Slack notification
-SLACK_WEBHOOK_URL="${SLACK_WEBHOOK_URL:-}"
-if [ -n "$SLACK_WEBHOOK_URL" ]; then
-  MSG="📊 *Overnight Auto-Tuner*
+# Slack notification via adapter
+NOTIFY="$SCRIPT_DIR/../adapters/notify.sh"
+bash "$NOTIFY" send automation "📊 *Budget Auto-Tuner*
 $REASONS
-Stats: $STATS"
-  payload=$(printf '{"text": %s}' "$(echo "$MSG" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')")
-  curl -s -X POST "$SLACK_WEBHOOK_URL" -H 'Content-Type: application/json' -d "$payload" >/dev/null 2>&1
-fi
+Stats: $STATS" 2>/dev/null
