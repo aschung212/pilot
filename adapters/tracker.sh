@@ -46,6 +46,7 @@ case "$cmd" in
       case "$1" in
         --state) create_args+=(--state "$2"); shift 2 ;;
         --description) create_args+=(--description "$2"); shift 2 ;;
+        --label) create_args+=(--label "$2"); shift 2 ;;
         *) shift ;;
       esac
     done

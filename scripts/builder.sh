@@ -544,6 +544,20 @@ $BLOCKED_LINKS}"
   sleep "$ITERATION_COOLDOWN"
 done
 
+# ── Backpressure signal ──────────────────────────────────────────────────────
+# If unstarted issues are low, signal discovery to run extra sessions.
+# Hysteresis: set flag at < 3, clear at >= 5 (prevents thrashing).
+BACKLOG_FLAG="$OUTPUT_DIR/.lift-backlog-low"
+UNSTARTED_COUNT=$(bash "$TRACKER" list unstarted | grep -c "${LINEAR_TEAM}-" || echo "0")
+UNSTARTED_COUNT=$(echo "$UNSTARTED_COUNT" | tr -d ' \n')
+if [ "$UNSTARTED_COUNT" -lt 3 ] 2>/dev/null; then
+  touch "$BACKLOG_FLAG"
+  echo "📉 Backlog low ($UNSTARTED_COUNT unstarted) — signaling discovery to run extra session"
+  thread_send "📉 Backlog low ($UNSTARTED_COUNT unstarted) — discovery will run extra session"
+elif [ "$UNSTARTED_COUNT" -ge 5 ] 2>/dev/null; then
+  rm -f "$BACKLOG_FLAG"
+fi
+
 # Final summary
 BUILDER_END=$(date +%s)
 BUILDER_RUNTIME=$((BUILDER_END - BUILDER_START))

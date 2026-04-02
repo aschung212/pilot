@@ -319,6 +319,26 @@ fi
 DISCOVER_END=$(date +%s)
 DISCOVER_DURATION=$((DISCOVER_END - DISCOVER_START))
 
+# Map focus area to Linear label
+focus_to_label() {
+  case "$1" in
+    performance)   echo "Performance" ;;
+    accessibility) echo "Accessibility" ;;
+    ui-trends)     echo "UI/UX" ;;
+    testing)       echo "Testing" ;;
+    security-deps) echo "Security" ;;
+    pwa-patterns)  echo "PWA" ;;
+    competitors)   echo "Improvement" ;;
+    data-viz)      echo "UI/UX" ;;
+    onboarding)    echo "UI/UX" ;;
+    dx-cicd)       echo "Infrastructure" ;;
+    seo-aso)       echo "Growth" ;;
+    monetization)  echo "Growth" ;;
+    *)             echo "" ;;
+  esac
+}
+FOCUS_LABEL=$(focus_to_label "$FOCUS")
+
 # Create Linear issues for discoveries — skip if Claude already created them inline
 DISCOVER_COUNT=0
 DISCOVER_PRIORITIES=""
@@ -330,8 +350,10 @@ else
     priority=$(echo "$marker" | sed 's/LINEAR_DISCOVER:\([1-4]\):.*/\1/')
     title=$(echo "$marker" | sed 's/LINEAR_DISCOVER:[1-4]://')
     desc=${desc:-No description}
-    echo "  📋 Creating: $title (P$priority)" | tee -a "$RUN_LOG"
-    bash "$TRACKER" create "$title" "$priority" --description "Source: Discovery agent ($FOCUS focus, $DATE). $desc" 2>&1 | tee -a "$RUN_LOG"
+    LABEL_ARGS=""
+    [ -n "$FOCUS_LABEL" ] && LABEL_ARGS="--label $FOCUS_LABEL"
+    echo "  📋 Creating: $title (P$priority${FOCUS_LABEL:+, $FOCUS_LABEL})" | tee -a "$RUN_LOG"
+    bash "$TRACKER" create "$title" "$priority" --description "Source: Discovery agent ($FOCUS focus, $DATE). $desc" $LABEL_ARGS 2>&1 | tee -a "$RUN_LOG"
   done
 fi
 DISCOVER_COUNT=$({ grep -oE 'LINEAR_DISCOVER:[1-4]:' "$RUN_LOG" 2>/dev/null || true; } | wc -l | tr -d ' ')
