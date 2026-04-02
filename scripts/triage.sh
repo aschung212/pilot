@@ -51,7 +51,7 @@ fi
 UNTRIAGED_IDS=""
 for issue_id in $ISSUE_IDS; do
   COMMENTS=$(bash "$TRACKER" comment-list "$issue_id" || true)
-  if ! echo "$COMMENTS" | grep -q "Triaged by Gemini\|Re-triaged by Gemini"; then
+  if ! echo "$COMMENTS" | grep -q "Triaged by\|Re-triaged by"; then
     UNTRIAGED_IDS+="$issue_id "
   fi
 done
@@ -133,7 +133,7 @@ SUGGESTED_PRIORITY: 1-4"
     APPROVE)
       APPROVED=$((APPROVED + 1))
       IMPL_PLAN=$(echo "$TRIAGE_RESULT" | sed -n '/IMPLEMENTATION_PLAN:/,/COMPLEXITY:\|SUGGESTED_PRIORITY:\|$/p' | head -10)
-      bash "$TRACKER" comment-add "$issue_id" "**Triaged by Gemini** ($DATE) — ✅ APPROVED
+      bash "$TRACKER" comment-add "$issue_id" "**Triaged by $TRIAGE_MODEL** ($DATE) — ✅ APPROVED
 
 $IMPL_PLAN
 
@@ -146,7 +146,7 @@ _Automated triage — suggested starting point, not a mandate. Read the codebase
       ENHANCED=$((ENHANCED + 1))
       ENHANCED_DESC=$(echo "$TRIAGE_RESULT" | sed -n '/ENHANCED_DESCRIPTION:/,/IMPLEMENTATION_PLAN:\|$/p' | head -5 | sed 's/ENHANCED_DESCRIPTION: //')
       IMPL_PLAN=$(echo "$TRIAGE_RESULT" | sed -n '/IMPLEMENTATION_PLAN:/,/COMPLEXITY:\|SUGGESTED_PRIORITY:\|$/p' | head -10)
-      bash "$TRACKER" comment-add "$issue_id" "**Triaged by Gemini** ($DATE) — ✨ ENHANCED
+      bash "$TRACKER" comment-add "$issue_id" "**Triaged by $TRIAGE_MODEL** ($DATE) — ✨ ENHANCED
 
 **Refined scope:**
 $ENHANCED_DESC
@@ -165,7 +165,7 @@ _Automated triage — suggested starting point, not a mandate. Read the codebase
     SKIP)
       SKIPPED=$((SKIPPED + 1))
       REASON=$(echo "$TRIAGE_RESULT" | grep -oE 'REASON: .*' | head -1 | sed 's/REASON: //')
-      bash "$TRACKER" comment-add "$issue_id" "**Triaged by Gemini** ($DATE) — ⏭️ SKIP
+      bash "$TRACKER" comment-add "$issue_id" "**Triaged by $TRIAGE_MODEL** ($DATE) — ⏭️ SKIP
 
 $REASON
 
@@ -177,7 +177,7 @@ _Automated triage — can be overridden by moving to Unstarted._" || true
     FLAG)
       FLAGGED=$((FLAGGED + 1))
       REASON=$(echo "$TRIAGE_RESULT" | grep -oE 'REASON: .*' | head -1 | sed 's/REASON: //')
-      bash "$TRACKER" comment-add "$issue_id" "**Triaged by Gemini** ($DATE) — 🚩 NEEDS INPUT
+      bash "$TRACKER" comment-add "$issue_id" "**Triaged by $TRIAGE_MODEL** ($DATE) — 🚩 NEEDS INPUT
 
 $REASON
 
