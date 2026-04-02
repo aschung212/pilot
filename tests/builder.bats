@@ -1,76 +1,34 @@
 #!/usr/bin/env bats
-# Tests for scripts/builder.sh — budget guards, stop logic, usage tracking
+# Tests for builder utilities (lib/builder-utils.sh)
+# These test the ACTUAL functions, not copies of the logic.
 
 load test_helper
 
-BUILDER="$PILOT_DIR/scripts/builder.sh"
+# Source the real functions
+setup() {
+  export TEST_TMPDIR=$(mktemp -d)
+  export OUTPUT_DIR="$TEST_TMPDIR/outputs"
+  export HOME="$TEST_TMPDIR/home"
+  mkdir -p "$OUTPUT_DIR" "$HOME"
+  export PATH="$TEST_DIR/mocks:$PATH"
+  export _PILOT_TEST_MODE=1
 
-# ── Budget and stop condition logic (extracted from builder.sh) ──────────────
+  # Stub slack_send so usage_check doesn't fail
+  slack_send() { :; }
+  export -f slack_send
 
-# bats test_tags=fast
-@test "builder: iteration cap stops the loop" {
-  RUN=12
-  MAX_ITERATIONS_PER_NIGHT=12
-  [ "$RUN" -ge "$MAX_ITERATIONS_PER_NIGHT" ]
+  source "$PILOT_DIR/lib/builder-utils.sh"
 }
 
-# bats test_tags=fast
-@test "builder: token cap stops the loop" {
-  NIGHTLY_OUTPUT_TOKENS=550000
-  MAX_OUTPUT_TOKENS_PER_NIGHT=500000
-  [ "$NIGHTLY_OUTPUT_TOKENS" -ge "$MAX_OUTPUT_TOKENS_PER_NIGHT" ]
+teardown() {
+  rm -rf "$TEST_TMPDIR"
 }
 
-# bats test_tags=fast
-@test "builder: alert threshold fires at 80%" {
-  pct=$(python3 -c "print(int(420000 / 500000 * 100))")
-  ALERT_THRESHOLD_PCT=80
-  [ "$pct" -ge "$ALERT_THRESHOLD_PCT" ]
-
-  # Below threshold — no alert
-  pct=$(python3 -c "print(int(350000 / 500000 * 100))")
-  [ "$pct" -lt "$ALERT_THRESHOLD_PCT" ]
-}
+# ── parse_usage ──────────────────────────────────────────────────────────────
 
 # bats test_tags=fast
-@test "builder: consecutive failure cap" {
-  FAILURES=3
-  MAX_CONSECUTIVE_FAILURES=3
-  [ "$FAILURES" -ge "$MAX_CONSECUTIVE_FAILURES" ]
-}
-
-# bats test_tags=fast
-@test "builder: stall detection stops after MAX_STALLS" {
-  STALLS=2
-  MAX_STALLS=2
-  [ "$STALLS" -ge "$MAX_STALLS" ]
-}
-
-# bats test_tags=fast
-@test "builder: numeric arg sets max iterations" {
-  STOP_AT="5"
-  if [[ "$STOP_AT" =~ ^[0-9]+$ ]]; then
-    MAX_ITERATIONS_PER_NIGHT="$STOP_AT"
-    STOP_AT="23:59"
-  fi
-  [ "$MAX_ITERATIONS_PER_NIGHT" = "5" ]
-  [ "$STOP_AT" = "23:59" ]
-}
-
-# bats test_tags=fast
-@test "builder: time arg kept as stop time" {
-  STOP_AT="06:00"
-  if [[ "$STOP_AT" =~ ^[0-9]+$ ]]; then
-    MAX_ITERATIONS_PER_NIGHT="$STOP_AT"
-    STOP_AT="23:59"
-  fi
-  [ "$STOP_AT" = "06:00" ]
-}
-
-# bats test_tags=fast
-@test "builder: parse_usage extracts tokens from JSON" {
-  JSON_FILE="$TEST_TMPDIR/output.json"
-  cat > "$JSON_FILE" << 'EOF'
+@test "builder: parse_usage extracts tokens from valid JSON" {
+  cat > "$TEST_TMPDIR/output.json" << 'EOF'
 {
   "result": "some code",
   "usage": {
@@ -81,86 +39,187 @@ BUILDER="$PILOT_DIR/scripts/builder.sh"
   }
 }
 EOF
-
-  result=$(python3 -c "
-import json
-with open('$JSON_FILE') as f:
-    data = json.load(f)
-usage = data.get('usage', {})
-inp = usage.get('input_tokens', 0)
-out = usage.get('output_tokens', 0)
-cr = usage.get('cache_read_input_tokens', 0)
-cc = usage.get('cache_creation_input_tokens', 0)
-print(f'{inp},{out},{cr},{cc}')
-")
+  result=$(parse_usage "$TEST_TMPDIR/output.json")
   [ "$result" = "50000,12000,8000,3000" ]
 }
 
 # bats test_tags=fast
 @test "builder: parse_usage handles missing/corrupt JSON" {
-  JSON_FILE="$TEST_TMPDIR/bad.json"
-  echo "not json" > "$JSON_FILE"
-
-  result=$(python3 -c "
-import json
-try:
-    with open('$JSON_FILE') as f:
-        data = json.load(f)
-    print('parsed')
-except:
-    print('0,0,0,0')
-")
+  echo "not json" > "$TEST_TMPDIR/bad.json"
+  result=$(parse_usage "$TEST_TMPDIR/bad.json")
   [ "$result" = "0,0,0,0" ]
 }
 
 # bats test_tags=fast
-@test "builder: overnight stop time logic (after midnight)" {
-  # Simulate 3:00 AM with stop at 7:00 AM — should continue
-  now_mins=$((3 * 60))
-  stop_mins=$((7 * 60))
-  should_stop=false
-  if [ "$stop_mins" -lt 720 ]; then
-    if [ "$now_mins" -ge "$stop_mins" ] && [ "$now_mins" -lt 720 ]; then
-      should_stop=true
-    fi
-  fi
-  [ "$should_stop" = "false" ]
+@test "builder: parse_usage handles missing file" {
+  result=$(parse_usage "$TEST_TMPDIR/nonexistent.json")
+  [ "$result" = "0,0,0,0" ]
+}
 
-  # Simulate 7:30 AM with stop at 7:00 AM — should stop
-  now_mins=$((7 * 60 + 30))
-  should_stop=false
-  if [ "$stop_mins" -lt 720 ]; then
-    if [ "$now_mins" -ge "$stop_mins" ] && [ "$now_mins" -lt 720 ]; then
-      should_stop=true
-    fi
-  fi
-  [ "$should_stop" = "true" ]
+# ── usage_check ──────────────────────────────────────────────────────────────
+
+# bats test_tags=fast
+@test "builder: usage_check stops at iteration cap" {
+  RUN=12; MAX_ITERATIONS_PER_NIGHT=12
+  NIGHTLY_OUTPUT_TOKENS=0; MAX_OUTPUT_TOKENS_PER_NIGHT=500000
+  ALERT_SENT=false; ALERT_THRESHOLD_PCT=80
+  run usage_check
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Iteration cap"* ]]
 }
 
 # bats test_tags=fast
-@test "builder: usage CSV header is correct" {
-  CSV="$TEST_TMPDIR/usage.csv"
-  echo "date,run,input_tokens,output_tokens,cache_read_tokens,cache_create_tokens,nightly_output_total,duration_sec" > "$CSV"
-  HEADER=$(head -1 "$CSV")
-  [[ "$HEADER" == *"date,run,input_tokens"* ]]
+@test "builder: usage_check stops at token cap" {
+  RUN=5; MAX_ITERATIONS_PER_NIGHT=12
+  NIGHTLY_OUTPUT_TOKENS=550000; MAX_OUTPUT_TOKENS_PER_NIGHT=500000
+  ALERT_SENT=false; ALERT_THRESHOLD_PCT=80
+  run usage_check
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Token cap"* ]]
 }
 
 # bats test_tags=fast
-@test "builder: composite verdict picks worst" {
-  # Composite = worst of all layers. Test the logic.
-  pick_worst() {
-    local worst="MERGE"
-    for v in "$@"; do
-      case "$v" in
-        DO_NOT_MERGE) worst="DO_NOT_MERGE" ;;
-        REVIEW) [ "$worst" != "DO_NOT_MERGE" ] && worst="REVIEW" ;;
-      esac
-    done
-    echo "$worst"
-  }
+@test "builder: usage_check passes when under caps" {
+  RUN=5; MAX_ITERATIONS_PER_NIGHT=12
+  NIGHTLY_OUTPUT_TOKENS=100000; MAX_OUTPUT_TOKENS_PER_NIGHT=500000
+  ALERT_SENT=false; ALERT_THRESHOLD_PCT=80
+  run usage_check
+  [ "$status" -eq 0 ]
+}
 
-  [ "$(pick_worst MERGE MERGE MERGE)" = "MERGE" ]
-  [ "$(pick_worst MERGE REVIEW MERGE)" = "REVIEW" ]
-  [ "$(pick_worst MERGE MERGE DO_NOT_MERGE)" = "DO_NOT_MERGE" ]
-  [ "$(pick_worst REVIEW DO_NOT_MERGE MERGE)" = "DO_NOT_MERGE" ]
+# ── should_continue ──────────────────────────────────────────────────────────
+
+# bats test_tags=fast
+@test "builder: should_continue stops on consecutive failures" {
+  RUN=1; MAX_ITERATIONS_PER_NIGHT=12
+  NIGHTLY_OUTPUT_TOKENS=0; MAX_OUTPUT_TOKENS_PER_NIGHT=500000
+  ALERT_SENT=false; ALERT_THRESHOLD_PCT=80
+  STOP_AT="23:59"; FAILURES=3; MAX_CONSECUTIVE_FAILURES=3
+  STALLS=0; MAX_STALLS=2
+  run should_continue
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"consecutive failures"* ]]
+}
+
+# bats test_tags=fast
+@test "builder: should_continue stops on stalls" {
+  RUN=1; MAX_ITERATIONS_PER_NIGHT=12
+  NIGHTLY_OUTPUT_TOKENS=0; MAX_OUTPUT_TOKENS_PER_NIGHT=500000
+  ALERT_SENT=false; ALERT_THRESHOLD_PCT=80
+  STOP_AT="23:59"; FAILURES=0; MAX_CONSECUTIVE_FAILURES=3
+  STALLS=2; MAX_STALLS=2
+  run should_continue
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"no new commits"* ]]
+}
+
+# bats test_tags=fast
+@test "builder: should_continue passes when everything is under limit" {
+  RUN=1; MAX_ITERATIONS_PER_NIGHT=12
+  NIGHTLY_OUTPUT_TOKENS=0; MAX_OUTPUT_TOKENS_PER_NIGHT=500000
+  ALERT_SENT=false; ALERT_THRESHOLD_PCT=80
+  STOP_AT="23:59"; FAILURES=0; MAX_CONSECUTIVE_FAILURES=3
+  STALLS=0; MAX_STALLS=2
+  run should_continue
+  [ "$status" -eq 0 ]
+}
+
+# ── parse_stop_time ──────────────────────────────────────────────────────────
+
+# bats test_tags=fast
+@test "builder: parse_stop_time treats number as iteration count" {
+  MAX_ITERATIONS_PER_NIGHT=12
+  parse_stop_time "5" "07:00"
+  [ "$MAX_ITERATIONS_PER_NIGHT" = "5" ]
+  [ "$STOP_AT" = "23:59" ]
+}
+
+# bats test_tags=fast
+@test "builder: parse_stop_time keeps time as stop time" {
+  MAX_ITERATIONS_PER_NIGHT=12
+  parse_stop_time "06:00" "07:00"
+  [ "$STOP_AT" = "06:00" ]
+  [ "$MAX_ITERATIONS_PER_NIGHT" = "12" ]
+}
+
+# bats test_tags=fast
+@test "builder: parse_stop_time uses default when arg matches 07:00" {
+  parse_stop_time "07:00" "06:30"
+  [ "$STOP_AT" = "06:30" ]
+}
+
+# ── pick_worst_verdict ───────────────────────────────────────────────────────
+
+# bats test_tags=fast
+@test "builder: pick_worst_verdict returns MERGE when all MERGE" {
+  result=$(pick_worst_verdict MERGE MERGE MERGE)
+  [ "$result" = "MERGE" ]
+}
+
+# bats test_tags=fast
+@test "builder: pick_worst_verdict returns REVIEW when any REVIEW" {
+  result=$(pick_worst_verdict MERGE REVIEW MERGE)
+  [ "$result" = "REVIEW" ]
+}
+
+# bats test_tags=fast
+@test "builder: pick_worst_verdict returns DO_NOT_MERGE when any DNM" {
+  result=$(pick_worst_verdict MERGE MERGE DO_NOT_MERGE)
+  [ "$result" = "DO_NOT_MERGE" ]
+}
+
+# bats test_tags=fast
+@test "builder: pick_worst_verdict DO_NOT_MERGE beats REVIEW" {
+  result=$(pick_worst_verdict REVIEW DO_NOT_MERGE MERGE)
+  [ "$result" = "DO_NOT_MERGE" ]
+}
+
+# ── verdict_emoji ────────────────────────────────────────────────────────────
+
+# bats test_tags=fast
+@test "builder: verdict_emoji maps correctly" {
+  [ "$(verdict_emoji MERGE)" = "✅" ]
+  [ "$(verdict_emoji REVIEW)" = "⚠️" ]
+  [ "$(verdict_emoji DO_NOT_MERGE)" = "🚫" ]
+  [ "$(verdict_emoji UNKNOWN)" = "❓" ]
+}
+
+# ── format_review_findings ───────────────────────────────────────────────────
+
+# bats test_tags=fast
+@test "builder: format_review_findings produces markdown" {
+  cat > "$TEST_TMPDIR/review.txt" << 'EOF'
+REVIEW_FIX:critical:src/App.vue:Missing null check
+REVIEW_FIX:medium:src/lib/storage.ts:Hardcoded color
+REVIEW_VERDICT:DO_NOT_MERGE
+EOF
+  result=$(format_review_findings "$TEST_TMPDIR/review.txt")
+  [[ "$result" == *"**critical**"* ]]
+  [[ "$result" == *"src/App.vue"* ]]
+  [[ "$result" == *"**medium**"* ]]
+}
+
+# bats test_tags=fast
+@test "builder: format_review_findings empty on clean review" {
+  cat > "$TEST_TMPDIR/clean.txt" << 'EOF'
+REVIEW_CLEAN
+REVIEW_VERDICT:MERGE
+EOF
+  result=$(format_review_findings "$TEST_TMPDIR/clean.txt")
+  [ -z "$result" ]
+}
+
+# ── format_review_crosschecks ────────────────────────────────────────────────
+
+# bats test_tags=fast
+@test "builder: format_review_crosschecks formats all statuses" {
+  cat > "$TEST_TMPDIR/review.txt" << 'EOF'
+REVIEW_CROSSCHECK:confirmed:Null check is real
+REVIEW_CROSSCHECK:disputed:This was a false positive
+REVIEW_CROSSCHECK:new:Found additional issue
+EOF
+  result=$(format_review_crosschecks "$TEST_TMPDIR/review.txt")
+  [[ "$result" == *"Confirmed"* ]]
+  [[ "$result" == *"Disputed"* ]]
+  [[ "$result" == *"New"* ]]
 }
