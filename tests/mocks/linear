@@ -1,0 +1,41 @@
+#!/bin/bash
+# Mock: linear CLI — logs calls, returns canned responses based on subcommand
+MOCK_LOG="${TEST_TMPDIR:-/tmp}/mock_calls"
+mkdir -p "$MOCK_LOG"
+echo "$@" >> "$MOCK_LOG/linear"
+
+case "$1/$2" in
+  issue/list)
+    echo "TEST-100  P2  Unstarted  Fix button alignment"
+    echo "TEST-101  P3  Backlog    Add dark mode toggle"
+    ;;
+  issue/view)
+    echo "# TEST-100: Fix button alignment"
+    echo "Priority: 2"
+    echo "State: Unstarted"
+    echo "Description: The submit button is misaligned on mobile viewports"
+    ;;
+  issue/create)
+    # Extract title from args
+    for arg in "$@"; do
+      if [ "$prev" = "--title" ]; then
+        echo "Created TEST-200: $arg"
+        break
+      fi
+      prev="$arg"
+    done
+    ;;
+  issue/update)
+    echo "Updated $3"
+    ;;
+  issue/comment)
+    if [ "${3:-}" = "list" ]; then
+      echo "No comments"
+    elif [ "${3:-}" = "add" ]; then
+      echo "Comment added"
+    fi
+    ;;
+  *)
+    echo "mock linear: unknown command $*" >&2
+    ;;
+esac

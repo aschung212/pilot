@@ -1,0 +1,9 @@
+diff --git a/src/components/WorkoutTracker.vue b/src/components/WorkoutTracker.vue
+index abc1234..def5678 100644
+--- a/src/components/WorkoutTracker.vue
++++ b/src/components/WorkoutTracker.vue
+@@ -10,6 +10,7 @@
+     <div class="workout-header">
+       <h2>{{ workout.name }}</h2>
++      <button class="btn-complete" @click="completeWorkout">Done</button>
+     </div>

@@ -1,0 +1,14 @@
+#!/bin/bash
+# Mock: claude CLI — returns canned JSON output
+# Override behavior by setting MOCK_CLAUDE_OUTPUT or MOCK_CLAUDE_EXIT
+MOCK_LOG="${TEST_TMPDIR:-/tmp}/mock_calls"
+mkdir -p "$MOCK_LOG"
+echo "$@" >> "$MOCK_LOG/claude"
+
+if [ -n "${MOCK_CLAUDE_OUTPUT:-}" ]; then
+  echo "$MOCK_CLAUDE_OUTPUT"
+  exit "${MOCK_CLAUDE_EXIT:-0}"
+fi
+
+# Default: return valid JSON with clean review
+echo '{"result": "REVIEW_CLEAN\nREVIEW_VERDICT:MERGE", "is_error": false}'

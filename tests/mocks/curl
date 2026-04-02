@@ -1,0 +1,22 @@
+#!/bin/bash
+# Mock: curl — logs calls, returns success
+# Override with MOCK_CURL_OUTPUT, MOCK_CURL_EXIT, MOCK_CURL_HTTP_CODE
+MOCK_LOG="${TEST_TMPDIR:-/tmp}/mock_calls"
+mkdir -p "$MOCK_LOG"
+echo "$@" >> "$MOCK_LOG/curl"
+
+if [ -n "${MOCK_CURL_OUTPUT:-}" ]; then
+  echo "$MOCK_CURL_OUTPUT"
+  exit "${MOCK_CURL_EXIT:-0}"
+fi
+
+# Check if -w "%{http_code}" was passed (webhook check)
+for arg in "$@"; do
+  if [ "$arg" = "%{http_code}" ]; then
+    echo "${MOCK_CURL_HTTP_CODE:-200}"
+    exit 0
+  fi
+done
+
+# Default: Slack API success
+echo '{"ok": true, "ts": "1234567890.123456"}'

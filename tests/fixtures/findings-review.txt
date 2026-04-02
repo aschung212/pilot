@@ -1,0 +1,3 @@
+REVIEW_FIX:critical:src/components/App.vue:Missing null check on user prop causes crash
+REVIEW_FIX:medium:src/lib/storage.ts:Hardcoded color should use CSS custom property
+REVIEW_VERDICT:DO_NOT_MERGE

@@ -1,0 +1,6 @@
+#!/bin/bash
+# Mock: gh CLI
+MOCK_LOG="${TEST_TMPDIR:-/tmp}/mock_calls"
+mkdir -p "$MOCK_LOG"
+echo "$@" >> "$MOCK_LOG/gh"
+echo "https://github.com/test/repo/pull/1"

@@ -1,0 +1,15 @@
+#!/bin/bash
+# Mock: gemini CLI — returns canned review/triage output
+# Override behavior by setting MOCK_GEMINI_OUTPUT or MOCK_GEMINI_EXIT
+MOCK_LOG="${TEST_TMPDIR:-/tmp}/mock_calls"
+mkdir -p "$MOCK_LOG"
+echo "$@" >> "$MOCK_LOG/gemini"
+
+if [ -n "${MOCK_GEMINI_OUTPUT:-}" ]; then
+  echo "$MOCK_GEMINI_OUTPUT"
+  exit "${MOCK_GEMINI_EXIT:-0}"
+fi
+
+# Default: clean review
+echo "REVIEW_CLEAN"
+echo "REVIEW_VERDICT:MERGE"
