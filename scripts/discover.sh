@@ -251,16 +251,34 @@ GEMINI_APPEND
 # Phase 2: Claude analyzes findings + reads codebase + creates issues
 echo "  🧠 Phase 2: Claude analysis and issue creation..." | tee -a "$RUN_LOG"
 DISCOVER_JSON="$OUTPUT_DIR/lift-discover-$DATE-output.json"
-claude --dangerously-skip-permissions --output-format json -p "$(cat "$PROMPT_FILE")" --max-turns 30 2>&1 > "$DISCOVER_JSON"
-# Extract text result to run log
-python3 -c "
+if ! claude --dangerously-skip-permissions --output-format json -p "$(cat "$PROMPT_FILE")" --max-turns 30 2>&1 > "$DISCOVER_JSON"; then
+  echo "  ❌ Claude analysis failed (exit code $?)" | tee -a "$RUN_LOG"
+  slack_send "🚨 *Discovery Agent — Claude analysis failed*
+Focus: $FOCUS | Date: $DATE
+Gemini research completed but Claude could not analyze. Check logs: lift-discover-$DATE.md"
+fi
+# Check for empty/invalid output
+if [ ! -s "$DISCOVER_JSON" ]; then
+  echo "  ❌ Claude produced no output (empty JSON)" | tee -a "$RUN_LOG"
+  slack_send "🚨 *Discovery Agent — Claude produced no output*
+Focus: $FOCUS | Date: $DATE
+Possible rate limit or timeout. Gemini research saved at lift-discover-$DATE-gemini-research.md"
+else
+  # Extract text result to run log
+  python3 -c "
 import json
 try:
     with open('$DISCOVER_JSON') as f:
         data = json.load(f)
-    print(data.get('result', ''))
-except: pass
+    result = data.get('result', '')
+    if not result:
+        print('  ⚠️ Claude returned empty result')
+    else:
+        print(result)
+except Exception as e:
+    print(f'  ❌ Failed to parse Claude output: {e}')
 " >> "$RUN_LOG" 2>/dev/null
+fi
 
 # Track token usage
 USAGE_CSV="$OUTPUT_DIR/lift-usage-tracking.csv"

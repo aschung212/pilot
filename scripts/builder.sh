@@ -362,14 +362,26 @@ Do not fabricate existing issue IDs — only use IDs from the backlog above.
 PROMPT
 )" --max-turns 100 2>&1 > "$CLAUDE_JSON"; then
     # Extract text result and append to run log
-    python3 -c "
+    CLAUDE_RESULT=$(python3 -c "
 import json, sys
 try:
     with open('$CLAUDE_JSON') as f:
         data = json.load(f)
-    print(data.get('result', ''))
-except: pass
-" >> "$RUN_LOG" 2>/dev/null
+    result = data.get('result', '')
+    if result:
+        print(result)
+    else:
+        print('⚠️ Claude returned empty result', file=sys.stderr)
+except Exception as e:
+    print(f'❌ Failed to parse Claude output: {e}', file=sys.stderr)
+" 2>&1)
+    if echo "$CLAUDE_RESULT" | grep -q "^⚠️\|^❌"; then
+      echo "  $CLAUDE_RESULT" | tee -a "$RUN_LOG"
+      slack_send "🚨 *Builder Run $RUN — Claude issue*
+$CLAUDE_RESULT"
+    else
+      echo "$CLAUDE_RESULT" >> "$RUN_LOG"
+    fi
 
     # Track token usage
     USAGE_DATA=$(parse_usage "$CLAUDE_JSON")
