@@ -727,7 +727,7 @@ GEMINI_PROMPT
 $GEMINI_REVIEW
 
 ---
-_Automated review by overnight pipeline — $(date) — model: $GEMINI_MODEL_" 2>&1 || echo "  ⚠️ Failed to post Gemini review to PR"
+_Automated review by overnight pipeline — $(date) — model: ${GEMINI_MODEL}_" 2>&1 || echo "  ⚠️ Failed to post Gemini review to PR"
     fi
   else
     echo "  ⚠️ Gemini review failed"
