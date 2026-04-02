@@ -187,12 +187,18 @@ if [ -d "$WORKTREE_DIR" ]; then
   fi
   git pull --ff-only origin "$BRANCH" 2>/dev/null || true
 else
-  # Create worktree on the builder branch
+  # Create worktree — if the branch is checked out in the main repo, detach it first
+  MAIN_CURRENT=$(cd "$REPO" && git branch --show-current 2>/dev/null || echo "")
+  if [ "$MAIN_CURRENT" = "$BRANCH" ]; then
+    echo "  ℹ️  Branch $BRANCH is checked out in main repo — detaching to free it for worktree."
+    cd "$REPO" && git checkout --detach 2>/dev/null || true
+  fi
+
   git worktree add "$WORKTREE_DIR" "$BRANCH" 2>&1 || {
-    echo "Failed to create worktree. Falling back to main repo."
+    echo "  ⚠️ Failed to create worktree. Falling back to main repo."
     WORKTREE_DIR="$REPO"
     cd "$REPO"
-    git checkout "$BRANCH"
+    git checkout "$BRANCH" 2>/dev/null || true
   }
   cd "$WORKTREE_DIR"
 fi
