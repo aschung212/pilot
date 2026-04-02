@@ -4,6 +4,19 @@ An autonomous multi-agent pipeline that discovers, triages, implements, and revi
 
 > **Status**: Active development. Currently powering [Lift](https://github.com/aschung212/Lift), a workout tracker PWA.
 
+## What It Does
+
+Every night, Pilot:
+
+1. **Discovers** improvement opportunities by researching competitors, UI trends, accessibility standards, and more (Gemini + Claude)
+2. **Triages** each discovery — approves, enhances, skips, or flags for your review (Gemini, Claude fallback)
+3. **Implements** the highest-priority approved issues — writes code, runs tests, commits, creates PRs (Claude Opus)
+4. **Reviews** its own PRs with two independent AI reviewers (Claude Sonnet + Gemini Flash)
+5. **Cleans up** — archives completed issues, deduplicates the backlog
+6. **Self-tunes** — adjusts iteration budgets, token limits, and review quality based on outcomes
+
+You wake up to a PR with passing tests, a Slack thread summarizing what was done, and a clean issue board.
+
 ## How It Works
 
 ```
@@ -15,20 +28,16 @@ An autonomous multi-agent pipeline that discovers, triages, implements, and revi
 │  │ (research │    │ (review  │    │ (code    │               │
 │  │ + issues) │    │ + plan)  │    │ + ship)  │               │
 │  └──────────┘    └──────────┘    └──────────┘               │
-│       │               │               │                      │
-│       ▼               ▼               ▼                      │
-│  Issues created  Impl. plans     Commits, PRs,              │
-│  in tracker      added           tracker updated             │
+│  3x/week          3x/week        Mon-Fri                    │
 │                                       │                      │
 │                              ┌────────┴────────┐            │
-│                              │ PR Review        │            │
-│                              │ + Auto-Tuners    │            │
-│                              │ + Cleanup        │            │
+│                              │ PR Review + CI   │            │
+│                              │ Cleanup + Tuners  │            │
 │                              └─────────────────┘            │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-Each stage runs independently on its own schedule. Your issue tracker (Linear, GitHub Issues, etc.) serves as the shared state store between stages.
+Each stage runs independently on its own schedule. Your issue tracker (Linear, GitHub Issues) serves as the shared state store — like a message queue between microservices.
 
 ## Quickstart
 
@@ -38,49 +47,127 @@ cd pilot
 ./init.sh
 ```
 
-The interactive initializer walks you through:
+The interactive setup wizard walks you through:
 1. Project basics (name, repo, tech stack)
-2. Issue tracker setup (Linear, GitHub Issues, or custom)
-3. AI model selection (Claude, Gemini, ChatGPT)
-4. Notification setup (Slack webhooks)
+2. Issue tracker (Linear or GitHub Issues)
+3. AI models (Claude, Gemini)
+4. Slack notifications
 5. Scheduling preferences
-6. Discovery focus areas for your project
+6. Discovery focus areas
+
+### Prerequisites
+
+- **macOS** (uses launchd for scheduling)
+- **[Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)** — code generation + reviews
+- **[Gemini CLI](https://github.com/google-gemini/gemini-cli)** (optional) — web research + triage
+- **Issue tracker CLI** — [Linear CLI](https://github.com/linear/linear-cli) or `gh` (GitHub CLI)
+- **Node.js** — for building/testing your project
+- **Slack** (optional) — incoming webhooks for basic notifications, bot token for threaded updates
+
+### Verify Installation
+
+```bash
+./init.sh --check
+```
 
 ## Architecture
 
-See [docs/architecture.md](docs/architecture.md) for the full design, including:
-- Service decomposition and independent scheduling
-- Eventual consistency via issue tracker state machine
-- Backpressure signaling
-- Self-tuning budgets and review quality
+Each pipeline stage is an independent service with its own schedule, logs, and failure mode:
+
+| Service | Schedule | What it does |
+|---------|----------|-------------|
+| Discovery | Sun/Tue/Thu 22:00 | Researches improvements, creates issues |
+| Triage | Sun/Tue/Thu 22:30 | Reviews issues, adds implementation plans |
+| Builder | Mon-Fri 23:00 | Implements top issues, creates PRs |
+| Budget Tuner | Sunday 21:00 | Adjusts iteration/token caps |
+| Review Tuner | Sunday 21:15 | Improves review quality from your feedback |
+| Health Report | Sunday 08:00 | Weekly metrics dashboard + log rotation |
+
+The builder uses a **git worktree** so it never touches your working directory — you can work on the same repo simultaneously.
+
+See [docs/architecture.md](docs/architecture.md) for the full design.
 
 ## Adapters
 
-Components are swappable via thin adapter scripts. See [docs/adapters.md](docs/adapters.md).
+Components are swappable via thin adapter scripts:
 
-| Adapter | Default | Alternatives |
-|---------|---------|--------------|
-| Issue tracker | Linear | GitHub Issues, Jira |
-| Notifications | Slack webhooks | Discord, email |
-| Code generation | Claude | — |
-| Research | Gemini | ChatGPT, Perplexity |
-| Code review | Sonnet + Gemini | — |
+| Adapter | Default | Swap to |
+|---------|---------|---------|
+| Issue Tracker | Linear | GitHub Issues, Jira |
+| Notifications | Slack | Discord, email |
+| Code Generation | Claude Opus | — |
+| Research | Gemini Flash | ChatGPT, Perplexity |
+| Code Review | Sonnet + Gemini | — |
+
+To swap a tool, rewrite one adapter file (~20 lines). No pipeline scripts change.
+
+See [docs/adapters.md](docs/adapters.md) for interface contracts and examples.
 
 ## Self-Tuning
 
-The pipeline optimizes itself over time. See [docs/tuning.md](docs/tuning.md).
+The pipeline optimizes itself weekly:
 
-- **Budget tuner**: Adjusts iteration caps and token limits based on productivity patterns
-- **Review tuner**: Learns from your PR feedback to improve future reviews
-- **Health report**: Weekly dashboard with anomaly detection
+- **Budget tuner** — raises iteration caps when productive, lowers when stalling
+- **Review tuner** — learns from your PR feedback to reduce false positives
+- **Health report** — surfaces anomalies (empty backlog, high stall rate, token trends)
+- **Backpressure** — builder signals discovery to run more when backlog is low
 
-## Requirements
+See [docs/tuning.md](docs/tuning.md) for details.
 
-- macOS (uses launchd for scheduling)
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)
-- [Gemini CLI](https://github.com/google-gemini/gemini-cli) (optional, for research + review)
-- An issue tracker CLI ([Linear CLI](https://github.com/linear/linear-cli), or `gh` for GitHub Issues)
-- Slack workspace with incoming webhooks (optional, for notifications)
+## Configuration
+
+All project-specific config lives in `project.env` (generated by `init.sh`):
+
+```bash
+PROJECT_NAME="MyApp"
+REPO_PATH="/path/to/repo"
+GITHUB_REPO="user/repo"
+DEFAULT_BRANCH="main"
+LINEAR_TEAM="ENG"
+AI_CODE_MODEL="opus"
+DISCOVER_DAYS="0,2,4"     # Sun/Tue/Thu
+BUILDER_DAYS="1,2,3,4,5"  # Mon-Fri
+```
+
+Sensitive values (API keys, tokens) go in `~/.zshenv`, not `project.env`.
+
+## Deployment
+
+Pilot runs on a single Mac. For a dedicated build machine (Mac Mini), see [docs/deployment.md](docs/deployment.md).
+
+## Project Structure
+
+```
+pilot/
+  init.sh                    # Interactive setup wizard
+  project.env                # Your project config (git-ignored)
+  project.env.example        # Template
+  scripts/
+    discover.sh              # Discovery agent
+    triage.sh                # Triage agent
+    builder.sh               # Overnight builder
+    cleanup.sh               # Issue tracker cleanup
+    tune-budget.sh           # Budget auto-tuner
+    tune-reviews.sh          # Review auto-tuner
+    health-report.sh         # Weekly health dashboard
+    digest.sh                # Morning digest
+  adapters/
+    tracker.sh               # Issue tracker (Linear)
+    notify.sh                # Notifications (Slack)
+    ai-code.sh               # Code generation (Claude)
+    ai-research.sh           # Research (Gemini)
+    ai-review.sh             # Code review (Sonnet + Gemini)
+  lib/
+    log.sh                   # Shared logging library
+  config/
+    budget.conf              # Budget config (auto-tuned)
+  docs/
+    architecture.md          # System design + data flow
+    adapters.md              # Adapter contracts + examples
+    tuning.md                # Self-tuning mechanics
+    deployment.md            # Single vs dedicated machine
+  launchd/                   # launchd plist files
+```
 
 ## License
 
