@@ -9,10 +9,10 @@
 set -euo pipefail
 
 # Source env vars when run by launchd (no login shell)
-[ -f "$HOME/.zshenv" ] && source "$HOME/.zshenv" 2>/dev/null || true
+[ -z "${_PILOT_TEST_MODE:-}" ] && [ -f "$HOME/.zshenv" ] && source "$HOME/.zshenv" 2>/dev/null || true
 REAL_SCRIPT="$(readlink "$0" 2>/dev/null || echo "$0")"
 SCRIPT_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
-[ -f "$SCRIPT_DIR/../project.env" ] && source "$SCRIPT_DIR/../project.env"
+[ -z "${_PILOT_TEST_MODE:-}" ] && [ -f "$SCRIPT_DIR/../project.env" ] && source "$SCRIPT_DIR/../project.env"
 
 TRACKER="$SCRIPT_DIR/../adapters/tracker.sh"
 NOTIFY="$SCRIPT_DIR/../adapters/notify.sh"
@@ -85,11 +85,11 @@ DISCOVER_START=$(date +%s)
 echo "🔍 Discovery Agent — $DATE — Focus: $FOCUS" | tee "$RUN_LOG"
 
 # Start Slack thread for this discovery session
-THREAD_TS=$(bash "$NOTIFY" thread-start automation "🔍 *Discovery — $FOCUS* ($DATE)")
+THREAD_TS=$(bash "$NOTIFY" --as discovery thread-start automation "🔍 *Discovery — $FOCUS* ($DATE)")
 THREAD_TS=$(echo "$THREAD_TS" | tr -d ' \n')
 
 slack_send() {
-  bash "$NOTIFY" thread-reply automation "$THREAD_TS" "$1"
+  bash "$NOTIFY" --as discovery thread-reply automation "$THREAD_TS" "$1"
 }
 
 # Get current feature list and backlog for context
@@ -348,8 +348,9 @@ FOCUS_LABEL=$(focus_to_label "$FOCUS")
 # Create Linear issues for discoveries — skip if Claude already created them inline
 DISCOVER_COUNT=0
 DISCOVER_PRIORITIES=""
-CLAUDE_CREATED=$(grep -c "linear.app/$LINEAR_ORG/issue/${LINEAR_TEAM}-" "$RUN_LOG" 2>/dev/null | tail -1 | tr -d ' ' || echo "0")
-if [ "$CLAUDE_CREATED" -gt 0 ]; then
+CLAUDE_CREATED=$(grep -c "linear.app/$LINEAR_ORG/issue/${LINEAR_TEAM}-" "$RUN_LOG" 2>/dev/null | tr -d ' \n' || true)
+CLAUDE_CREATED=${CLAUDE_CREATED:-0}
+if [ "$CLAUDE_CREATED" -gt 0 ] 2>/dev/null; then
   echo "  ℹ️  Claude already created $CLAUDE_CREATED issues inline — skipping duplicate creation." | tee -a "$RUN_LOG"
 else
   { grep -oE 'LINEAR_DISCOVER:[1-4]:.*' "$RUN_LOG" 2>/dev/null || true; } | sort -u | while IFS='|' read -r marker desc; do
@@ -394,10 +395,34 @@ for i, title in enumerate(titles):
 print('\n'.join(lines) if lines else '  (none)')
 " 2>/dev/null)
 SEARCH_SUMMARY=$({ sed -n '/^## Search Summary/,/^## /p' "$RUN_LOG" 2>/dev/null || true; } | grep -v '^## ' | head -3 | tr '\n' ' ')
-slack_send "*Discovery Agent — ${FOCUS}* (${DISCOVER_DURATION}s)
+# Map priority numbers to labels for readability
+DISCOVERY_LIST_LABELED=$(python3 -c "
+import re
+with open('$RUN_LOG') as f:
+    log = f.read()
+
+prio_labels = {'1': '🔴 Urgent', '2': '🟠 High', '3': '🟡 Medium', '4': '🔵 Low'}
+titles = re.findall(r'LINEAR_DISCOVER:([1-4]):([^|]+)', log)
+urls = re.findall(r'(https://linear\.app/[^/]+/issue/([A-Z]+-\d+)[^\s)\"]*)', log)
+
+lines = []
+for i, (prio, title) in enumerate(titles):
+    title = title.strip()
+    label = prio_labels.get(prio, f'P{prio}')
+    if i < len(urls):
+        url, issue_id = urls[i]
+        lines.append(f'  • {label} <{url}|{issue_id}>: {title}')
+    else:
+        lines.append(f'  • {label} {title}')
+print('\n'.join(lines) if lines else '  (none)')
+" 2>/dev/null)
+
+slack_send "*Discovery Agent — ${FOCUS}* (${DISCOVER_DURATION}s)${FOCUS_LABEL:+ | Label: ${FOCUS_LABEL}}
 ${SEARCH_SUMMARY}
 *${DISCOVER_COUNT} discoveries:*
-${DISCOVERY_LIST}"
+${DISCOVERY_LIST_LABELED}
+
+<https://linear.app/${LINEAR_ORG}|Linear Board>"
 
 echo ""
 echo "📊 Results saved to: $RUN_LOG"

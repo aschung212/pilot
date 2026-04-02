@@ -7,10 +7,10 @@
 
 set -euo pipefail
 
-[ -f "$HOME/.zshenv" ] && source "$HOME/.zshenv" 2>/dev/null || true
+[ -z "${_PILOT_TEST_MODE:-}" ] && [ -f "$HOME/.zshenv" ] && source "$HOME/.zshenv" 2>/dev/null || true
 REAL_SCRIPT="$(readlink "$0" 2>/dev/null || echo "$0")"
 SCRIPT_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
-[ -f "$SCRIPT_DIR/../project.env" ] && source "$SCRIPT_DIR/../project.env"
+[ -z "${_PILOT_TEST_MODE:-}" ] && [ -f "$SCRIPT_DIR/../project.env" ] && source "$SCRIPT_DIR/../project.env"
 
 OUTPUT_DIR="${OUTPUT_DIR:-$HOME/Documents/Claude/outputs}"
 BUDGET_CONF="${SCRIPT_DIR}/../config/budget.conf"
@@ -29,8 +29,8 @@ NOTIFY="$SCRIPT_DIR/../adapters/notify.sh"
 # Need at least 3 nights of data to start tuning
 NIGHTS_COUNT=$([ -f "$USAGE_CSV" ] && tail -n +2 "$USAGE_CSV" | cut -d',' -f1 | sort -u | wc -l | tr -d ' ' || echo "0")
 if [ "$NIGHTS_COUNT" -lt 3 ]; then
-  echo "📊 Auto-tuner: ${NIGHTS_COUNT}/3 nights of data collected. Skipping tuning until more data."
-  bash "$NOTIFY" send automation "📊 *Budget Tuner* — ${NIGHTS_COUNT}/3 nights collected, skipping" 2>/dev/null
+  echo "🎛️ Auto-tuner: ${NIGHTS_COUNT}/3 nights of data collected. Skipping tuning until more data."
+  bash "$NOTIFY" --as budget-tuner send automation "🎛️ *Budget Tuner* — ${NIGHTS_COUNT}/3 nights collected, skipping" 2>/dev/null
   exit 0
 fi
 
@@ -265,8 +265,8 @@ PYEOF
 SKIP=$(echo "$TUNING" | python3 -c "import json,sys; print(json.load(sys.stdin).get('skip', True))")
 
 if [ "$SKIP" = "True" ]; then
-  echo "📊 Auto-tuner: no adjustments needed."
-  bash "$NOTIFY" send automation "📊 *Budget Tuner* — analyzed $NIGHTS_COUNT nights, no adjustments needed ✅" 2>/dev/null
+  echo "🎛️ Auto-tuner: no adjustments needed."
+  bash "$NOTIFY" --as budget-tuner send automation "🎛️ *Budget Tuner* — analyzed $NIGHTS_COUNT nights, no adjustments needed ✅" 2>/dev/null
   exit 0
 fi
 
@@ -322,6 +322,6 @@ echo "  ✅ Updated lift-budget.conf"
 
 # Slack notification via adapter
 NOTIFY="$SCRIPT_DIR/../adapters/notify.sh"
-bash "$NOTIFY" send automation "📊 *Budget Auto-Tuner*
+bash "$NOTIFY" --as budget-tuner send automation "🎛️ *Budget Auto-Tuner*
 $REASONS
 Stats: $STATS" 2>/dev/null

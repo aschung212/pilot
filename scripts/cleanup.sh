@@ -13,10 +13,10 @@
 
 set -uo pipefail
 
-[ -f "$HOME/.zshenv" ] && source "$HOME/.zshenv" 2>/dev/null || true
+[ -z "${_PILOT_TEST_MODE:-}" ] && [ -f "$HOME/.zshenv" ] && source "$HOME/.zshenv" 2>/dev/null || true
 REAL_SCRIPT="$(readlink "$0" 2>/dev/null || echo "$0")"
 SCRIPT_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
-[ -f "$SCRIPT_DIR/../project.env" ] && source "$SCRIPT_DIR/../project.env"
+[ -z "${_PILOT_TEST_MODE:-}" ] && [ -f "$SCRIPT_DIR/../project.env" ] && source "$SCRIPT_DIR/../project.env"
 
 TRACKER="$SCRIPT_DIR/../adapters/tracker.sh"
 source "$SCRIPT_DIR/../lib/log.sh"
@@ -51,19 +51,25 @@ archive_issue() {
 
 ARCHIVED=0
 DEDUPED=0
+ARCHIVED_LIST=""
 
 # ── Step 1: Archive completed and canceled issues ──────────────────────────
 for state in completed canceled; do
-  IDS=$(bash "$TRACKER" list "$state" | grep -oE "${LINEAR_TEAM}-[0-9]+" || true)
+  RAW_OUTPUT=$(bash "$TRACKER" list "$state" || true)
+  IDS=$(echo "$RAW_OUTPUT" | grep -oE "${LINEAR_TEAM}-[0-9]+" || true)
 
   for issue_id in $IDS; do
+    # Get clean title via view command (avoids parsing fixed-width CLI columns)
+    TITLE=$(bash "$TRACKER" view "$issue_id" 2>/dev/null | head -1 | sed "s/^# *${issue_id}: *//" | sed 's/[[:space:]]*$//')
+    [ -z "$TITLE" ] && TITLE="(unknown)"
     if [ "$DRY_RUN" = "--dry-run" ]; then
-      echo "  [dry-run] Would archive $issue_id ($state)"
+      echo "  [dry-run] Would archive $issue_id ($state): $TITLE"
     else
       UUID=$(get_uuid "$issue_id")
       if [ -n "$UUID" ]; then
         archive_issue "$UUID"
         ARCHIVED=$((ARCHIVED + 1))
+        ARCHIVED_LIST+="  • ${issue_id} (${state}): ${TITLE}\n"
       fi
     fi
   done
@@ -120,7 +126,11 @@ fi
 if [ "$DRY_RUN" != "--dry-run" ]; then
   echo "$DATE,$ARCHIVED,$DEDUPED" >> "$CLEANUP_METRICS_CSV"
   log_info "Cleanup: $ARCHIVED archived, $DEDUPED deduped"
-  echo "  ✅ Linear cleanup: $ARCHIVED archived"
+  echo "  ✅ Linear cleanup: $ARCHIVED archived, $DEDUPED deduped"
+  if [ -n "$ARCHIVED_LIST" ]; then
+    echo "  Archived issues:"
+    echo -e "$ARCHIVED_LIST"
+  fi
 else
   echo "  [dry-run] Cleanup preview complete."
 fi

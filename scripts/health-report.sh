@@ -13,10 +13,10 @@
 
 set -uo pipefail
 
-[ -f "$HOME/.zshenv" ] && source "$HOME/.zshenv" 2>/dev/null || true
+[ -z "${_PILOT_TEST_MODE:-}" ] && [ -f "$HOME/.zshenv" ] && source "$HOME/.zshenv" 2>/dev/null || true
 REAL_SCRIPT="$(readlink "$0" 2>/dev/null || echo "$0")"
 SCRIPT_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
-[ -f "$SCRIPT_DIR/../project.env" ] && source "$SCRIPT_DIR/../project.env"
+[ -z "${_PILOT_TEST_MODE:-}" ] && [ -f "$SCRIPT_DIR/../project.env" ] && source "$SCRIPT_DIR/../project.env"
 
 NOTIFY="$SCRIPT_DIR/../adapters/notify.sh"
 TRACKER="$SCRIPT_DIR/../adapters/tracker.sh"
@@ -198,18 +198,35 @@ cat "$REPORT"
 
 # Post to Slack
 if [ "$DRY_RUN" != "--dry-run" ]; then
-  HEALTH_MSG="📊 *Weekly Health Report — $DATE*
-*$PERIOD*
+  # Determine trend indicators
+  STALL_EMOJI=$(python3 -c "print('🟢' if $STALL_RATE < 20 else '🟡' if $STALL_RATE < 40 else '🔴')" 2>/dev/null)
+  COMMITS_EMOJI=$(python3 -c "print('🟢' if $COMMITS > 10 else '🟡' if $COMMITS > 3 else '🔴')" 2>/dev/null)
 
-*Pipeline:* $NIGHTS nights | ${AVG_MIN}m avg | $COMMITS commits | ${STALL_RATE}% stall rate
-*Tokens:* $TOKENS output (builder: $BUILDER_TOKENS, discovery: $DISCOVER_TOKENS)
-*Discovery:* $DISC_RUNS runs, $DISC_CREATED issues created
-*Backlog:* $BACKLOG_COUNT open issues
-*Tuning:* $TUNE_CHANGES adjustments
+  HEALTH_MSG="🏥 *Weekly Health Report — $DATE*
+_${PERIOD}_
 
-$ANOMALIES"
-  bash "$NOTIFY" send changelog "$HEALTH_MSG"
-  bash "$NOTIFY" send automation "$HEALTH_MSG"
+*Pipeline*
+  • Nights run: *$NIGHTS*
+  • Avg runtime: *${AVG_MIN}m*
+  • Iterations: *$ITERATIONS* ($SUCCESSFUL successful, $STALLS stalls)
+  • ${STALL_EMOJI} Stall rate: *${STALL_RATE}%*
+  • ${COMMITS_EMOJI} Commits: *$COMMITS* (${COMMITS_PER}/iteration)
+
+*Tokens*
+  • Total output: *$TOKENS*
+  • Builder: $BUILDER_TOKENS | Discovery: $DISCOVER_TOKENS
+
+*Discovery & Backlog*
+  • Discovery: $DISC_RUNS runs → $DISC_CREATED issues created
+  • Open backlog: *$BACKLOG_COUNT* issues
+  • Budget adjustments: $TUNE_CHANGES
+
+*Status*
+$ANOMALIES
+
+<https://linear.app/${LINEAR_ORG}|Linear Board>"
+  bash "$NOTIFY" --as health send changelog "$HEALTH_MSG"
+  bash "$NOTIFY" --as health send automation "$HEALTH_MSG"
   echo "📨 Posted to #system and #lift-automation"
 fi
 

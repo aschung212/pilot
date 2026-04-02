@@ -13,10 +13,10 @@
 
 set -euo pipefail
 
-[ -f "$HOME/.zshenv" ] && source "$HOME/.zshenv" 2>/dev/null || true
+[ -z "${_PILOT_TEST_MODE:-}" ] && [ -f "$HOME/.zshenv" ] && source "$HOME/.zshenv" 2>/dev/null || true
 REAL_SCRIPT="$(readlink "$0" 2>/dev/null || echo "$0")"
 SCRIPT_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
-[ -f "$SCRIPT_DIR/../project.env" ] && source "$SCRIPT_DIR/../project.env"
+[ -z "${_PILOT_TEST_MODE:-}" ] && [ -f "$SCRIPT_DIR/../project.env" ] && source "$SCRIPT_DIR/../project.env"
 
 SCRIPTS="$HOME/Documents/Scripts"
 DATE=$(date +%Y-%m-%d)

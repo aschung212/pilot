@@ -9,10 +9,10 @@
 set -euo pipefail
 
 # Source env vars when run by launchd (no login shell)
-[ -f "$HOME/.zshenv" ] && source "$HOME/.zshenv" 2>/dev/null || true
+[ -z "${_PILOT_TEST_MODE:-}" ] && [ -f "$HOME/.zshenv" ] && source "$HOME/.zshenv" 2>/dev/null || true
 REAL_SCRIPT="$(readlink "$0" 2>/dev/null || echo "$0")"
 SCRIPT_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
-[ -f "$SCRIPT_DIR/../project.env" ] && source "$SCRIPT_DIR/../project.env"
+[ -z "${_PILOT_TEST_MODE:-}" ] && [ -f "$SCRIPT_DIR/../project.env" ] && source "$SCRIPT_DIR/../project.env"
 
 SLACK_WEBHOOK_DAILY_REVIEW="${SLACK_WEBHOOK_DAILY_REVIEW:-}"
 DRY_RUN="${1:-}"
@@ -25,11 +25,11 @@ strip_ansi() {
 
 TRACKER="$SCRIPT_DIR/../adapters/tracker.sh"
 
-# Fetch issues by state(s)
+# Fetch issues by project and state(s)
 fetch_issues() {
   local project="$1" states="$2"
   # shellcheck disable=SC2086
-  bash "$TRACKER" list $states
+  bash "$TRACKER" list --project "$project" $states
 }
 
 # Count issues matching a pattern
@@ -59,21 +59,36 @@ APPS_ACTIVE_COUNT=$(count_lines "$APPS_ACTIVE")
 AI_ACTIVE=$(fetch_issues "AI Competency" "started backlog unstarted")
 AI_ACTIVE_COUNT=$(count_lines "$AI_ACTIVE")
 
-# Format top items per project (just titles, max 5)
+# Format top items per project with clickable Linear links
 format_top() {
-  local issues="$1" max="${2:-5}"
-  echo "$issues" | grep 'MAS-' | head -"$max" | sed 's/^/  /' || echo "  (none)"
+  local issues="$1" max="${2:-5}" org="${LINEAR_ORG:-masterchung}"
+  local ids
+  ids=$(echo "$issues" | grep -oE "${LINEAR_TEAM}-[0-9]+" | head -"$max")
+  if [ -z "$ids" ]; then
+    echo "  (none)"
+    return
+  fi
+  # Use tracker view for each issue to get clean, untruncated titles
+  echo "$ids" | while read -r ISSUE_ID; do
+    TITLE=$(bash "$TRACKER" view "$ISSUE_ID" 2>/dev/null | head -1 | sed "s/^# *${ISSUE_ID}: *//" | sed 's/[[:space:]]*$//')
+    [ -z "$TITLE" ] && TITLE="(untitled)"
+    echo "  • <https://linear.app/${org}/issue/${ISSUE_ID}|${ISSUE_ID}>: ${TITLE}"
+  done
 }
 
-LIFT_TOP=$(format_top "$LIFT_ALL" 5)
+LIFT_ACTIVE_TOP=$(format_top "$LIFT_ACTIVE" 3)
+LIFT_BACKLOG_TOP=$(format_top "$LIFT_BACKLOG" 5)
 PREP_TOP=$(format_top "$PREP_ACTIVE$PREP_BACKLOG" 3)
 APPS_TOP=$(format_top "$APPS_ACTIVE" 3)
 
 # Build message
-MSG="*Linear Digest — ${DAY_NAME}, ${DATE}*
+MSG="*📋 Linear Digest — ${DAY_NAME}, ${DATE}*
 
 *Lift* — ${LIFT_ACTIVE_COUNT} in progress, ${LIFT_BACKLOG_COUNT} backlog
-${LIFT_TOP}
+${LIFT_ACTIVE_TOP:+_In Progress:_
+${LIFT_ACTIVE_TOP}
+}${LIFT_BACKLOG_TOP:+_Backlog:_
+${LIFT_BACKLOG_TOP}}
 
 *Technical Prep* — ${PREP_ACTIVE_COUNT} in progress, ${PREP_BACKLOG_COUNT} backlog
 ${PREP_TOP}
@@ -83,7 +98,7 @@ ${APPS_TOP}
 
 *AI Competency* — ${AI_ACTIVE_COUNT} open
 
-<https://linear.app/${LINEAR_ORG:-masterchung}|Open Linear>"
+<https://linear.app/${LINEAR_ORG:-masterchung}|Open Linear Board>"
 
 if [ "$DRY_RUN" = "--dry-run" ]; then
   echo "$MSG"

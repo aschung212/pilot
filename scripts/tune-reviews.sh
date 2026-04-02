@@ -10,10 +10,10 @@
 
 set -euo pipefail
 
-[ -f "$HOME/.zshenv" ] && source "$HOME/.zshenv" 2>/dev/null || true
+[ -z "${_PILOT_TEST_MODE:-}" ] && [ -f "$HOME/.zshenv" ] && source "$HOME/.zshenv" 2>/dev/null || true
 REAL_SCRIPT="$(readlink "$0" 2>/dev/null || echo "$0")"
 SCRIPT_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
-[ -f "$SCRIPT_DIR/../project.env" ] && source "$SCRIPT_DIR/../project.env"
+[ -z "${_PILOT_TEST_MODE:-}" ] && [ -f "$SCRIPT_DIR/../project.env" ] && source "$SCRIPT_DIR/../project.env"
 
 OUTPUT_DIR="${OUTPUT_DIR:-$HOME/Documents/Claude/outputs}"
 LEARNINGS="$OUTPUT_DIR/lift-review-learnings.md"
@@ -169,8 +169,8 @@ echo "$TUNER_OUTPUT"
 # Post to Slack
 NOTIFY="$SCRIPT_DIR/../adapters/notify.sh"
 if echo "$TUNER_OUTPUT" | grep -q "No new PRs to analyze"; then
-  bash "$NOTIFY" send automation "🔍 *Review Tuner* — no new merged PRs to analyze ✅" 2>/dev/null
+  bash "$NOTIFY" --as review-tuner send automation "🎛️ *Review Tuner* — no new merged PRs to analyze ✅" 2>/dev/null
 elif echo "$TUNER_OUTPUT" | grep -q "REVIEW_TUNER_RESULT"; then
   RESULT=$(echo "$TUNER_OUTPUT" | grep "REVIEW_TUNER_RESULT" | sed 's/REVIEW_TUNER_RESULT://')
-  bash "$NOTIFY" send automation "🔍 *Review Tuner* — analyzed PRs ($RESULT). Learnings updated." 2>/dev/null
+  bash "$NOTIFY" --as review-tuner send automation "🎛️ *Review Tuner* — analyzed PRs ($RESULT). Learnings updated." 2>/dev/null
 fi

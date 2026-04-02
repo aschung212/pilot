@@ -15,7 +15,7 @@ set -uo pipefail
 
 REAL_SCRIPT="$(readlink "$0" 2>/dev/null || echo "$0")"
 SCRIPT_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
-[ -f "$SCRIPT_DIR/../project.env" ] && source "$SCRIPT_DIR/../project.env"
+[ -z "${_PILOT_TEST_MODE:-}" ] && [ -f "$SCRIPT_DIR/../project.env" ] && source "$SCRIPT_DIR/../project.env"
 
 source "$SCRIPT_DIR/../lib/log.sh" 2>/dev/null || true
 LOG_COMPONENT="adapter:tracker"
@@ -27,8 +27,13 @@ shift || true
 
 case "$cmd" in
   list)
-    # Args: state1 [state2 ...]
-    local_args=(--project "$LINEAR_PROJECT" --all-assignees --sort priority --team "$LINEAR_TEAM" --no-pager)
+    # Args: [--project <name>] state1 [state2 ...]
+    # If --project is not passed, defaults to $LINEAR_PROJECT
+    list_project="$LINEAR_PROJECT"
+    if [ "${1:-}" = "--project" ]; then
+      list_project="$2"; shift 2
+    fi
+    local_args=(--project "$list_project" --all-assignees --sort priority --team "$LINEAR_TEAM" --no-pager)
     for state in "$@"; do
       local_args+=(--state "$state")
     done
