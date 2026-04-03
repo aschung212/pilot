@@ -12,6 +12,7 @@ setup() {
   mkdir -p "$OUTPUT_DIR" "$HOME" "$TEST_TMPDIR/bin"
 
   export PROJECT_NAME="TestProject"
+  export TECH_STACK="Test Stack"
   export REPO_PATH="$TEST_TMPDIR/repo"
   export LINEAR_TEAM="TEST"
   export LINEAR_PROJECT="TestProject"

@@ -54,6 +54,25 @@ if [ "${1:-}" = "--check" ]; then
     fi
   done
 
+  # Check optional tools
+  if command -v bats &>/dev/null; then
+    ok "bats installed"
+  else
+    warn "bats not found — test suite won't run"
+  fi
+
+  if command -v parallel &>/dev/null; then
+    ok "parallel installed"
+  else
+    warn "parallel not found — tests run slower"
+  fi
+
+  if command -v gtimeout &>/dev/null; then
+    ok "gtimeout installed"
+  else
+    warn "gtimeout not found — review timeouts use fallback"
+  fi
+
   # Check launchd
   LOADED=$(launchctl list 2>/dev/null | grep -c "pilot" || echo "0")
   if [ "$LOADED" -gt 0 ]; then
@@ -166,10 +185,6 @@ ask "Code generation model [opus]: "
 read -r AI_CODE_MODEL
 AI_CODE_MODEL="${AI_CODE_MODEL:-opus}"
 
-ask "Code review model [sonnet]: "
-read -r AI_REVIEW_MODEL
-AI_REVIEW_MODEL="${AI_REVIEW_MODEL:-sonnet}"
-
 if command -v gemini &>/dev/null; then
   ok "Gemini CLI found"
   ask "Research model [gemini-2.5-flash]: "
@@ -178,6 +193,52 @@ if command -v gemini &>/dev/null; then
 else
   warn "Gemini CLI not found (optional). Skipping research model."
   AI_RESEARCH_MODEL=""
+fi
+
+echo ""
+say "   Review Pipeline"
+echo ""
+echo "  The review pipeline uses 3 layers with different models:"
+echo "    L1 — mechanical gate (per-iteration, fast)"
+echo "    L2 — architecture review (per-PR, thorough)"
+echo "    L3 — self-check (per-PR, catches what L1+L2 missed)"
+echo ""
+ask "Use 3-layer cross-model review? (y/n) [y]: "
+read -r USE_3LAYER
+USE_3LAYER="${USE_3LAYER:-y}"
+
+if [ "$USE_3LAYER" = "y" ]; then
+  ask "L1 model (mechanical gate) [gemini-2.5-flash]: "
+  read -r AI_REVIEW_MODEL_L1
+  AI_REVIEW_MODEL_L1="${AI_REVIEW_MODEL_L1:-gemini-2.5-flash}"
+
+  ask "L2 model (architecture) [gemini-2.5-pro]: "
+  read -r AI_REVIEW_MODEL_L2
+  AI_REVIEW_MODEL_L2="${AI_REVIEW_MODEL_L2:-gemini-2.5-pro}"
+
+  ask "L3 model (self-check) [sonnet]: "
+  read -r AI_REVIEW_MODEL_L3
+  AI_REVIEW_MODEL_L3="${AI_REVIEW_MODEL_L3:-sonnet}"
+
+  AI_REVIEW_FALLBACK_L1="sonnet"
+  AI_REVIEW_FALLBACK_L2="gemini-2.5-flash"
+  AI_REVIEW_FALLBACK_L3="haiku"
+  AI_REVIEW_TIMEOUT_L1=90
+  AI_REVIEW_TIMEOUT_L2=120
+  AI_REVIEW_TIMEOUT_L3=90
+else
+  ask "Single review model [sonnet]: "
+  read -r SINGLE_REVIEW_MODEL
+  SINGLE_REVIEW_MODEL="${SINGLE_REVIEW_MODEL:-sonnet}"
+  AI_REVIEW_MODEL_L1="$SINGLE_REVIEW_MODEL"
+  AI_REVIEW_MODEL_L2="$SINGLE_REVIEW_MODEL"
+  AI_REVIEW_MODEL_L3="$SINGLE_REVIEW_MODEL"
+  AI_REVIEW_FALLBACK_L1="haiku"
+  AI_REVIEW_FALLBACK_L2="haiku"
+  AI_REVIEW_FALLBACK_L3="haiku"
+  AI_REVIEW_TIMEOUT_L1=90
+  AI_REVIEW_TIMEOUT_L2=90
+  AI_REVIEW_TIMEOUT_L3=90
 fi
 
 echo ""
@@ -289,8 +350,18 @@ LINEAR_ORG="$LINEAR_ORG"
 
 # ── AI Models ────────────────────────────────────────────────
 AI_CODE_MODEL="$AI_CODE_MODEL"
-AI_REVIEW_MODEL="$AI_REVIEW_MODEL"
 AI_RESEARCH_MODEL="$AI_RESEARCH_MODEL"
+
+# Review pipeline (3-layer cross-model)
+AI_REVIEW_MODEL_L1="$AI_REVIEW_MODEL_L1"
+AI_REVIEW_MODEL_L2="$AI_REVIEW_MODEL_L2"
+AI_REVIEW_MODEL_L3="$AI_REVIEW_MODEL_L3"
+AI_REVIEW_FALLBACK_L1="$AI_REVIEW_FALLBACK_L1"
+AI_REVIEW_FALLBACK_L2="$AI_REVIEW_FALLBACK_L2"
+AI_REVIEW_FALLBACK_L3="$AI_REVIEW_FALLBACK_L3"
+AI_REVIEW_TIMEOUT_L1=$AI_REVIEW_TIMEOUT_L1
+AI_REVIEW_TIMEOUT_L2=$AI_REVIEW_TIMEOUT_L2
+AI_REVIEW_TIMEOUT_L3=$AI_REVIEW_TIMEOUT_L3
 
 # ── Notifications ────────────────────────────────────────────
 # Webhooks and bot token should be set in ~/.zshenv
@@ -308,9 +379,40 @@ PILOT_DIR="$PILOT_DIR"
 SCRIPTS_DIR="$PILOT_DIR/scripts"
 ADAPTER_DIR="$PILOT_DIR/adapters"
 OUTPUT_DIR="\$HOME/Documents/Claude/outputs"
+PRODUCT_DECISIONS_FILE=""
+PRODUCT_FEATURES_FILE=""
 ENV_EOF
 
 ok "project.env written"
+
+# ── Git hooks ────────────────────────────────────────────────
+if [ -d "$REPO_PATH/.git" ]; then
+  git -C "$REPO_PATH" config core.hooksPath .githooks && ok "Git hooks configured"
+fi
+
+# ── Budget config ────────────────────────────────────────────
+if [ ! -f "$PILOT_DIR/config/budget.conf" ]; then
+  mkdir -p "$PILOT_DIR/config"
+  cat > "$PILOT_DIR/config/budget.conf" << BUDGET_EOF
+# Pilot — Budget Configuration
+# Controls nightly iteration limits and alerts.
+
+MAX_ITERATIONS_PER_NIGHT=8
+MAX_OUTPUT_TOKENS_PER_NIGHT=500000
+ITERATION_COOLDOWN=30
+ALERT_THRESHOLD_PCT=80
+DEFAULT_STOP_TIME=07:00
+BUDGET_EOF
+  ok "config/budget.conf created with defaults"
+else
+  ok "config/budget.conf already exists"
+fi
+
+# ── Discovery queue ──────────────────────────────────────────
+DISCOVERY_QUEUE="$HOME/Documents/Claude/outputs/${PROJECT_NAME,,}-discovery-queue.txt"
+mkdir -p "$(dirname "$DISCOVERY_QUEUE")"
+echo -e "$FOCUS_AREAS" | sed '/^$/d' > "$DISCOVERY_QUEUE"
+ok "Discovery queue written to $DISCOVERY_QUEUE"
 
 # ── Generate launchd plists ───────────────────────────────────
 say "Generating launchd plists..."
@@ -390,6 +492,9 @@ ok "Created: $PLIST_REVIEWS"
 PLIST_HEALTH=$(generate_plist "health" "health-report.sh" "0" 8 0)
 ok "Created: $PLIST_HEALTH"
 
+PLIST_DIGEST=$(generate_plist "digest" "digest.sh" "$BUILDER_DAYS" 6 15)
+ok "Created: $PLIST_DIGEST"
+
 echo ""
 
 # ── Load plists ───────────────────────────────────────────────
@@ -398,7 +503,7 @@ read -r LOAD_PLISTS
 LOAD_PLISTS="${LOAD_PLISTS:-y}"
 
 if [ "$LOAD_PLISTS" = "y" ]; then
-  for plist in "$PLIST_DISCOVER" "$PLIST_TRIAGE" "$PLIST_BUILDER" "$PLIST_TUNER" "$PLIST_REVIEWS" "$PLIST_HEALTH"; do
+  for plist in "$PLIST_DISCOVER" "$PLIST_TRIAGE" "$PLIST_BUILDER" "$PLIST_TUNER" "$PLIST_REVIEWS" "$PLIST_HEALTH" "$PLIST_DIGEST"; do
     launchctl load "$plist" 2>/dev/null && ok "Loaded: $(basename "$plist")" || warn "Failed to load: $(basename "$plist")"
   done
 fi

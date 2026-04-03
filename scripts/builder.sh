@@ -30,7 +30,7 @@ slack_send() {
 }
 # thread_send is defined after THREAD_TS is set (below)
 
-REPO="${REPO_PATH:-/Users/aaron/development/lift}"
+REPO="${REPO_PATH:?REPO_PATH not set — run init.sh}"
 DATE=$(date +%Y-%m-%d)
 OUTPUT_DIR="${OUTPUT_DIR:-$HOME/Documents/Claude/outputs}"
 STOP_AT="${1:-07:00}"
@@ -44,7 +44,7 @@ MAX_FIX_ATTEMPTS=1
 mkdir -p "$OUTPUT_DIR"
 
 # ── Usage tracking ───────────────────────────────────────────────────────────
-BUDGET_CONF="$HOME/Documents/Scripts/lift-budget.conf"
+BUDGET_CONF="$SCRIPT_DIR/../config/budget.conf"
 [ -f "$BUDGET_CONF" ] && source "$BUDGET_CONF"
 MAX_ITERATIONS_PER_NIGHT="${MAX_ITERATIONS_PER_NIGHT:-12}"
 MAX_OUTPUT_TOKENS_PER_NIGHT="${MAX_OUTPUT_TOKENS_PER_NIGHT:-500000}"
@@ -209,7 +209,7 @@ $detail
   COMMITS_BEFORE=$(git rev-list --count HEAD)
   CLAUDE_JSON="$OUTPUT_DIR/lift-enhance-$DATE-run${RUN}-output.json"
   if claude --dangerously-skip-permissions --output-format json -p "$(cat <<PROMPT
-You are iteration $RUN of the overnight self-improving enhancer for the Lift workout tracker at $REPO. This is Aaron Chung's portfolio project — he's an ex-AWS SDE2 targeting SWE roles at companies like Notion, Airtable, and Linear.
+You are iteration $RUN of the overnight self-improving enhancer for $PROJECT_NAME at $REPO. This is Aaron Chung's portfolio project — he's an ex-AWS SDE2 targeting SWE roles at companies like Notion, Airtable, and Linear.
 
 You are running in a loop. Previous iterations tonight and from recent days have already made improvements. Your job is to find the NEXT most impactful thing to do that hasn't been done yet.
 
@@ -249,7 +249,7 @@ $TEST_COUNT
 
 $PREVIOUS_SUMMARIES
 
-## Linear backlog (open issues for the Lift project)
+## Linear backlog (open issues for $PROJECT_NAME)
 
 $LINEAR_ISSUES
 
@@ -451,7 +451,7 @@ $CLAUDE_RESULT"
           FIX_JSON="$OUTPUT_DIR/lift-fix-$DATE-run${RUN}.json"
           COMMITS_PRE_FIX=$(git rev-list --count HEAD)
           if claude --dangerously-skip-permissions --output-format json -p "$(cat <<FIX_PROMPT
-You are fixing review findings in the Lift workout tracker at $REPO on branch $ITER_BRANCH.
+You are fixing review findings in $PROJECT_NAME at $REPO on branch $ITER_BRANCH.
 Do NOT create branches, PRs, or push. Just fix and commit.
 
 ## Review Findings (MUST FIX)
@@ -871,7 +871,7 @@ done
 # Build morning digest
 DIGEST="$OUTPUT_DIR/lift-digest-$DATE.md"
 cat > "$DIGEST" <<DIGEST_EOF
-# Lift Overnight Digest — $DATE
+# $PROJECT_NAME Overnight Digest — $DATE
 
 ## At a Glance
 - **Iterations:** $RUN
@@ -971,9 +971,9 @@ ${ALL_DONE_LINKS}
 <https://linear.app/${LINEAR_ORG}|Linear Board>"
 
 # Draft email summary
-claude --dangerously-skip-permissions -p "Create a Gmail draft (do NOT send) to aschung212@gmail.com with subject 'Lift Overnight Digest — $DATE' and this body as text/plain. Use the gmail_create_draft tool. Do not add any extra commentary:
+claude --dangerously-skip-permissions -p "Create a Gmail draft (do NOT send) to aschung212@gmail.com with subject '$PROJECT_NAME Overnight Digest — $DATE' and this body as text/plain. Use the gmail_create_draft tool. Do not add any extra commentary:
 
-Lift Overnight Digest — $DATE
+$PROJECT_NAME Overnight Digest — $DATE
 
 Iterations: $RUN
 PRs created: $NIGHTLY_PR_COUNT

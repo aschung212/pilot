@@ -19,6 +19,8 @@ setup() {
 
   # Fake project.env values
   export PROJECT_NAME="TestProject"
+  export PROJECT_DESC="A test application"
+  export TECH_STACK="Test Framework + TypeScript"
   export REPO_PATH="$TEST_TMPDIR/repo"
   export GITHUB_REPO="test/repo"
   export DEFAULT_BRANCH="main"

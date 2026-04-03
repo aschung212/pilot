@@ -2,20 +2,22 @@
 
 An autonomous multi-agent pipeline that discovers, triages, implements, and reviews improvements to your software — running overnight while you sleep.
 
-> **Status**: Active development. Currently powering [Lift](https://github.com/aschung212/Lift), a workout tracker PWA.
+> **Status**: Active development. Project-agnostic pipeline — configure for any repo via `init.sh`.
 
 ## What It Does
 
 Every night, Pilot:
 
 1. **Discovers** improvement opportunities by researching competitors, UI trends, accessibility standards, and more (Gemini + Claude)
-2. **Triages** each discovery — approves, enhances, skips, or flags for your review (Gemini, Claude fallback)
+2. **Triages** each discovery — approves, enhances, rescopes, skips, or flags for your review (Gemini, Claude fallback)
 3. **Implements** the highest-priority approved issues — writes code, runs tests, commits, creates PRs (Claude Opus)
-4. **Reviews** its own PRs with two independent AI reviewers (Claude Sonnet + Gemini Flash)
+4. **Reviews** its own PRs with a 3-layer cross-model review system (Gemini Flash mechanical gate, Gemini Pro architecture review, Claude Sonnet self-check with failover chains)
 5. **Cleans up** — archives completed issues, deduplicates the backlog
 6. **Self-tunes** — adjusts iteration budgets, token limits, and review quality based on outcomes
 
 You wake up to a PR with passing tests, a Slack thread summarizing what was done, and a clean issue board.
+
+The pipeline includes a **test suite** (113 bats tests, two-tier execution, pre-commit hook) to validate adapter contracts and pipeline logic before any code ships.
 
 ## How It Works
 
@@ -97,7 +99,7 @@ Components are swappable via thin adapter scripts:
 | Notifications | Slack | Discord, email |
 | Code Generation | Claude Opus | — |
 | Research | Gemini Flash | ChatGPT, Perplexity |
-| Code Review | Sonnet + Gemini | — |
+| Code Review | 3-layer (Flash + Pro + Sonnet) | — |
 
 To swap a tool, rewrite one adapter file (~20 lines). No pipeline scripts change.
 
@@ -153,12 +155,13 @@ pilot/
     digest.sh                # Morning digest
   adapters/
     tracker.sh               # Issue tracker (Linear)
-    notify.sh                # Notifications (Slack)
+    notify.sh                # Notifications (Slack, --as bot identity)
     ai-code.sh               # Code generation (Claude)
     ai-research.sh           # Research (Gemini)
-    ai-review.sh             # Code review (Sonnet + Gemini)
+    ai-review.sh             # Code review (3-layer: Flash + Pro + Sonnet)
   lib/
     log.sh                   # Shared logging library
+    builder-utils.sh         # Builder helper functions
   config/
     budget.conf              # Budget config (auto-tuned)
   docs/

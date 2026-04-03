@@ -19,7 +19,7 @@ NOTIFY="$SCRIPT_DIR/../adapters/notify.sh"
 source "$SCRIPT_DIR/../lib/log.sh"
 LOG_COMPONENT="discover"
 
-REPO="${REPO_PATH:-/Users/aaron/development/lift}"
+REPO="${REPO_PATH:?REPO_PATH not set — run init.sh}"
 DATE=$(date +%Y-%m-%d)
 DAY_OF_WEEK=$(date +%u)  # 1=Monday, 7=Sunday
 OUTPUT_DIR="${OUTPUT_DIR:-$HOME/Documents/Claude/outputs}"
@@ -119,31 +119,31 @@ PRODUCT_DECISIONS=$(cat "$DECISIONS_FILE" 2>/dev/null || echo "No product decisi
 # Focus-specific search instructions
 case "$FOCUS" in
   competitors)
-    SEARCH_PROMPT="Search the web for the top workout tracker apps in 2026 (Strong, Hevy, JEFIT, FitNotes, StrongLifts, any new ones). Look at recent app store reviews, Reddit discussions (r/fitness, r/weightroom, r/bodybuilding), and Product Hunt launches. Find features users love that Lift is missing, and common complaints about competitors that Lift could capitalize on."
+    SEARCH_PROMPT="Search the web for the top workout tracker apps in 2026 (Strong, Hevy, JEFIT, FitNotes, StrongLifts, any new ones). Look at recent app store reviews, Reddit discussions (r/fitness, r/weightroom, r/bodybuilding), and Product Hunt launches. Find features users love that $PROJECT_NAME is missing, and common complaints about competitors that $PROJECT_NAME could capitalize on."
     ;;
   performance)
     SEARCH_PROMPT="Search for Vue 3 + Vite performance best practices in 2026. Look for bundle optimization techniques, lazy loading patterns, service worker caching strategies, and PWA performance benchmarks. Also search for Lighthouse scoring tips for PWAs. Read the current codebase and identify specific performance opportunities."
     ;;
   ui-trends)
-    SEARCH_PROMPT="Search for mobile app UI/UX trends in 2026, particularly for fitness and health apps. Look at Apple HIG updates, Material Design 3 patterns, and trending design systems. Search Dribbble, Mobbin, and UI galleries for workout tracker designs. Find specific UI improvements that would make Lift feel more modern and polished."
+    SEARCH_PROMPT="Search for mobile app UI/UX trends in 2026, particularly for fitness and health apps. Look at Apple HIG updates, Material Design 3 patterns, and trending design systems. Search Dribbble, Mobbin, and UI galleries for $PROJECT_DESC designs. Find specific UI improvements that would make $PROJECT_NAME feel more modern and polished."
     ;;
   accessibility)
     SEARCH_PROMPT="Search for WCAG 2.2 requirements and mobile accessibility best practices in 2026. Look for common accessibility failures in PWAs and Vue apps. Read the current codebase and audit against WCAG AA standards. Focus on screen reader compatibility, keyboard navigation, color contrast, and motion sensitivity."
     ;;
   pwa-patterns)
-    SEARCH_PROMPT="Search for progressive web app best practices in 2026. Look for install prompt patterns, offline-first UX, background sync, push notifications for PWAs, and Capacitor integration patterns. Find what the best PWAs (Starbucks, Twitter Lite, Pinterest) do that Lift could adopt."
+    SEARCH_PROMPT="Search for progressive web app best practices in 2026. Look for install prompt patterns, offline-first UX, background sync, push notifications for PWAs, and Capacitor integration patterns. Find what the best PWAs (Starbucks, Twitter Lite, Pinterest) do that $PROJECT_NAME could adopt."
     ;;
   security-deps)
     SEARCH_PROMPT="Run npm audit in the repo and search for known vulnerabilities in the current dependencies. Search for Supabase security best practices, CSP header configuration for PWAs, and common Vue.js security pitfalls. Check if any dependencies are deprecated or have better alternatives."
     ;;
   monetization)
-    SEARCH_PROMPT="Search for how free fitness apps monetize without paywalling core features. Look at freemium models, affiliate partnerships, premium themes, data insights subscriptions, and coaching integrations. Find monetization strategies that align with Lift's anti-bloat philosophy — revenue without compromising the user experience."
+    SEARCH_PROMPT="Search for how free fitness apps monetize without paywalling core features. Look at freemium models, affiliate partnerships, premium themes, data insights subscriptions, and coaching integrations. Find monetization strategies that align with $PROJECT_NAME's philosophy — revenue without compromising the user experience."
     ;;
   testing)
     SEARCH_PROMPT="Search for Vue 3 testing best practices in 2026 — Vitest, Vue Test Utils, Playwright, component testing. Look for testing patterns for composables, Pinia stores, and PWA service workers. Read the current test suite and identify gaps in coverage for critical user flows (logging sets, viewing history, syncing data). Check for flaky test patterns and testing anti-patterns."
     ;;
   seo-aso)
-    SEARCH_PROMPT="Search for PWA SEO best practices in 2026 — meta tags, structured data, Open Graph optimization, app store optimization for PWAs. Look at how top fitness PWAs rank in Google and what meta/schema markup they use. Search for web.dev articles on PWA discoverability. Check how Lift appears in Google search results and identify improvements to meta descriptions, canonical URLs, and social previews."
+    SEARCH_PROMPT="Search for PWA SEO best practices in 2026 — meta tags, structured data, Open Graph optimization, app store optimization for PWAs. Look at how top fitness PWAs rank in Google and what meta/schema markup they use. Search for web.dev articles on PWA discoverability. Check how $PROJECT_NAME appears in Google search results and identify improvements to meta descriptions, canonical URLs, and social previews."
     ;;
   data-viz)
     SEARCH_PROMPT="Search for fitness data visualization trends in 2026 — chart types, progress tracking UX, personal records displays, training volume visualization. Look at how apps like Strong, Hevy, and Strava present workout data. Search for D3.js and lightweight SVG charting patterns for mobile. Read the current codebase charts and identify improvements to make data more insightful and visually compelling."
@@ -158,7 +158,7 @@ esac
 
 PROMPT_FILE=$(mktemp)
 cat > "$PROMPT_FILE" <<PROMPT
-You are the Lift Discovery Agent. Your job is to find improvement opportunities for the Lift workout tracker app. You do NOT write code or make changes — you only research and create Linear issues.
+You are the $PROJECT_NAME Discovery Agent. Your job is to find improvement opportunities for the $PROJECT_NAME app. You do NOT write code or make changes — you only research and create Linear issues.
 
 ## Today's focus: $FOCUS (last searched: $LAST_RUN_DATE)
 
@@ -176,7 +176,7 @@ $CANCELED_DETAILS
 
 $COMPLETED_ISSUES
 
-## Current Lift features
+## Current $PROJECT_NAME features
 
 $CURRENT_FEATURES
 
@@ -205,7 +205,7 @@ $PREVIOUS_SEARCHES
 - Include the source URL or reasoning for each discovery
 - Aim for 3-8 high-quality discoveries per run
 - Priority guide: 1=urgent bug/security, 2=high-impact feature gap, 3=nice improvement, 4=low-priority polish
-- When a competitor feature seems useful, check if an existing Lift feature already solves the same problem differently before recommending it
+- When a competitor feature seems useful, check if an existing $PROJECT_NAME feature already solves the same problem differently before recommending it
 
 ## Output format
 

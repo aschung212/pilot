@@ -159,7 +159,7 @@ case "$cmd" in
     PROMPT_FILE=$(mktemp)
 
     cat > "$PROMPT_FILE" <<PROMPT
-You are a code reviewer for a Vue 3 + TypeScript PWA (Lift workout tracker). Focus ONLY on mechanical issues — do NOT comment on architecture, naming, or style.
+You are a code reviewer for a $TECH_STACK app ($PROJECT_NAME). Focus ONLY on mechanical issues — do NOT comment on architecture, naming, or style.
 
 ## Diff
 $DIFF_CONTENT
@@ -229,7 +229,7 @@ PROMPT
     PROMPT_FILE=$(mktemp)
 
     cat > "$PROMPT_FILE" <<PROMPT
-You are a senior engineer reviewing a pull request for a Vue 3 + TypeScript PWA (Lift workout tracker). Focus on architecture, not mechanical issues (those were already checked).
+You are a senior engineer reviewing a pull request for a $TECH_STACK app ($PROJECT_NAME). Focus on architecture, not mechanical issues (those were already checked).
 
 ## Full Diff
 $DIFF_CONTENT
@@ -298,7 +298,7 @@ PROMPT
     PROMPT_FILE=$(mktemp)
 
     cat > "$PROMPT_FILE" <<PROMPT
-You are Claude Sonnet reviewing code written by Claude Opus for the Lift workout tracker (Vue 3 + TypeScript PWA). You have a unique role: you understand Opus's coding patterns and tendencies.
+You are Claude Sonnet reviewing code written by Claude Opus for $PROJECT_NAME ($TECH_STACK). You have a unique role: you understand Opus's coding patterns and tendencies.
 
 ## Diff
 $DIFF_CONTENT

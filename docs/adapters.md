@@ -10,7 +10,7 @@ Adapters are thin wrapper scripts that provide a stable interface between the pi
 | Notifications | Slack (webhooks + Bot API) | `adapters/notify.sh` |
 | Code Generation | Claude CLI | `adapters/ai-code.sh` |
 | Research | Gemini CLI | `adapters/ai-research.sh` |
-| Code Review | Claude Sonnet + Gemini Flash | `adapters/ai-review.sh` |
+| Code Review | 3-layer (Flash + Pro + Sonnet) | `adapters/ai-review.sh` |
 
 ## Interface Contracts
 
@@ -41,6 +41,8 @@ notify.sh thread-start <channel> <message>   # start thread, print ts
 notify.sh thread-reply <channel> <ts> <msg>  # reply in thread
 ```
 
+All commands accept `--as <identity>` to post as a named bot persona (changes display name and icon in Slack). Supported identities: `builder`, `reviewer`, `triage`, `discovery`, `health`, `tuner`.
+
 Channels: `automation`, `review`, `changelog` (mapped to IDs in project.env).
 
 ### ai-code.sh
@@ -63,13 +65,18 @@ ai-research.sh prompt <text> [opts]
 ### ai-review.sh
 
 ```bash
-ai-review.sh layer1 <prompt> [opts]          # adversarial review (Claude)
+ai-review.sh layer1 <prompt> [opts]          # mechanical gate (Gemini Flash, failover: Pro)
   --json-output <file>
   --model <model>
-ai-review.sh layer2 <prompt> [opts]          # architecture review (Gemini)
+ai-review.sh layer2 <prompt> [opts]          # architecture review (Gemini Pro, failover: Sonnet)
   --output <file>
   --model <model>
+ai-review.sh layer3 <prompt> [opts]          # self-check (Claude Sonnet, failover: Pro)
+  --json-output <file>
+  --model <model>
 ```
+
+Output includes a `REVIEW_CROSSCHECK` section that flags disagreements between layers.
 
 ## Writing a Custom Adapter
 

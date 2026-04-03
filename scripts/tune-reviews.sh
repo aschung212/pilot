@@ -18,7 +18,7 @@ SCRIPT_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
 OUTPUT_DIR="${OUTPUT_DIR:-$HOME/Documents/Claude/outputs}"
 LEARNINGS="$OUTPUT_DIR/lift-review-learnings.md"
 REVIEW_HISTORY="$OUTPUT_DIR/lift-review-history.json"
-REPO="${REPO_PATH:-/Users/aaron/development/lift}"
+REPO="${REPO_PATH:?REPO_PATH not set — run init.sh}"
 
 # Initialize history if needed
 if [ ! -f "$REVIEW_HISTORY" ]; then

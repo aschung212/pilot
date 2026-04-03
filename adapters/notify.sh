@@ -43,12 +43,12 @@ get_channel_id() {
 # Returns "username|icon_emoji" or empty if no identity set
 get_identity() {
   case "${1:-}" in
-    builder)       echo "Lift Builder|:robot_face:" ;;
-    discovery)     echo "Lift Discovery|:globe_with_meridians:" ;;
-    triage)        echo "Lift Triage|:vertical_traffic_light:" ;;
-    review-tuner)  echo "Lift Review Tuner|:control_knobs:" ;;
-    budget-tuner)  echo "Lift Budget Tuner|:control_knobs:" ;;
-    health)        echo "Lift Health|:hospital:" ;;
+    builder)       echo "${PROJECT_NAME:-Pilot} Builder|:robot_face:" ;;
+    discovery)     echo "${PROJECT_NAME:-Pilot} Discovery|:globe_with_meridians:" ;;
+    triage)        echo "${PROJECT_NAME:-Pilot} Triage|:vertical_traffic_light:" ;;
+    review-tuner)  echo "${PROJECT_NAME:-Pilot} Review Tuner|:control_knobs:" ;;
+    budget-tuner)  echo "${PROJECT_NAME:-Pilot} Budget Tuner|:control_knobs:" ;;
+    health)        echo "${PROJECT_NAME:-Pilot} Health|:hospital:" ;;
     *)             echo "" ;;
   esac
 }

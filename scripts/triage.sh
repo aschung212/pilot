@@ -27,7 +27,7 @@ NOTIFY="$SCRIPT_DIR/../adapters/notify.sh"
 source "$SCRIPT_DIR/../lib/log.sh"
 LOG_COMPONENT="triage"
 
-REPO="${REPO_PATH:-/Users/aaron/development/lift}"
+REPO="${REPO_PATH:?REPO_PATH not set — run init.sh}"
 DATE=$(date +%Y-%m-%d)
 OUTPUT_DIR="${OUTPUT_DIR:-$HOME/Documents/Claude/outputs}"
 TRIAGE_LOG="$OUTPUT_DIR/lift-triage-$DATE.md"
@@ -106,7 +106,9 @@ for issue_id in $UNTRIAGED_IDS; do
   TRIAGE_LEARNINGS=$(cat "$OUTPUT_DIR/lift-triage-learnings.md" 2>/dev/null | head -40 | tr '\n' ' ' || echo "No learnings yet.")
 
   # Build a concise triage prompt — keep under shell arg limits
-  TRIAGE_PROMPT="Triage this issue for a Vue 3 + TypeScript workout tracker PWA. Product direction: performance/polish over new features, accessibility/WCAG, PWA best practices, iOS-native feel, data visualization. Rejected: workout templates/saved routines.
+  TRIAGE_PROMPT="Triage this issue for $PROJECT_NAME ($TECH_STACK).
+
+$PRODUCT_DECISIONS
 
 CRITICAL RULES FROM PAST CORRECTIONS: $TRIAGE_LEARNINGS
 
