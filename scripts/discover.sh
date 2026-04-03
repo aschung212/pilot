@@ -94,7 +94,8 @@ slack_send() {
 
 # Get current feature list and backlog for context
 cd "$REPO"
-FEATURES_FILE="${PRODUCT_FEATURES_FILE:-$HOME/Documents/Obsidian Vault/20_Learning/Vibe Coding Projects/Lift - Workout Tracker PWA.md}"
+FEATURES_FILE="${PRODUCT_FEATURES_FILE:-$HOME/Documents/Obsidian Vault/20_Learning/Vibe Coding Projects/Lift/Lift - Workout Tracker PWA.md}"
+[ ! -f "$FEATURES_FILE" ] && echo "  ⚠️ Product features file not found: $FEATURES_FILE" >&2
 CURRENT_FEATURES=$(grep -A50 '## Feature Summary' "$FEATURES_FILE" 2>/dev/null | head -40 || echo "Could not read feature list")
 EXISTING_BACKLOG=$(bash "$TRACKER" list backlog unstarted started || echo "Could not fetch backlog")
 COMPLETED_ISSUES=$(bash "$TRACKER" list completed || echo "None")
@@ -113,7 +114,8 @@ $detail
 done
 
 # Product decisions file — Aaron maintains this in Obsidian
-DECISIONS_FILE="${PRODUCT_DECISIONS_FILE:-$HOME/Documents/Obsidian Vault/20_Learning/Vibe Coding Projects/Lift - Product Decisions.md}"
+DECISIONS_FILE="${PRODUCT_DECISIONS_FILE:-$HOME/Documents/Obsidian Vault/20_Learning/Vibe Coding Projects/Lift/Lift - Product Decisions.md}"
+[ ! -f "$DECISIONS_FILE" ] && echo "  ⚠️ Product decisions file not found: $DECISIONS_FILE" >&2
 PRODUCT_DECISIONS=$(cat "$DECISIONS_FILE" 2>/dev/null || echo "No product decisions file found")
 
 # Focus-specific search instructions

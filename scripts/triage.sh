@@ -43,6 +43,7 @@ THREAD_TS=$(echo "$THREAD_TS" | tr -d ' \n')
 
 # Load product decisions for context
 DECISIONS_FILE="${PRODUCT_DECISIONS_FILE:-}"
+[ -n "$DECISIONS_FILE" ] && [ ! -f "$DECISIONS_FILE" ] && echo "  ⚠️ Product decisions file not found: $DECISIONS_FILE" >&2
 PRODUCT_DECISIONS=$(cat "$DECISIONS_FILE" 2>/dev/null || echo "No product decisions file found")
 
 # Get all backlog/unstarted issues
