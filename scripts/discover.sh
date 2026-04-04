@@ -1,6 +1,6 @@
 #!/bin/bash
 # Lift Discovery Agent — finds improvement opportunities without touching code
-# Creates Linear issues for anything it finds. Safe to run anytime.
+# Creates issues for anything it finds. Safe to run anytime.
 #
 # Usage:
 #   ./lift-discover.sh              # auto-picks today's focus area
@@ -22,7 +22,7 @@ LOG_COMPONENT="discover"
 REPO="${REPO_PATH:?REPO_PATH not set — run init.sh}"
 DATE=$(date +%Y-%m-%d)
 DAY_OF_WEEK=$(date +%u)  # 1=Monday, 7=Sunday
-OUTPUT_DIR="${OUTPUT_DIR:-$HOME/Documents/Claude/outputs}"
+OUTPUT_DIR="${OUTPUT_DIR:-$PILOT_DIR/data}"
 SEARCH_LOG="$OUTPUT_DIR/lift-discovery-log.md"
 RUN_LOG="$OUTPUT_DIR/lift-discover-$DATE.md"
 
@@ -48,11 +48,13 @@ ui-trends
 testing
 accessibility
 seo-aso
+marketing
 competitors
 data-viz
 pwa-patterns
 ui-trends
 onboarding
+growth
 performance
 security-deps
 competitors
@@ -103,7 +105,7 @@ PREVIOUS_SEARCHES=$(tail -100 "$SEARCH_LOG" 2>/dev/null || echo "No previous sea
 LAST_RUN_DATE=$(grep "\[$FOCUS\]" "$SEARCH_LOG" 2>/dev/null | tail -1 | cut -d' ' -f1 || echo "never")
 
 # Fetch canceled issues with full details — these represent rejected product directions
-CANCELED_IDS=$({ bash "$TRACKER" list canceled | grep -oE "${LINEAR_TEAM}-[0-9]+"; } || true)
+CANCELED_IDS=$({ bash "$TRACKER" list canceled | grep -oE "${ISSUE_PREFIX}-[0-9]+"; } || true)
 CANCELED_DETAILS=""
 for cid in $CANCELED_IDS; do
   detail=$(bash "$TRACKER" view "$cid" || true)
@@ -156,11 +158,17 @@ case "$FOCUS" in
   dx-cicd)
     SEARCH_PROMPT="Search for Vue 3 + Vite CI/CD best practices in 2026 — GitHub Actions optimization, build caching, preview deployments, automated dependency updates (Renovate/Dependabot), release automation. Look at how open-source Vue projects structure their CI pipelines. Read the current GitHub Actions config and identify improvements to build speed, reliability, and developer experience."
     ;;
+  marketing)
+    SEARCH_PROMPT="Search for how indie developers and solo founders market fitness apps in 2026. Look at successful launch strategies on Product Hunt, Reddit (r/fitness, r/webdev, r/SideProject), Hacker News, and Twitter/X. Find content marketing playbooks — what blog posts, videos, or social content drives downloads for workout apps. Search for influencer marketing patterns in the fitness space (micro-influencers, gym TikTok, fitness YouTubers). Look at how apps like Strong, Hevy, and Caliber built their initial user base."
+    ;;
+  growth)
+    SEARCH_PROMPT="Search for user acquisition and retention strategies for free fitness apps in 2026. Look at referral mechanics (share-a-workout, invite friends), viral loop patterns, and community-driven growth. Search for App Store optimization techniques specific to health/fitness category. Find retention research — what keeps users coming back to workout trackers (streaks, social features, progress photos, achievements). Look at how top fitness apps reduce churn in the first 30 days."
+    ;;
 esac
 
 PROMPT_FILE=$(mktemp)
 cat > "$PROMPT_FILE" <<PROMPT
-You are the $PROJECT_NAME Discovery Agent. Your job is to find improvement opportunities for the $PROJECT_NAME app. You do NOT write code or make changes — you only research and create Linear issues.
+You are the $PROJECT_NAME Discovery Agent. Your job is to find improvement opportunities for the $PROJECT_NAME app. You do NOT write code or make changes — you only research and create issues.
 
 ## Today's focus: $FOCUS (last searched: $LAST_RUN_DATE)
 
@@ -196,7 +204,7 @@ $PREVIOUS_SEARCHES
 2. Search the web for relevant information based on today's focus
 3. Read relevant parts of the codebase at $REPO if needed
 4. Cross-reference findings against canceled issues, completed issues, open backlog, and existing features
-5. Output discoveries as LINEAR_DISCOVER lines that ALIGN with the approved product direction
+5. Output discoveries as ISSUE_DISCOVER lines that ALIGN with the approved product direction
 
 ## Rules
 
@@ -216,11 +224,11 @@ What you searched for and key findings (3-5 sentences)
 
 ## Discoveries
 For each finding, output:
-LINEAR_DISCOVER:priority:title|description with source URL or reasoning
+ISSUE_DISCOVER:priority:title|description with source URL or reasoning
 
 Example:
-LINEAR_DISCOVER:2:Add haptic feedback on set logging|Competitors Strong and Hevy both use haptic feedback when a set is logged. iOS supports this via navigator.vibrate() or Capacitor Haptics plugin. Source: https://reddit.com/r/fitness/...
-LINEAR_DISCOVER:3:Add workout streak counter to home screen|Duolingo-style streak tracking increases retention 23% per Nir Eyal research. Show current streak on the main workout tab.
+ISSUE_DISCOVER:2:Add haptic feedback on set logging|Competitors Strong and Hevy both use haptic feedback when a set is logged. iOS supports this via navigator.vibrate() or Capacitor Haptics plugin. Source: https://reddit.com/r/fitness/...
+ISSUE_DISCOVER:3:Add workout streak counter to home screen|Duolingo-style streak tracking increases retention 23% per Nir Eyal research. Show current streak on the main workout tab.
 
 ## Search Log
 List the specific queries and URLs you searched (for the search log):
@@ -327,7 +335,7 @@ fi
 DISCOVER_END=$(date +%s)
 DISCOVER_DURATION=$((DISCOVER_END - DISCOVER_START))
 
-# Map focus area to Linear label
+# Map focus area to issue label
 focus_to_label() {
   case "$1" in
     performance)   echo "Performance" ;;
@@ -342,22 +350,24 @@ focus_to_label() {
     dx-cicd)       echo "Infrastructure" ;;
     seo-aso)       echo "Growth" ;;
     monetization)  echo "Growth" ;;
+    marketing)     echo "Marketing" ;;
+    growth)        echo "Growth" ;;
     *)             echo "" ;;
   esac
 }
 FOCUS_LABEL=$(focus_to_label "$FOCUS")
 
-# Create Linear issues for discoveries — skip if Claude already created them inline
+# Create issues for discoveries — skip if Claude already created them inline
 DISCOVER_COUNT=0
 DISCOVER_PRIORITIES=""
-CLAUDE_CREATED=$(grep -c "linear.app/$LINEAR_ORG/issue/${LINEAR_TEAM}-" "$RUN_LOG" 2>/dev/null | tr -d ' \n' || true)
+CLAUDE_CREATED=$(grep -c "${ISSUE_PREFIX}-[0-9]" "$RUN_LOG" 2>/dev/null | tr -d ' \n' || true)
 CLAUDE_CREATED=${CLAUDE_CREATED:-0}
 if [ "$CLAUDE_CREATED" -gt 0 ] 2>/dev/null; then
   echo "  ℹ️  Claude already created $CLAUDE_CREATED issues inline — skipping duplicate creation." | tee -a "$RUN_LOG"
 else
-  { grep -oE 'LINEAR_DISCOVER:[1-4]:.*' "$RUN_LOG" 2>/dev/null || true; } | sort -u | while IFS='|' read -r marker desc; do
-    priority=$(echo "$marker" | sed 's/LINEAR_DISCOVER:\([1-4]\):.*/\1/')
-    title=$(echo "$marker" | sed 's/LINEAR_DISCOVER:[1-4]://')
+  { grep -oE 'ISSUE_DISCOVER:[1-4]:.*' "$RUN_LOG" 2>/dev/null || true; } | sort -u | while IFS='|' read -r marker desc; do
+    priority=$(echo "$marker" | sed 's/ISSUE_DISCOVER:\([1-4]\):.*/\1/')
+    title=$(echo "$marker" | sed 's/ISSUE_DISCOVER:[1-4]://')
     desc=${desc:-No description}
     LABEL_ARGS=""
     [ -n "$FOCUS_LABEL" ] && LABEL_ARGS="--label $FOCUS_LABEL"
@@ -365,8 +375,8 @@ else
     bash "$TRACKER" create "$title" "$priority" --description "Source: Discovery agent ($FOCUS focus, $DATE). $desc" $LABEL_ARGS 2>&1 | tee -a "$RUN_LOG"
   done
 fi
-DISCOVER_COUNT=$({ grep -oE 'LINEAR_DISCOVER:[1-4]:' "$RUN_LOG" 2>/dev/null || true; } | wc -l | tr -d ' ')
-DISCOVER_PRIORITIES=$({ grep -oE 'LINEAR_DISCOVER:[1-4]:' "$RUN_LOG" 2>/dev/null || true; } | grep -oE '[1-4]' | sort | tr '\n' '/' | sed 's/$//')
+DISCOVER_COUNT=$({ grep -oE 'ISSUE_DISCOVER:[1-4]:' "$RUN_LOG" 2>/dev/null || true; } | wc -l | tr -d ' ')
+DISCOVER_PRIORITIES=$({ grep -oE 'ISSUE_DISCOVER:[1-4]:' "$RUN_LOG" 2>/dev/null || true; } | grep -oE '[1-4]' | sort | tr '\n' '/' | sed 's/$//')
 echo "$DATE,$FOCUS,$DISCOVER_COUNT,$DISCOVER_PRIORITIES,$DISCOVER_DURATION" >> "$DISCOVERY_METRICS"
 
 # Append searches to the search log for deduplication
@@ -374,24 +384,34 @@ echo "$DATE,$FOCUS,$DISCOVER_COUNT,$DISCOVER_PRIORITIES,$DISCOVER_DURATION" >> "
   echo "$DATE [$FOCUS] $line" >> "$SEARCH_LOG"
 done
 
-# Post discovery digest to Slack — include Linear links
+# Post discovery digest to Slack — include issue links
 DISCOVERY_LIST=$(python3 -c "
-import re
+import re, subprocess
 with open('$RUN_LOG') as f:
     log = f.read()
 
-# Extract titles from LINEAR_DISCOVER lines
-titles = re.findall(r'LINEAR_DISCOVER:[1-4]:([^|]+)', log)
-# Extract Linear URLs with issue IDs
-urls = re.findall(r'(https://linear\.app/[^/]+/issue/([A-Z]+-\d+)[^\s)\"]*)', log)
+tracker = '$TRACKER'
+prefix = '${ISSUE_PREFIX}'
+
+def issue_url(iid):
+    try:
+        return subprocess.check_output(['bash', tracker, 'issue-url', iid], text=True).strip()
+    except:
+        return ''
+
+# Extract titles from ISSUE_DISCOVER lines
+titles = re.findall(r'ISSUE_DISCOVER:[1-4]:([^|]+)', log)
+# Extract issue IDs (prefix-N format)
+issue_ids = re.findall(prefix + r'-\d+', log)
 
 # Pair them up (best effort — same order)
 lines = []
 for i, title in enumerate(titles):
     title = title.strip()
-    if i < len(urls):
-        url, issue_id = urls[i]
-        lines.append(f'  • <{url}|{issue_id}: {title}>')
+    if i < len(issue_ids):
+        iid = issue_ids[i]
+        url = issue_url(iid)
+        lines.append(f'  • <{url}|{iid}: {title}>')
     else:
         lines.append(f'  • {title}')
 print('\n'.join(lines) if lines else '  (none)')
@@ -399,21 +419,31 @@ print('\n'.join(lines) if lines else '  (none)')
 SEARCH_SUMMARY=$({ sed -n '/^## Search Summary/,/^## /p' "$RUN_LOG" 2>/dev/null || true; } | grep -v '^## ' | head -3 | tr '\n' ' ')
 # Map priority numbers to labels for readability
 DISCOVERY_LIST_LABELED=$(python3 -c "
-import re
+import re, subprocess
 with open('$RUN_LOG') as f:
     log = f.read()
 
+tracker = '$TRACKER'
+prefix = '${ISSUE_PREFIX}'
+
+def issue_url(iid):
+    try:
+        return subprocess.check_output(['bash', tracker, 'issue-url', iid], text=True).strip()
+    except:
+        return ''
+
 prio_labels = {'1': '🔴 Urgent', '2': '🟠 High', '3': '🟡 Medium', '4': '🔵 Low'}
-titles = re.findall(r'LINEAR_DISCOVER:([1-4]):([^|]+)', log)
-urls = re.findall(r'(https://linear\.app/[^/]+/issue/([A-Z]+-\d+)[^\s)\"]*)', log)
+titles = re.findall(r'ISSUE_DISCOVER:([1-4]):([^|]+)', log)
+issue_ids = re.findall(prefix + r'-\d+', log)
 
 lines = []
 for i, (prio, title) in enumerate(titles):
     title = title.strip()
     label = prio_labels.get(prio, f'P{prio}')
-    if i < len(urls):
-        url, issue_id = urls[i]
-        lines.append(f'  • {label} <{url}|{issue_id}>: {title}')
+    if i < len(issue_ids):
+        iid = issue_ids[i]
+        url = issue_url(iid)
+        lines.append(f'  • {label} <{url}|{iid}>: {title}')
     else:
         lines.append(f'  • {label} {title}')
 print('\n'.join(lines) if lines else '  (none)')
@@ -424,7 +454,7 @@ ${SEARCH_SUMMARY}
 *${DISCOVER_COUNT} discoveries:*
 ${DISCOVERY_LIST_LABELED}
 
-<https://linear.app/${LINEAR_ORG}|Linear Board>"
+<$(bash "$TRACKER" board-url)|Issue Board>"
 
 echo ""
 echo "📊 Results saved to: $RUN_LOG"

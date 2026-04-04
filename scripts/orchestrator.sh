@@ -6,10 +6,10 @@
 # 3. Builder: implements top-priority issues until 7 AM
 #
 # Logs:
-#   Discovery: ~/Documents/Claude/outputs/lift-discover-<date>.md
-#   Triage:    ~/Documents/Claude/outputs/lift-triage-<date>.md
-#   Builder:   ~/Documents/Claude/outputs/lift-enhance-<date>-run<N>.md
-#   This script: ~/Documents/Claude/outputs/lift-overnight-<date>.log
+#   Discovery: pilot/data/lift-discover-<date>.md
+#   Triage:    pilot/data/lift-triage-<date>.md
+#   Builder:   pilot/data/lift-enhance-<date>-run<N>.md
+#   This script: pilot/data/lift-overnight-<date>.log
 
 set -euo pipefail
 
@@ -20,7 +20,7 @@ SCRIPT_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
 
 SCRIPTS="$HOME/Documents/Scripts"
 DATE=$(date +%Y-%m-%d)
-OUTPUT_DIR="${OUTPUT_DIR:-$HOME/Documents/Claude/outputs}"
+OUTPUT_DIR="${OUTPUT_DIR:-$PILOT_DIR/data}"
 LOG="$OUTPUT_DIR/lift-overnight-$DATE.log"
 RUNTIME_CSV="$OUTPUT_DIR/lift-runtime.csv"
 
@@ -52,8 +52,8 @@ else
 fi
 BUILDER_SEC=$(( $(date +%s) - STAGE_START ))
 
-# Step 4: Linear cleanup (archive completed/canceled, deduplicate)
-echo "[$(date +%H:%M)] Running Linear cleanup..." | tee -a "$LOG"
+# Step 4: Issue cleanup (archive completed/canceled, deduplicate)
+echo "[$(date +%H:%M)] Running issue cleanup..." | tee -a "$LOG"
 if bash "$SCRIPTS/lift-linear-cleanup.sh" >> "$LOG" 2>&1; then
   echo "[$(date +%H:%M)] Cleanup complete." | tee -a "$LOG"
 else

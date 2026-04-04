@@ -11,7 +11,7 @@ DIGEST="$PILOT_DIR/scripts/digest.sh"
   [ "$status" -eq 0 ]
   # Should contain project names
   [[ "$output" == *"Lift"* ]]
-  [[ "$output" == *"Linear Digest"* ]]
+  [[ "$output" == *"Issue Digest"* ]]
   # Should NOT have called curl
   [ ! -f "$TEST_TMPDIR/mock_calls/curl" ]
 }

@@ -79,21 +79,21 @@ QUEUE
 }
 
 # bats test_tags=fast
-@test "discover: LINEAR_DISCOVER line parsing" {
+@test "discover: ISSUE_DISCOVER line parsing" {
   # Test the regex that parses discovery output
   RUN_LOG="$TEST_TMPDIR/run.md"
   cat > "$RUN_LOG" <<'LOG'
 ## Discoveries
-LINEAR_DISCOVER:2:Add haptic feedback|Strong and Hevy both use haptic feedback
-LINEAR_DISCOVER:3:Add streak counter|Duolingo-style streak tracking
-LINEAR_DISCOVER:1:Fix XSS in input field|User input not sanitized
+ISSUE_DISCOVER:2:Add haptic feedback|Strong and Hevy both use haptic feedback
+ISSUE_DISCOVER:3:Add streak counter|Duolingo-style streak tracking
+ISSUE_DISCOVER:1:Fix XSS in input field|User input not sanitized
 LOG
 
-  COUNT=$(grep -oE 'LINEAR_DISCOVER:[1-4]:' "$RUN_LOG" | wc -l | tr -d ' ')
+  COUNT=$(grep -oE 'ISSUE_DISCOVER:[1-4]:' "$RUN_LOG" | wc -l | tr -d ' ')
   [ "$COUNT" -eq 3 ]
 
   # Parse priorities
-  PRIORITIES=$(grep -oE 'LINEAR_DISCOVER:[1-4]:' "$RUN_LOG" | grep -oE '[1-4]' | sort | tr '\n' '/')
+  PRIORITIES=$(grep -oE 'ISSUE_DISCOVER:[1-4]:' "$RUN_LOG" | grep -oE '[1-4]' | sort | tr '\n' '/')
   [[ "$PRIORITIES" == *"1"* ]]
   [[ "$PRIORITIES" == *"2"* ]]
   [[ "$PRIORITIES" == *"3"* ]]

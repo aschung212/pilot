@@ -7,7 +7,7 @@
 #   ./builder.sh 06:00    # runs until 6:00 AM
 #   ./builder.sh 1        # runs exactly 1 iteration
 #
-# Logs: ~/Documents/Claude/outputs/lift-enhance-<date>-run<N>.md
+# Logs: pilot/data/lift-enhance-<date>-run<N>.md
 
 set -uo pipefail
 # Note: not using -e (errexit) — individual command failures should not abort the loop.
@@ -32,7 +32,7 @@ slack_send() {
 
 REPO="${REPO_PATH:?REPO_PATH not set — run init.sh}"
 DATE=$(date +%Y-%m-%d)
-OUTPUT_DIR="${OUTPUT_DIR:-$HOME/Documents/Claude/outputs}"
+OUTPUT_DIR="${OUTPUT_DIR:-$PILOT_DIR/data}"
 STOP_AT="${1:-07:00}"
 RUN=0
 MAX_CONSECUTIVE_FAILURES=3
@@ -133,8 +133,8 @@ FAILED_PRS=$(cd "$REPO" && gh pr list --author "@me" --label "ci:failed" --json 
 RETRY_ISSUES=""
 if [ -n "$FAILED_PRS" ]; then
   for failed_branch in $FAILED_PRS; do
-    # Extract issue ID from branch name (enhance/MAS-123-2026-04-02)
-    FAILED_ISSUE=$(echo "$failed_branch" | grep -oE 'MAS-[0-9]+' || true)
+    # Extract issue ID from branch name (enhance/LIFT-123-2026-04-02)
+    FAILED_ISSUE=$(echo "$failed_branch" | grep -oE "${ISSUE_PREFIX}-[0-9]+" || true)
     if [ -n "$FAILED_ISSUE" ]; then
       RETRY_ISSUES+="$FAILED_ISSUE "
       # Close the old failed PR
@@ -178,11 +178,11 @@ $(sed -n '/## Plan/,/## /p' "$f" 2>/dev/null | head -20)
   TEST_COUNT=$(cd "$REPO" && npm test -- --reporter=dot 2>&1 | tail -5 || echo "unknown")
   GIT_LOG=$(cd "$REPO" && git log --oneline -10)
 
-  # Pull Linear backlog for the Lift project
-  LINEAR_ISSUES=$(bash "$TRACKER" list unstarted started || echo "Could not fetch Linear issues")
+  # Pull issue backlog for the Lift project
+  BACKLOG_ISSUES=$(bash "$TRACKER" list unstarted started || echo "Could not fetch issues")
 
   # Fetch full details (description + comments) for top priority issues
-  TOP_ISSUE_IDS=$({ echo "$LINEAR_ISSUES" | grep -oE 'MAS-[0-9]+' | head -5; } || true)
+  TOP_ISSUE_IDS=$({ echo "$BACKLOG_ISSUES" | grep -oE "${ISSUE_PREFIX}-[0-9]+" | head -5; } || true)
   ISSUE_DETAILS=""
   for issue_id in $TOP_ISSUE_IDS; do
     detail=$(bash "$TRACKER" view "$issue_id" || true)
@@ -193,7 +193,7 @@ $detail
   done
 
   # Gather recently skipped issues so Claude avoids retrying them this session
-  SKIPPED_ISSUES=$(grep -rohE 'LINEAR_SKIPPED:MAS-[0-9]+:[^"]*' "$OUTPUT_DIR"/lift-enhance-$DATE-run*.md 2>/dev/null | sort -u || true)
+  SKIPPED_ISSUES=$(grep -rohE "ISSUE_SKIPPED:${ISSUE_PREFIX}-[0-9]+:[^\"]*" "$OUTPUT_DIR"/lift-enhance-$DATE-run*.md 2>/dev/null | sort -u || true)
 
   # ── Create a branch for this iteration ───────────────────────────────────
   # Branch name will be updated once we know which issue Claude picks.
@@ -228,14 +228,14 @@ $RETRY_ISSUES
 ## Conventional commits
 
 Use structured commit prefixes:
-- feat(MAS-XXX): for new features
-- fix(MAS-XXX): for bug fixes
-- a11y(MAS-XXX): for accessibility improvements
-- test(MAS-XXX): for test additions
-- perf(MAS-XXX): for performance improvements
-- style(MAS-XXX): for visual/CSS changes
-- refactor(MAS-XXX): for code refactoring
-- chore(MAS-XXX): for maintenance tasks
+- feat(LIFT-XXX): for new features
+- fix(LIFT-XXX): for bug fixes
+- a11y(LIFT-XXX): for accessibility improvements
+- test(LIFT-XXX): for test additions
+- perf(LIFT-XXX): for performance improvements
+- style(LIFT-XXX): for visual/CSS changes
+- refactor(LIFT-XXX): for code refactoring
+- chore(LIFT-XXX): for maintenance tasks
 
 ## Current repo state
 
@@ -249,9 +249,9 @@ $TEST_COUNT
 
 $PREVIOUS_SUMMARIES
 
-## Linear backlog (open issues for $PROJECT_NAME)
+## Issue backlog (open issues for $PROJECT_NAME)
 
-$LINEAR_ISSUES
+$BACKLOG_ISSUES
 
 ## Issue details (descriptions + comments — may include triage agent suggestions as a STARTING POINT — read the codebase and use your own judgment; deviate from suggestions if you find a better approach)
 
@@ -271,7 +271,7 @@ ${SKIPPED_ISSUES:-None}
 
 ## Discovery (every iteration)
 
-While reading the codebase, actively look for problems and improvement opportunities. For each discovery, output a LINEAR_DISCOVER line (see output format). Look for:
+While reading the codebase, actively look for problems and improvement opportunities. For each discovery, output an ISSUE_DISCOVER line (see output format). Look for:
 - UI bugs (contrast issues, layout shifts, broken themes, missing aria attributes)
 - Code smells (dead code, unused imports, inconsistent patterns, TODO comments)
 - Missing tests for critical paths
@@ -280,10 +280,11 @@ While reading the codebase, actively look for problems and improvement opportuni
 - CLAUDE.md checklist violations (hardcoded colors, wrong spacing, missing safe-area-inset)
 - Dependency vulnerabilities (check package.json for outdated or insecure deps)
 
-Do NOT fix discoveries in the same iteration — just create the Linear issue. Fix them in a future iteration when they are the highest priority.
+Do NOT fix discoveries in the same iteration — just create an issue. Fix them in a future iteration when they are the highest priority.
 
 ## Rules
 
+- NEVER fabricate, guess, or invent URLs, domains, API keys, or external identifiers. If you need the deployment URL, read CLAUDE.md (the "Live:" field). If you need a repo URL, use the git remote. If you cannot find the authoritative value, SKIP the task — do not make one up.
 - Pick ONE issue — do not mix multiple unrelated changes in one iteration
 - Do NOT redo work from previous iterations — if tests exist, don't rewrite them
 - Do NOT break existing functionality — run tests after each change
@@ -304,26 +305,26 @@ What issue you chose and why (1-3 sentences). Include the issue ID.
 ## Changes
 What you did (bullet points)
 
-## Linear updates
-CRITICAL: You MUST output Linear status lines for the issue you worked on. Output each on its own line with NO leading whitespace.
+## Issue updates
+CRITICAL: You MUST output issue status lines for the issue you worked on. Output each on its own line with NO leading whitespace.
 
 For the issue you implemented:
-LINEAR_DONE:MAS-XXX|Brief summary of implementation and any notable decisions
-LINEAR_PROGRESS:MAS-XXX|What was completed so far and what remains
-LINEAR_SKIPPED:MAS-XXX:reason (if you attempted but could not complete it)
+ISSUE_DONE:LIFT-XXX|Brief summary of implementation and any notable decisions
+ISSUE_PROGRESS:LIFT-XXX|What was completed so far and what remains
+ISSUE_SKIPPED:LIFT-XXX:reason (if you attempted but could not complete it)
 
-If you did work that has no matching Linear issue, create one:
-LINEAR_CREATE:priority:title
-Then also output LINEAR_DONE or LINEAR_PROGRESS for it.
+If you did work that has no matching issue, create one:
+ISSUE_CREATE:priority:title
+Then also output ISSUE_DONE or ISSUE_PROGRESS for it.
 
 For discoveries you found but did NOT fix this iteration:
-LINEAR_DISCOVER:priority:title
+ISSUE_DISCOVER:priority:title
 Priority is 1-4 (1=urgent, 2=high, 3=medium, 4=low).
 
 Do not fabricate existing issue IDs — only use IDs from the backlog above.
 
 ## Summary
-- Issue: MAS-XXX (title)
+- Issue: LIFT-XXX (title)
 - Tests: X passing
 - Build: pass/fail
 - Category: feat|fix|a11y|test|perf|style|refactor|chore
@@ -387,9 +388,9 @@ $CLAUDE_RESULT"
         echo "✅ Run $RUN finished at $(date) — $NEW_COMMITS new commit(s)" | tee -a "$RUN_LOG"
 
         # ── Rename branch to match the issue ─────────────────────────────
-        PRIMARY_ISSUE=$(grep -oE "LINEAR_DONE:${LINEAR_TEAM}-[0-9]+" "$RUN_LOG" 2>/dev/null | head -1 | sed "s/LINEAR_DONE://" || true)
+        PRIMARY_ISSUE=$(grep -oE "ISSUE_DONE:${ISSUE_PREFIX}-[0-9]+" "$RUN_LOG" 2>/dev/null | head -1 | sed "s/ISSUE_DONE://" || true)
         if [ -z "$PRIMARY_ISSUE" ]; then
-          PRIMARY_ISSUE=$(grep -oE "LINEAR_PROGRESS:${LINEAR_TEAM}-[0-9]+" "$RUN_LOG" 2>/dev/null | head -1 | sed "s/LINEAR_PROGRESS://" || true)
+          PRIMARY_ISSUE=$(grep -oE "ISSUE_PROGRESS:${ISSUE_PREFIX}-[0-9]+" "$RUN_LOG" 2>/dev/null | head -1 | sed "s/ISSUE_PROGRESS://" || true)
         fi
         if [ -n "$PRIMARY_ISSUE" ]; then
           NEW_BRANCH="enhance/${PRIMARY_ISSUE}-$DATE"
@@ -402,20 +403,20 @@ $CLAUDE_RESULT"
         # ── Extract issue category for PR labeling ───────────────────────
         ISSUE_CATEGORY=$(grep -oE 'Category: (feat|fix|a11y|test|perf|style|refactor|chore)' "$RUN_LOG" 2>/dev/null | head -1 | sed 's/Category: //' || echo "feat")
 
-        # ── Create new Linear issues for discoveries ─────────────────────
-        { grep -oE 'LINEAR_DISCOVER:[1-4]:.*' "$RUN_LOG" 2>/dev/null || true; } | sort -u | while IFS=: read -r _ priority title; do
+        # ── Create new issues for discoveries ─────────────────────
+        { grep -oE 'ISSUE_DISCOVER:[1-4]:.*' "$RUN_LOG" 2>/dev/null || true; } | sort -u | while IFS=: read -r _ priority title; do
           echo "  📋 Discovered issue: $title (priority $priority)" | tee -a "$RUN_LOG"
           bash "$TRACKER" create "$title" "$priority" 2>&1 | tee -a "$RUN_LOG"
         done
 
         # Create new issues for work not in the backlog (already done)
-        { grep -oE 'LINEAR_CREATE:[1-4]:.*' "$RUN_LOG" 2>/dev/null || true; } | sort -u | while IFS=: read -r _ priority title; do
+        { grep -oE 'ISSUE_CREATE:[1-4]:.*' "$RUN_LOG" 2>/dev/null || true; } | sort -u | while IFS=: read -r _ priority title; do
           echo "  Creating issue: $title (priority $priority)" | tee -a "$RUN_LOG"
           bash "$TRACKER" create "$title" "$priority" --state "Done" 2>&1 | tee -a "$RUN_LOG"
         done
 
         # Handle skipped issues — move to Blocked with a comment
-        { grep -oE "LINEAR_SKIPPED:${LINEAR_TEAM}-[0-9]+:[^\"]*" "$RUN_LOG" 2>/dev/null || true; } | sort -u | while IFS=: read -r _ _ issue_id reason; do
+        { grep -oE "ISSUE_SKIPPED:${ISSUE_PREFIX}-[0-9]+:[^\"]*" "$RUN_LOG" 2>/dev/null || true; } | sort -u | while IFS=: read -r _ _ issue_id reason; do
           echo "  Blocking $issue_id: $reason" | tee -a "$RUN_LOG"
           bash "$TRACKER" update "$issue_id" --state "Blocked" 2>&1 | tee -a "$RUN_LOG"
           bash "$TRACKER" comment-add "$issue_id" "Automated run blocked this issue on $DATE: $reason" 2>&1 | tee -a "$RUN_LOG"
@@ -459,7 +460,7 @@ $CRITICAL_FINDINGS
 
 ## Your job
 Fix each finding. Commit each fix with a conventional commit message:
-fix(MAS-XXX): <description of fix>
+fix(LIFT-XXX): <description of fix>
 
 Run tests after fixing to ensure nothing is broken.
 FIX_PROMPT
@@ -482,7 +483,7 @@ FIX_PROMPT
             REVIEW_STATUS="findings-unfixed"
           fi
 
-          # If fixes failed, revert and create Linear issue
+          # If fixes failed, revert and create issue
           if [ "$REVIEW_STATUS" = "findings-unfixed" ]; then
             echo "  ↩️  Reverting run $RUN — could not fix review findings" | tee -a "$RUN_LOG"
             git checkout "${DEFAULT_BRANCH:-master}" 2>/dev/null || true
@@ -508,7 +509,7 @@ $(echo "$CRITICAL_FINDINGS" | head -3)"
           echo "  Layer 1 verdict: $L1_VERDICT ($(echo "$ALL_L1_FINDINGS" | grep -c "REVIEW_FIX" || echo "0") finding(s))" | tee -a "$RUN_LOG"
         fi
 
-        # Create Linear issues for medium/low findings (up to 5)
+        # Create issues for medium/low findings (up to 5)
         if [ -n "$MEDIUM_LOW_FINDINGS" ]; then
           echo "$MEDIUM_LOW_FINDINGS" | head -5 | while IFS=: read -r _ severity filepath desc; do
             bash "$TRACKER" create "[Review] $desc" 3 --description "Found by Layer 1 review ($L1_MODEL) on $DATE in $filepath. Severity: $severity" 2>&1 | tee -a "$RUN_LOG"
@@ -522,12 +523,12 @@ $(echo "$CRITICAL_FINDINGS" | head -3)"
         # ── Push and create PR ───────────────────────────────────────────
         git push -u origin "$ITER_BRANCH" 2>&1 | tee -a "$RUN_LOG"
 
-        # Update Linear issue status
+        # Update issue status
         LATEST_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
         COMMIT_URL="https://github.com/$GITHUB_REPO/commit/$LATEST_COMMIT"
 
-        { grep -oE "LINEAR_DONE:${LINEAR_TEAM}-[0-9]+\|[^\"]*" "$RUN_LOG" 2>/dev/null || true; } | sort -u | while IFS='|' read -r marker summary; do
-          issue_id=$(echo "$marker" | sed 's/LINEAR_DONE://')
+        { grep -oE "ISSUE_DONE:${ISSUE_PREFIX}-[0-9]+\|[^\"]*" "$RUN_LOG" 2>/dev/null || true; } | sort -u | while IFS='|' read -r marker summary; do
+          issue_id=$(echo "$marker" | sed 's/ISSUE_DONE://')
           summary=${summary:-No details provided}
           echo "  Marking $issue_id as Done" | tee -a "$RUN_LOG"
           bash "$TRACKER" update "$issue_id" --state "Done" 2>&1 | tee -a "$RUN_LOG"
@@ -537,8 +538,8 @@ $summary
 
 [View commit]($COMMIT_URL)" 2>&1 | tee -a "$RUN_LOG"
         done
-        { grep -oE "LINEAR_PROGRESS:${LINEAR_TEAM}-[0-9]+\|[^\"]*" "$RUN_LOG" 2>/dev/null || true; } | sort -u | while IFS='|' read -r marker summary; do
-          issue_id=$(echo "$marker" | sed 's/LINEAR_PROGRESS://')
+        { grep -oE "ISSUE_PROGRESS:${ISSUE_PREFIX}-[0-9]+\|[^\"]*" "$RUN_LOG" 2>/dev/null || true; } | sort -u | while IFS='|' read -r marker summary; do
+          issue_id=$(echo "$marker" | sed 's/ISSUE_PROGRESS://')
           summary=${summary:-No details provided}
           echo "  Marking $issue_id as In Progress" | tee -a "$RUN_LOG"
           bash "$TRACKER" update "$issue_id" --state "In Progress" 2>&1 | tee -a "$RUN_LOG"
@@ -546,12 +547,12 @@ $summary
         done
 
         # Build structured PR description
-        ISSUE_TITLE=$(grep -oE "LINEAR_DONE:${LINEAR_TEAM}-[0-9]+\|.*" "$RUN_LOG" 2>/dev/null | head -1 | sed "s/LINEAR_DONE:${LINEAR_TEAM}-[0-9]*|//" || echo "")
+        ISSUE_TITLE=$(grep -oE "ISSUE_DONE:${ISSUE_PREFIX}-[0-9]+\|.*" "$RUN_LOG" 2>/dev/null | head -1 | sed "s/ISSUE_DONE:${ISSUE_PREFIX}-[0-9]*|//" || echo "")
         if [ -z "$ISSUE_TITLE" ]; then
-          ISSUE_TITLE=$(grep -oE "LINEAR_PROGRESS:${LINEAR_TEAM}-[0-9]+\|.*" "$RUN_LOG" 2>/dev/null | head -1 | sed "s/LINEAR_PROGRESS:${LINEAR_TEAM}-[0-9]*|//" || echo "Improvements")
+          ISSUE_TITLE=$(grep -oE "ISSUE_PROGRESS:${ISSUE_PREFIX}-[0-9]+\|.*" "$RUN_LOG" 2>/dev/null | head -1 | sed "s/ISSUE_PROGRESS:${ISSUE_PREFIX}-[0-9]*|//" || echo "Improvements")
         fi
         ISSUE_URL=""
-        [ -n "$PRIMARY_ISSUE" ] && ISSUE_URL="https://linear.app/$LINEAR_ORG/issue/$PRIMARY_ISSUE"
+        [ -n "$PRIMARY_ISSUE" ] && ISSUE_URL=$(bash "$TRACKER" issue-url "$PRIMARY_ISSUE")
 
         PLAN=$(sed -n '/^## Plan/,/^## /p' "$RUN_LOG" 2>/dev/null | grep -v '^## ' | head -5)
         CHANGES=$(sed -n '/^## Changes/,/^## /p' "$RUN_LOG" 2>/dev/null | grep -v '^## ' | head -10)
@@ -723,8 +724,8 @@ _$L3_MODEL | Layer 3_" 2>&1 || echo "  ⚠️ Failed to post Layer 3 comment"
         NIGHTLY_VERDICTS+="${PR_URL}|${COMPOSITE_VERDICT}|${PR_TITLE} "
 
         # ── Slack notification for this iteration ────────────────────────
-        DONE_LINKS=$({ grep -oE "LINEAR_DONE:${LINEAR_TEAM}-[0-9]+\|[^\"]*" "$RUN_LOG" 2>/dev/null || true; } | sort -u | while IFS='|' read -r marker summary; do
-          id=$(echo "$marker" | sed 's/LINEAR_DONE://')
+        DONE_LINKS=$({ grep -oE "ISSUE_DONE:${ISSUE_PREFIX}-[0-9]+\|[^\"]*" "$RUN_LOG" 2>/dev/null || true; } | sort -u | while IFS='|' read -r marker summary; do
+          id=$(echo "$marker" | sed 's/ISSUE_DONE://')
           title=$(echo "$summary" | head -c 80)
           url=$(bash "$TRACKER" issue-url "$id")
           [ -n "$id" ] && echo "  ✅ <${url}|$id>: ${title:-no description}"
@@ -753,9 +754,9 @@ $ITER_COMMITS}
         # Collect metrics
         ITER_END=$(date +%s)
         ITER_DURATION=$((ITER_END - ITER_START))
-        DONE_COUNT=$(grep -oE "LINEAR_DONE:${LINEAR_TEAM}-[0-9]+" "$RUN_LOG" 2>/dev/null | wc -l | tr -d ' ' || echo "0")
-        SKIPPED_COUNT=$(grep -oE "LINEAR_SKIPPED:${LINEAR_TEAM}-[0-9]+" "$RUN_LOG" 2>/dev/null | wc -l | tr -d ' ' || echo "0")
-        CREATED_COUNT=$({ grep -oE 'LINEAR_CREATE:[1-4]:' "$RUN_LOG" 2>/dev/null || true; } | wc -l | tr -d ' ')
+        DONE_COUNT=$(grep -oE "ISSUE_DONE:${ISSUE_PREFIX}-[0-9]+" "$RUN_LOG" 2>/dev/null | wc -l | tr -d ' ' || echo "0")
+        SKIPPED_COUNT=$(grep -oE "ISSUE_SKIPPED:${ISSUE_PREFIX}-[0-9]+" "$RUN_LOG" 2>/dev/null | wc -l | tr -d ' ' || echo "0")
+        CREATED_COUNT=$({ grep -oE 'ISSUE_CREATE:[1-4]:' "$RUN_LOG" 2>/dev/null || true; } | wc -l | tr -d ' ')
         BUILD_SIZE=$(cd "$REPO" && npm run build 2>&1 | grep -oE '[0-9]+\.[0-9]+ KiB' | head -1 | grep -oE '[0-9.]+' || echo "")
         echo "$DATE,$RUN,$ITER_START_FMT,$(date +%H:%M:%S),$ITER_DURATION,$NEW_COMMITS,$TESTS_BEFORE,$TESTS_AFTER,$TESTS_DELTA,$DONE_COUNT,$SKIPPED_COUNT,$CREATED_COUNT,$BUILD_SIZE,true" >> "$METRICS_FILE"
       fi
@@ -790,7 +791,7 @@ git checkout "${DEFAULT_BRANCH:-master}" 2>/dev/null || true
 
 # ── Backpressure signal ──────────────────────────────────────────────────────
 BACKLOG_FLAG="$OUTPUT_DIR/.lift-backlog-low"
-UNSTARTED_COUNT=$(bash "$TRACKER" list unstarted | grep -c "${LINEAR_TEAM}-" || echo "0")
+UNSTARTED_COUNT=$(bash "$TRACKER" list unstarted | grep -c "${ISSUE_PREFIX}-" || echo "0")
 UNSTARTED_COUNT=$(echo "$UNSTARTED_COUNT" | tr -d ' \n')
 if [ "$UNSTARTED_COUNT" -lt 3 ] 2>/dev/null; then
   touch "$BACKLOG_FLAG"
@@ -851,8 +852,8 @@ if [ "$TOTAL_COMMITS" -eq 0 ]; then
   TOTAL_COMMITS=$(awk -F',' -v d="$DATE" '$1==d && $6>0 {s+=$6} END {print s+0}' "$METRICS_FILE" 2>/dev/null || echo "0")
 fi
 
-LINEAR_DONE_COUNT=$(grep -rh '^LINEAR_DONE:' "$OUTPUT_DIR"/lift-enhance-$DATE-run*.md 2>/dev/null | wc -l | tr -d ' \n' || echo "0")
-LINEAR_PROGRESS_COUNT=$(grep -rh '^LINEAR_PROGRESS:' "$OUTPUT_DIR"/lift-enhance-$DATE-run*.md 2>/dev/null | wc -l | tr -d ' \n' || echo "0")
+ISSUE_DONE_COUNT=$(grep -rh '^ISSUE_DONE:' "$OUTPUT_DIR"/lift-enhance-$DATE-run*.md 2>/dev/null | wc -l | tr -d ' \n' || echo "0")
+ISSUE_PROGRESS_COUNT=$(grep -rh '^ISSUE_PROGRESS:' "$OUTPUT_DIR"/lift-enhance-$DATE-run*.md 2>/dev/null | wc -l | tr -d ' \n' || echo "0")
 
 # Collect per-run summaries
 RUN_SUMMARIES=""
@@ -879,16 +880,16 @@ cat > "$DIGEST" <<DIGEST_EOF
 - **Runtime:** ${BUILDER_RUNTIME_MIN}m
 - **Total commits:** $TOTAL_COMMITS
 - **Tests:** $FINAL_TESTS
-- **Linear issues closed:** $LINEAR_DONE_COUNT
-- **Linear issues in progress:** $LINEAR_PROGRESS_COUNT
+- **Issues closed:** $ISSUE_DONE_COUNT
+- **Issues in progress:** $ISSUE_PROGRESS_COUNT
 - **Output tokens tonight:** ${NIGHTLY_OUTPUT_TOKENS} / ${MAX_OUTPUT_TOKENS_PER_NIGHT} cap
 - **Avg per night:** ${AVG_OUTPUT} output tokens, ${AVG_ITERS} iterations (over $TREND_DAYS nights)
 
 ## PRs
 $(for pr_url in $NIGHTLY_PRS; do echo "- $pr_url"; done)
 
-## Linear Board
-https://linear.app/$LINEAR_ORG → $LINEAR_PROJECT project
+## Issue Board
+$(bash "$TRACKER" board-url)
 
 ## Run-by-Run
 $RUN_SUMMARIES
@@ -904,30 +905,36 @@ ALL_DONE_LINKS=$(python3 -c "
 import re, os
 output_dir = '$OUTPUT_DIR'
 date = '$DATE'
-team = '${LINEAR_TEAM}'
-org = '${LINEAR_ORG}'
+prefix = '${ISSUE_PREFIX}'
+tracker = '${TRACKER}'
 
-import glob
+import glob, subprocess
 done_items = {}
 progress_items = {}
 for f in sorted(glob.glob(f'{output_dir}/lift-enhance-{date}-run*.md')):
     with open(f) as fh:
         content = fh.read()
-    for m in re.finditer(r'LINEAR_DONE:(' + team + r'-\d+)\|(.+)', content):
+    for m in re.finditer(r'ISSUE_DONE:(' + prefix + r'-\d+)\|(.+)', content):
         done_items[m.group(1)] = m.group(2).strip()[:100]
-    for m in re.finditer(r'LINEAR_PROGRESS:(' + team + r'-\d+)\|(.+)', content):
+    for m in re.finditer(r'ISSUE_PROGRESS:(' + prefix + r'-\d+)\|(.+)', content):
         progress_items[m.group(1)] = m.group(2).strip()[:100]
+
+def issue_url(iid):
+    try:
+        return subprocess.check_output(['bash', tracker, 'issue-url', iid], text=True).strip()
+    except:
+        return ''
 
 lines = []
 if done_items:
     lines.append('*Closed:*')
     for iid, summary in done_items.items():
-        url = f'https://linear.app/{org}/issue/{iid}'
+        url = issue_url(iid)
         lines.append(f'  ✅ <{url}|{iid}>: {summary}')
 if progress_items:
     lines.append('*In Progress:*')
     for iid, summary in progress_items.items():
-        url = f'https://linear.app/{org}/issue/{iid}'
+        url = issue_url(iid)
         lines.append(f'  🔄 <{url}|{iid}>: {summary}')
 print('\n'.join(lines) if lines else '  (no issue updates)')
 " 2>/dev/null)
@@ -968,7 +975,7 @@ $MERGE_PRS}${REVIEW_PRS:+*Needs review:*
 $REVIEW_PRS}
 ${ALL_DONE_LINKS}
 
-<https://linear.app/${LINEAR_ORG}|Linear Board>"
+<$(bash "$TRACKER" board-url)|Issue Board>"
 
 # Draft email summary
 claude --dangerously-skip-permissions -p "Create a Gmail draft (do NOT send) to aschung212@gmail.com with subject '$PROJECT_NAME Overnight Digest — $DATE' and this body as text/plain. Use the gmail_create_draft tool. Do not add any extra commentary:
@@ -979,13 +986,13 @@ Iterations: $RUN
 PRs created: $NIGHTLY_PR_COUNT
 Total commits: $TOTAL_COMMITS
 Tests: $FINAL_TESTS
-Linear issues closed: $LINEAR_DONE_COUNT
-Linear issues in progress: $LINEAR_PROGRESS_COUNT
+Issues closed: $ISSUE_DONE_COUNT
+Issues in progress: $ISSUE_PROGRESS_COUNT
 
 PRs:
 $(for pr_url in $NIGHTLY_PRS; do echo "  $pr_url"; done)
 
-Linear board: https://linear.app/$LINEAR_ORG
+Issue board: $(bash "$TRACKER" board-url)
 
 Run-by-run:
 $RUN_SUMMARIES
@@ -1002,6 +1009,7 @@ echo ""
 echo "── Running cleanup ──"
 CLEANUP_OUTPUT=$(bash "$SCRIPT_DIR/cleanup.sh" 2>&1 || echo "⚠️ Cleanup failed (non-fatal)")
 echo "$CLEANUP_OUTPUT"
-CLEANUP_ARCHIVED=$(echo "$CLEANUP_OUTPUT" | grep -oE '[0-9]+ archived' | head -1 || echo "0 archived")
-thread_send "🧹 *Cleanup:* $CLEANUP_ARCHIVED
-<https://linear.app/${LINEAR_ORG}|Linear Board>"
+CLEANUP_CLOSED=$(echo "$CLEANUP_OUTPUT" | grep -oE '[0-9]+ closed' | head -1 || echo "0 closed")
+BOARD_URL=$(bash "$TRACKER" board-url)
+thread_send "🧹 *Cleanup:* $CLEANUP_CLOSED
+<${BOARD_URL}|Issue Board>"
