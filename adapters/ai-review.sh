@@ -1,5 +1,9 @@
 #!/bin/bash
-# Adapter: AI Code Review — 3-layer cross-model pipeline
+# DEPRECATED 2026-04-06: Review is now handled inline via ~/.claude/scripts/review-router.sh
+# builder mode (PostToolUse hook). This adapter is no longer called by builder.sh.
+# Safe to delete after 2026-05-06 if no issues arise.
+#
+# Original: AI Code Review — 3-layer cross-model pipeline
 #
 # Layer 1 (Gemini Flash):  Mechanical gate — bugs, types, CSS, security
 # Layer 2 (Gemini Pro):    Architecture — cross-component, edge cases, what's missing
@@ -25,7 +29,7 @@ SCRIPT_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
 [ -z "${_PILOT_TEST_MODE:-}" ] && [ -f "$SCRIPT_DIR/../project.env" ] && source "$SCRIPT_DIR/../project.env"
 [ -z "${_PILOT_TEST_MODE:-}" ] && [ -f "$HOME/.zshenv" ] && source "$HOME/.zshenv" 2>/dev/null || true
 
-OUTPUT_DIR="${OUTPUT_DIR:-$HOME/Documents/Claude/outputs}"
+OUTPUT_DIR="${OUTPUT_DIR:-$PILOT_DIR/data}"
 DATE=$(date +%Y-%m-%d)
 
 # Models and timeouts from project.env
@@ -44,60 +48,94 @@ GEMINI_FILTER='grep -v "^Registering\|^Server\|^Scheduling\|^Executing\|^MCP\|^L
 # Review learnings (injected into all prompts)
 REVIEW_LEARNINGS=$(cat "$OUTPUT_DIR/lift-review-learnings.md" 2>/dev/null || echo "No learnings yet.")
 
-# ── Helper: run a Gemini model with timeout ──────────────────────────────────
+# ── Helper: run a Gemini model with timeout + retry ──────────────────────────
 # Returns 0 on success, 1 on failure. Output written to $2.
+# Retries up to 3 times with exponential backoff on rate limit / capacity errors.
 run_gemini() {
   local model="$1" output_file="$2" prompt_file="$3" timeout_sec="$4"
-  local start_time=$(date +%s)
+  local max_retries=3
+  local backoff=10
 
-  # Use gtimeout (GNU coreutils) if available, else bash background+wait
-  if command -v gtimeout >/dev/null 2>&1; then
-    gtimeout "$timeout_sec" gemini -p "$(cat "$prompt_file")" -m "$model" --sandbox 2>&1 \
-      | eval "$GEMINI_FILTER" > "$output_file" 2>/dev/null
-  else
-    gemini -p "$(cat "$prompt_file")" -m "$model" --sandbox 2>&1 \
-      | eval "$GEMINI_FILTER" > "$output_file" 2>/dev/null &
-    local pid=$!
-    ( sleep "$timeout_sec" && kill "$pid" 2>/dev/null ) &
-    local watchdog=$!
-    wait "$pid" 2>/dev/null
-    local exit_code=$?
-    kill "$watchdog" 2>/dev/null; wait "$watchdog" 2>/dev/null
-    if [ "$exit_code" -ne 0 ]; then
-      return 1
+  for attempt in $(seq 1 $max_retries); do
+    local start_time=$(date +%s)
+
+    # Use gtimeout (GNU coreutils) if available, else bash background+wait
+    if command -v gtimeout >/dev/null 2>&1; then
+      gtimeout "$timeout_sec" gemini -p "$(cat "$prompt_file")" -m "$model" --sandbox 2>&1 \
+        | eval "$GEMINI_FILTER" > "$output_file" 2>/dev/null
+    else
+      gemini -p "$(cat "$prompt_file")" -m "$model" --sandbox 2>&1 \
+        | eval "$GEMINI_FILTER" > "$output_file" 2>/dev/null &
+      local pid=$!
+      ( sleep "$timeout_sec" && kill "$pid" 2>/dev/null ) &
+      local watchdog=$!
+      wait "$pid" 2>/dev/null
+      local exit_code=$?
+      kill "$watchdog" 2>/dev/null; wait "$watchdog" 2>/dev/null
+      if [ "$exit_code" -ne 0 ] && [ "$attempt" -eq "$max_retries" ]; then
+        return 1
+      elif [ "$exit_code" -ne 0 ]; then
+        echo "  ⏳ $model attempt $attempt failed — retrying in ${backoff}s..." >&2
+        sleep "$backoff"
+        backoff=$((backoff * 2))
+        continue
+      fi
     fi
-  fi
 
-  local end_time=$(date +%s)
-  local duration=$((end_time - start_time))
+    local end_time=$(date +%s)
+    local duration=$((end_time - start_time))
 
-  # Validate output
-  if [ ! -s "$output_file" ]; then
-    echo "  ⚠️  $model returned empty output after ${duration}s" >&2
-    return 1
-  fi
-  if grep -qi "exhausted your capacity\|rate limit\|MODEL_CAPACITY_EXHAUSTED" "$output_file" 2>/dev/null; then
-    echo "  ⚠️  $model rate limited after ${duration}s" >&2
-    return 1
-  fi
+    # Check for rate limit — retry if attempts remain
+    if grep -qi "exhausted your capacity\|rate limit\|MODEL_CAPACITY_EXHAUSTED" "$output_file" 2>/dev/null; then
+      if [ "$attempt" -lt "$max_retries" ]; then
+        echo "  ⏳ $model rate limited (attempt $attempt/$max_retries) — retrying in ${backoff}s..." >&2
+        sleep "$backoff"
+        backoff=$((backoff * 2))
+        continue
+      else
+        echo "  ⚠️  $model rate limited after $max_retries attempts (${duration}s)" >&2
+        return 1
+      fi
+    fi
 
-  echo "$duration"
-  return 0
+    # Validate output
+    if [ ! -s "$output_file" ]; then
+      if [ "$attempt" -lt "$max_retries" ]; then
+        echo "  ⏳ $model empty output (attempt $attempt/$max_retries) — retrying in ${backoff}s..." >&2
+        sleep "$backoff"
+        backoff=$((backoff * 2))
+        continue
+      else
+        echo "  ⚠️  $model returned empty output after $max_retries attempts (${duration}s)" >&2
+        return 1
+      fi
+    fi
+
+    echo "$duration"
+    return 0
+  done
+
+  return 1
 }
 
 # ── Helper: run a Claude model with timeout ──────────────────────────────────
 # Returns 0 on success, 1 on failure. Output written to $2.
+#
+# Fixed: redirect ordering (stdout→file before stderr merge), max-turns=1
+# for review tasks (prevents tool use/file reads), stdin closed to prevent
+# hanging, and stderr captured for diagnostics.
 run_claude() {
   local model="$1" output_file="$2" prompt_file="$3" timeout_sec="$4"
   local json_file="${output_file}.json"
+  local err_file="${output_file}.err"
   local start_time=$(date +%s)
 
   if command -v gtimeout >/dev/null 2>&1; then
-    gtimeout "$timeout_sec" claude --dangerously-skip-permissions --output-format json --model "$model" \
-      -p "$(cat "$prompt_file")" --max-turns 15 2>&1 > "$json_file"
+    gtimeout "$timeout_sec" claude --allowedTools "Read Glob Grep" --output-format json --model "$model" \
+      -p "$(cat "$prompt_file")" --max-turns 1 < /dev/null > "$json_file" 2>"$err_file"
   else
-    claude --dangerously-skip-permissions --output-format json --model "$model" \
-      -p "$(cat "$prompt_file")" --max-turns 15 2>&1 > "$json_file" &
+    claude --allowedTools "Read Glob Grep" --output-format json --model "$model" \
+      -p "$(cat "$prompt_file")" --max-turns 1 < /dev/null > "$json_file" 2>"$err_file" &
     local pid=$!
     ( sleep "$timeout_sec" && kill "$pid" 2>/dev/null ) &
     local watchdog=$!
@@ -105,6 +143,7 @@ run_claude() {
     local exit_code=$?
     kill "$watchdog" 2>/dev/null; wait "$watchdog" 2>/dev/null
     if [ "$exit_code" -ne 0 ]; then
+      echo "  ⚠️  claude $model exited $exit_code (stderr: $(head -1 "$err_file" 2>/dev/null))" >&2
       return 1
     fi
   fi
@@ -114,26 +153,34 @@ run_claude() {
 
   # Extract result from JSON
   python3 -c "
-import json
+import json, sys
 try:
     with open('$json_file') as f:
         data = json.load(f)
     if data.get('is_error'):
+        print(f'Claude error: {data.get(\"error\", \"unknown\")}', file=sys.stderr)
         exit(1)
     result = data.get('result', '')
     if result:
         print(result)
     else:
+        print('Claude returned empty result', file=sys.stderr)
         exit(1)
-except:
+except json.JSONDecodeError as e:
+    print(f'Invalid JSON from Claude: {e}', file=sys.stderr)
     exit(1)
-" > "$output_file" 2>/dev/null
+except Exception as e:
+    print(f'Failed to parse Claude output: {e}', file=sys.stderr)
+    exit(1)
+" > "$output_file" 2>>"$err_file"
 
   if [ ! -s "$output_file" ]; then
-    echo "  ⚠️  claude $model returned empty/error after ${duration}s" >&2
+    echo "  ⚠️  claude $model returned empty/error after ${duration}s (stderr: $(tail -1 "$err_file" 2>/dev/null))" >&2
+    rm -f "$err_file"
     return 1
   fi
 
+  rm -f "$err_file"
   echo "$duration"
   return 0
 }
@@ -167,11 +214,12 @@ $DIFF_CONTENT
 ## Checklist
 1. Bugs — logic errors, null/undefined, off-by-one, race conditions
 2. Security — XSS, injection, exposed secrets, CSP violations
-3. Types — type mismatches, missing type annotations on public APIs
-4. CSS — wrong values, hardcoded colors (should use CSS custom properties), missing safe-area-inset
-5. CLAUDE.md violations — touch targets below 44px, missing aria-labels, hardcoded spacing
-6. Tests — are changes tested? Missing edge cases?
-7. Regressions — does this break existing behavior?
+3. Hallucinated values — ANY URL, domain, API key, or external identifier that was added or changed MUST match a known value from the codebase (CLAUDE.md, package.json, git remote, .env.example). Flag any domain/URL that cannot be traced to an authoritative source as CRITICAL.
+4. Types — type mismatches, missing type annotations on public APIs
+5. CSS — wrong values, hardcoded colors (should use CSS custom properties), missing safe-area-inset
+6. CLAUDE.md violations — touch targets below 44px, missing aria-labels, hardcoded spacing
+7. Tests — are changes tested? Missing edge cases?
+8. Regressions — does this break existing behavior?
 
 ## Learnings from past reviews (PAY ATTENTION)
 $REVIEW_LEARNINGS

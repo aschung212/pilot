@@ -30,6 +30,12 @@ slack_send() {
 }
 # thread_send is defined after THREAD_TS is set (below)
 
+# Builder tool allowlist — restricts Claude to repo-scoped operations only.
+# Blocks arbitrary shell, curl, env var exfil, and network access beyond git/gh.
+# This is the primary defense against indirect prompt injection from web research.
+# Note: git push is allowed but the security scan runs before any push in the loop.
+BUILDER_ALLOWED_TOOLS="Read Edit Write Glob Grep Bash(git add:*) Bash(git commit:*) Bash(git push:*) Bash(git checkout:*) Bash(git branch:*) Bash(git log:*) Bash(git diff:*) Bash(git status:*) Bash(git fetch:*) Bash(git merge:*) Bash(git stash:*) Bash(git show:*) Bash(git rev-parse:*) Bash(git config user:*) Bash(gh:*) Bash(npm run build:*) Bash(npm run lint:*) Bash(npm test:*) Bash(npx vitest:*) Bash(npm run dev:*) Bash(npm ci:*) Bash(ls:*) Bash(cat:*) Bash(head:*) Bash(tail:*) Bash(wc:*) Bash(mkdir:*) Bash(cp:*) Bash(mv:*)"
+
 REPO="${REPO_PATH:?REPO_PATH not set — run init.sh}"
 DATE=$(date +%Y-%m-%d)
 OUTPUT_DIR="${OUTPUT_DIR:-$PILOT_DIR/data}"
@@ -120,13 +126,12 @@ echo ""
 # Metrics tracking
 METRICS_FILE="$OUTPUT_DIR/lift-metrics.csv"
 if [ ! -f "$METRICS_FILE" ]; then
-  echo "date,run,start_time,end_time,duration_sec,commits,tests_before,tests_after,tests_delta,issues_done,issues_skipped,issues_created,build_size_kb,success" > "$METRICS_FILE"
+  echo "date,run,start_time,end_time,duration_sec,commits,tests_before,tests_after,tests_delta,issues_done,issues_skipped,issues_created,stalls,build_size_kb,success" > "$METRICS_FILE"
 fi
 
 # Track PRs created tonight
 NIGHTLY_PRS=""
 NIGHTLY_PR_COUNT=0
-NIGHTLY_VERDICTS=""
 
 # ── Check for failed PRs from previous nights to retry ──────────────────────
 FAILED_PRS=$(cd "$REPO" && gh pr list --author "@me" --label "ci:failed" --json number,headRefName,title -q '.[].headRefName' 2>/dev/null || echo "")
@@ -208,7 +213,10 @@ $detail
   # ── Run Claude implementation ────────────────────────────────────────────
   COMMITS_BEFORE=$(git rev-list --count HEAD)
   CLAUDE_JSON="$OUTPUT_DIR/lift-enhance-$DATE-run${RUN}-output.json"
-  if claude --dangerously-skip-permissions --output-format json -p "$(cat <<PROMPT
+  # Enable review-router builder mode — Gemini 3.1 Pro review on commit, Codex fallback
+  export PILOT_BUILDER=1
+  export PILOT_REVIEW_LOG="$OUTPUT_DIR/lift-review-$DATE-run${RUN}.log"
+  if claude --allowedTools $BUILDER_ALLOWED_TOOLS --output-format json -p "$(cat <<PROMPT
 You are iteration $RUN of the overnight self-improving enhancer for $PROJECT_NAME at $REPO. This is Aaron Chung's portfolio project — he's an ex-AWS SDE2 targeting SWE roles at companies like Notion, Airtable, and Linear.
 
 You are running in a loop. Previous iterations tonight and from recent days have already made improvements. Your job is to find the NEXT most impactful thing to do that hasn't been done yet.
@@ -282,6 +290,29 @@ While reading the codebase, actively look for problems and improvement opportuni
 
 Do NOT fix discoveries in the same iteration — just create an issue. Fix them in a future iteration when they are the highest priority.
 
+## Review feedback and push workflow
+
+A Gemini 3.1 Pro review runs automatically via a Husky pre-push git hook. It reviews the full branch diff before the push completes.
+
+### Step 1: Implement and commit
+Write code, run tests, commit with conventional prefixes. No review runs on commit — focus on shipping.
+
+### Step 2: Push for review
+When your implementation is complete, push to remote:
+  git push -u origin HEAD
+The pre-push hook sends the FULL branch diff to Gemini 3.1 Pro for adversarial review. The review output appears in your terminal.
+
+### Step 3: Address findings
+Read the review output carefully. If Pro identifies real issues (P1/P2):
+1. Fix them in new commits
+2. Push again — another review runs automatically
+3. One or two review passes is typically sufficient
+
+If findings are false positives (e.g. concerns about persistence that's already handled by a watcher), ignore them and move on.
+
+### Step 4: Exit
+After your final push, you are done. The pipeline handles PR creation.
+
 ## Rules
 
 - NEVER fabricate, guess, or invent URLs, domains, API keys, or external identifiers. If you need the deployment URL, read CLAUDE.md (the "Live:" field). If you need a repo URL, use the git remote. If you cannot find the authoritative value, SKIP the task — do not make one up.
@@ -295,7 +326,7 @@ Do NOT fix discoveries in the same iteration — just create an issue. Fix them 
 - IMPORTANT: Focus on SHIPPING, not perfecting. Commit working improvements and move on.
 - Do NOT create branches — you are already on the correct branch. Just commit to the current branch.
 - Do NOT create pull requests — the pipeline handles PR creation after your work is done.
-- Do NOT push to remote — the pipeline handles pushing.
+- You MUST push to remote when your implementation is complete: git push -u origin HEAD. A Gemini 3.1 Pro review runs automatically via the pre-push hook. After addressing any findings, push again.
 
 ## Output format
 
@@ -322,6 +353,23 @@ ISSUE_DISCOVER:priority:title
 Priority is 1-4 (1=urgent, 2=high, 3=medium, 4=low).
 
 Do not fabricate existing issue IDs — only use IDs from the backlog above.
+
+## Verification
+Write this section for the human reviewer who will test on a real iPhone before merging. Include ALL of these subsections:
+
+### Steps to test
+Numbered steps to manually verify the change works. Be specific — include which screen to navigate to, what to tap, what gesture to perform. Assume the reviewer opens the Vercel preview URL on their iPhone, signs in with Google OAuth, and lands on the main app. Start from step 1 being navigation within the app — do not include sign-in steps.
+
+### Expected behavior
+What the reviewer should see after each step. Describe visible outcomes, not implementation details.
+
+### What to watch for
+Specific things that could go wrong with this change. Think about: theme rendering across all 9 themes (especially light mode), scroll behavior, keyboard interactions, touch target sizes, animations, layout shifts, and edge cases the reviewer should try to break.
+
+### Risk assessment
+- **Scope:** What parts of the app are affected (narrow = just this component, broad = multiple views)
+- **Confidence:** How confident are you this is correct (high/medium/low and why)
+- **Rollback:** If this breaks something, what is the revert path
 
 ## Summary
 - Issue: LIFT-XXX (title)
@@ -379,7 +427,7 @@ $CLAUDE_RESULT"
         echo "⚠️  Run $RUN produced no commits (stall $STALLS/$MAX_STALLS)" | tee -a "$RUN_LOG"
         ITER_END=$(date +%s)
         ITER_DURATION=$((ITER_END - ITER_START))
-        echo "$DATE,$RUN,$ITER_START_FMT,$(date +%H:%M:%S),$ITER_DURATION,0,$TESTS_BEFORE,$TESTS_BEFORE,0,0,0,0,,stall" >> "$METRICS_FILE"
+        echo "$DATE,$RUN,$ITER_START_FMT,$(date +%H:%M:%S),$ITER_DURATION,0,$TESTS_BEFORE,$TESTS_BEFORE,0,0,0,0,1,,stall" >> "$METRICS_FILE"
         # Clean up empty branch
         git checkout "${DEFAULT_BRANCH:-master}" 2>/dev/null || true
         git branch -D "$ITER_BRANCH" 2>/dev/null || true
@@ -422,106 +470,76 @@ $CLAUDE_RESULT"
           bash "$TRACKER" comment-add "$issue_id" "Automated run blocked this issue on $DATE: $reason" 2>&1 | tee -a "$RUN_LOG"
         done
 
-        # ── Layer 1 Review: Gemini Flash (mechanical gate) ────────────────
-        REVIEW_ADAPTER="$SCRIPT_DIR/../adapters/ai-review.sh"
-        DIFF_FILE=$(mktemp)
-        git diff "${DEFAULT_BRANCH:-master}".."$ITER_BRANCH" > "$DIFF_FILE" 2>/dev/null
+        # ── Security scan before push ─────────────────────────────────────
+        if ! bash "$SCRIPT_DIR/../lib/security-scan.sh" "${DEFAULT_BRANCH:-master}" 2>&1 | tee -a "$RUN_LOG"; then
+          echo "🚨 Security scan blocked push — skipping this iteration" | tee -a "$RUN_LOG"
+          thread_send "🚨 *Security scan blocked push on $ITER_BRANCH* — suspicious patterns in diff"
+          continue
+        fi
 
-        L1_OUTPUT="$OUTPUT_DIR/lift-review-$DATE-run${RUN}-layer1.txt"
-        bash "$REVIEW_ADAPTER" layer1 "$DIFF_FILE" "$L1_OUTPUT" 2>&1 | tee -a "$RUN_LOG"
+        # ── Validate CI (build + test) before creating PR ──────────────────
+        # Ensure branch is pushed (fallback if Claude didn't push)
+        git push -u origin "$ITER_BRANCH" 2>&1 | tee -a "$RUN_LOG" || true
 
-        L1_VERDICT=$(grep "^REVIEW_VERDICT:" "$L1_OUTPUT" 2>/dev/null | head -1 | sed 's/REVIEW_VERDICT://' || echo "REVIEW")
-        L1_MODEL=$(grep "^REVIEW_MODEL:" "$L1_OUTPUT" 2>/dev/null | head -1 | sed 's/REVIEW_MODEL://' || echo "unknown")
-        L1_STATUS="✅"
-        [ "$L1_MODEL" = "skipped" ] && L1_STATUS="⏭️"
+        CI_PASS=true
+        BUILD_OUT=$(cd "$REPO" && npm run build 2>&1) || CI_PASS=false
+        TEST_OUT=$(cd "$REPO" && npm test -- --reporter=dot 2>&1) || CI_PASS=false
 
-        # Parse findings from Layer 1
-        CRITICAL_FINDINGS=$(grep -E "^REVIEW_FIX:(critical|high):" "$L1_OUTPUT" 2>/dev/null || true)
-        MEDIUM_LOW_FINDINGS=$(grep -E "^REVIEW_FIX:(medium|low):" "$L1_OUTPUT" 2>/dev/null || true)
-        ALL_L1_FINDINGS=$(grep "^REVIEW_FIX:" "$L1_OUTPUT" 2>/dev/null || true)
-        CRITICAL_COUNT=$(echo "$CRITICAL_FINDINGS" | grep -c "REVIEW_FIX" 2>/dev/null || echo "0")
+        if [ "$CI_PASS" = "false" ]; then
+          echo "⚠️  CI failed on $ITER_BRANCH — attempting auto-fix" | tee -a "$RUN_LOG"
+          FIX_ATTEMPTS=0
+          while [ "$CI_PASS" = "false" ] && [ "$FIX_ATTEMPTS" -lt "$MAX_FIX_ATTEMPTS" ]; do
+            FIX_ATTEMPTS=$((FIX_ATTEMPTS + 1))
+            echo "  Fix attempt $FIX_ATTEMPTS/$MAX_FIX_ATTEMPTS" | tee -a "$RUN_LOG"
 
-        REVIEW_STATUS="clean"
-        if echo "$L1_OUTPUT" | grep -q "REVIEW_CLEAN" 2>/dev/null; then
-          echo "  Layer 1 verdict: ✅ MERGE (clean)" | tee -a "$RUN_LOG"
-        elif [ "$CRITICAL_COUNT" -gt 0 ] 2>/dev/null; then
-          echo "  Layer 1: $CRITICAL_COUNT critical/high finding(s), attempting fix..." | tee -a "$RUN_LOG"
-          REVIEW_STATUS="findings-fixed"
+            # Merge latest master to resolve conflicts
+            git fetch origin "${DEFAULT_BRANCH:-master}" 2>/dev/null || true
+            if ! git merge "origin/${DEFAULT_BRANCH:-master}" --no-edit 2>&1 | tee -a "$RUN_LOG"; then
+              # Merge conflict — ask Claude to resolve
+              CONFLICT_FILES=$(git diff --name-only --diff-filter=U 2>/dev/null || true)
+              if [ -n "$CONFLICT_FILES" ]; then
+                claude --allowedTools $BUILDER_ALLOWED_TOOLS -p "You are in the $REPO repo on branch $ITER_BRANCH. There are merge conflicts with master in these files:
+$CONFLICT_FILES
 
-          # ── Fix iteration for critical/high findings ──────────────────
-          FIX_JSON="$OUTPUT_DIR/lift-fix-$DATE-run${RUN}.json"
-          COMMITS_PRE_FIX=$(git rev-list --count HEAD)
-          if claude --dangerously-skip-permissions --output-format json -p "$(cat <<FIX_PROMPT
-You are fixing review findings in $PROJECT_NAME at $REPO on branch $ITER_BRANCH.
-Do NOT create branches, PRs, or push. Just fix and commit.
-
-## Review Findings (MUST FIX)
-$CRITICAL_FINDINGS
-
-## Your job
-Fix each finding. Commit each fix with a conventional commit message:
-fix(LIFT-XXX): <description of fix>
-
-Run tests after fixing to ensure nothing is broken.
-FIX_PROMPT
-)" --max-turns 50 2>&1 > "$FIX_JSON"; then
-            FIX_USAGE=$(parse_usage "$FIX_JSON")
-            FIX_TOKENS=$(echo "$FIX_USAGE" | cut -d',' -f2)
-            NIGHTLY_OUTPUT_TOKENS=$((NIGHTLY_OUTPUT_TOKENS + FIX_TOKENS))
-            FIX_COMMITS=$(($(git rev-list --count HEAD) - COMMITS_PRE_FIX))
-            if [ "$FIX_COMMITS" -gt 0 ]; then
-              echo "  🔧 Fix iteration: $FIX_COMMITS commit(s)" | tee -a "$RUN_LOG"
-              NEW_COMMITS=$((NEW_COMMITS + FIX_COMMITS))
-              # Update finding statuses
-              CRITICAL_FINDINGS=$(echo "$CRITICAL_FINDINGS" | while IFS= read -r line; do
-                echo "${line}|Status: 🔧 Fixed"
-              done)
-            else
-              REVIEW_STATUS="findings-unfixed"
+Resolve all merge conflicts, keeping the intent of both sides. Then run npm test and npm run build to verify. Commit the resolution with message 'fix: resolve merge conflicts with master'." --max-turns 30 2>&1 | tee -a "$RUN_LOG" || true
+              fi
             fi
+
+            # Now fix any build/test failures
+            CI_PASS=true
+            BUILD_OUT=$(cd "$REPO" && npm run build 2>&1) || CI_PASS=false
+            TEST_OUT=$(cd "$REPO" && npm test -- --reporter=dot 2>&1) || CI_PASS=false
+
+            if [ "$CI_PASS" = "false" ]; then
+              FAIL_SNIPPET=$(echo "$BUILD_OUT" | tail -30)
+              TEST_SNIPPET=$(echo "$TEST_OUT" | tail -30)
+              claude --allowedTools $BUILDER_ALLOWED_TOOLS -p "You are in the $REPO repo on branch $ITER_BRANCH. The CI build or tests are failing. Fix the issues and commit the fix.
+
+Build output (last 30 lines):
+$FAIL_SNIPPET
+
+Test output (last 30 lines):
+$TEST_SNIPPET
+
+Fix the failing build/tests. Do NOT revert the feature — fix the actual issue. Commit with conventional commit prefix. Run npm test and npm run build to verify your fix works." --max-turns 30 2>&1 | tee -a "$RUN_LOG" || true
+
+              # Re-check
+              CI_PASS=true
+              BUILD_OUT=$(cd "$REPO" && npm run build 2>&1) || CI_PASS=false
+              TEST_OUT=$(cd "$REPO" && npm test -- --reporter=dot 2>&1) || CI_PASS=false
+            fi
+          done
+
+          if [ "$CI_PASS" = "true" ]; then
+            echo "✅ CI fixed after $FIX_ATTEMPTS attempt(s)" | tee -a "$RUN_LOG"
+            git push origin "$ITER_BRANCH" 2>&1 | tee -a "$RUN_LOG" || true
           else
-            REVIEW_STATUS="findings-unfixed"
-          fi
-
-          # If fixes failed, revert and create issue
-          if [ "$REVIEW_STATUS" = "findings-unfixed" ]; then
-            echo "  ↩️  Reverting run $RUN — could not fix review findings" | tee -a "$RUN_LOG"
-            git checkout "${DEFAULT_BRANCH:-master}" 2>/dev/null || true
-            git branch -D "$ITER_BRANCH" 2>/dev/null || true
-            if [ -n "$PRIMARY_ISSUE" ]; then
-              bash "$TRACKER" comment-add "$PRIMARY_ISSUE" "Automated review found critical issues on $DATE. Reverted.
-Findings:
-$CRITICAL_FINDINGS" 2>&1 | tee -a "$RUN_LOG"
-            fi
-            thread_send "⚠️ *Run $RUN reverted* — critical issues couldn't be auto-fixed
-${PRIMARY_ISSUE:+Issue: $PRIMARY_ISSUE}
-$(echo "$CRITICAL_FINDINGS" | head -3)"
-            ITER_END=$(date +%s)
-            ITER_DURATION=$((ITER_END - ITER_START))
-            echo "$DATE,$RUN,$ITER_START_FMT,$(date +%H:%M:%S),$ITER_DURATION,0,$TESTS_BEFORE,$TESTS_BEFORE,0,0,0,0,,reverted" >> "$METRICS_FILE"
-            rm -f "$DIFF_FILE"
-            sleep "$ITERATION_COOLDOWN"
-            continue
+            echo "❌ CI still failing after $MAX_FIX_ATTEMPTS fix attempts — creating PR anyway (needs manual fix)" | tee -a "$RUN_LOG"
+            git push origin "$ITER_BRANCH" 2>&1 | tee -a "$RUN_LOG" || true
           fi
         else
-          # Has medium/low findings only
-          REVIEW_STATUS="minor-only"
-          echo "  Layer 1 verdict: $L1_VERDICT ($(echo "$ALL_L1_FINDINGS" | grep -c "REVIEW_FIX" || echo "0") finding(s))" | tee -a "$RUN_LOG"
+          echo "✅ CI passed (build + tests)" | tee -a "$RUN_LOG"
         fi
-
-        # Create issues for medium/low findings (up to 5)
-        if [ -n "$MEDIUM_LOW_FINDINGS" ]; then
-          echo "$MEDIUM_LOW_FINDINGS" | head -5 | while IFS=: read -r _ severity filepath desc; do
-            bash "$TRACKER" create "[Review] $desc" 3 --description "Found by Layer 1 review ($L1_MODEL) on $DATE in $filepath. Severity: $severity" 2>&1 | tee -a "$RUN_LOG"
-          done
-          # Mark deferred findings
-          MEDIUM_LOW_FINDINGS=$(echo "$MEDIUM_LOW_FINDINGS" | while IFS= read -r line; do
-            echo "${line}|Status: 📋 Deferred"
-          done)
-        fi
-
-        # ── Push and create PR ───────────────────────────────────────────
-        git push -u origin "$ITER_BRANCH" 2>&1 | tee -a "$RUN_LOG"
 
         # Update issue status
         LATEST_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
@@ -556,6 +574,7 @@ $summary
 
         PLAN=$(sed -n '/^## Plan/,/^## /p' "$RUN_LOG" 2>/dev/null | grep -v '^## ' | head -5)
         CHANGES=$(sed -n '/^## Changes/,/^## /p' "$RUN_LOG" 2>/dev/null | grep -v '^## ' | head -10)
+        VERIFICATION=$(sed -n '/^## Verification/,/^## Summary/p' "$RUN_LOG" 2>/dev/null | grep -v '^## Summary' | head -40)
         TESTS_AFTER=$(cd "$REPO" && npm test -- --reporter=dot 2>&1 | grep -oE '[0-9]+ passed' | tail -1 | grep -oE '[0-9]+' || echo "0")
         TESTS_DELTA=$((TESTS_AFTER - TESTS_BEFORE))
 
@@ -592,6 +611,8 @@ $PLAN
 ## Changes
 $CHANGES
 
+$VERIFICATION
+
 ## Commits
 $PR_COMMIT_LIST
 
@@ -614,114 +635,33 @@ PRBODY
         NIGHTLY_PR_COUNT=$((NIGHTLY_PR_COUNT + 1))
         PR_NUMBER=$(echo "$PR_URL" | grep -oE '[0-9]+$' || true)
 
-        # ── Post Layer 1 review comment on PR ────────────────────────────
-        if [ -n "$PR_NUMBER" ] && [ "$L1_MODEL" != "skipped" ]; then
-          L1_FINDINGS_MD=$(format_review_findings "$L1_OUTPUT")
-          L1_VERDICT_EMOJI=$(verdict_emoji "$L1_VERDICT")
-          BLOCKER_COUNT=$(grep -cE "^REVIEW_FIX:(critical|high):" "$L1_OUTPUT" 2>/dev/null || echo "0")
-          NOTE_COUNT=$(grep -cE "^REVIEW_FIX:(medium|low):" "$L1_OUTPUT" 2>/dev/null || echo "0")
+        # ── Fetch Vercel preview URL ─────────────────────────────────────
+        PREVIEW_URL=""
+        if [ -n "$PR_NUMBER" ]; then
+          # Wait for Vercel to deploy the branch (usually < 90s)
+          BRANCH_SHA=$(gh api "repos/$GITHUB_REPO/git/ref/heads/$ITER_BRANCH" --jq '.object.sha' 2>/dev/null || true)
+          for i in 1 2 3 4 5 6 7 8 9; do
+            sleep 10
+            if [ -n "$BRANCH_SHA" ] && [ "$BRANCH_SHA" != "null" ]; then
+              LATEST_DEPLOY_ID=$(gh api "repos/$GITHUB_REPO/deployments?sha=$BRANCH_SHA&environment=Preview&per_page=1" --jq '.[0].id' 2>/dev/null || true)
+              if [ -n "$LATEST_DEPLOY_ID" ] && [ "$LATEST_DEPLOY_ID" != "null" ]; then
+                DEPLOY_STATE=$(gh api "repos/$GITHUB_REPO/deployments/$LATEST_DEPLOY_ID/statuses" --jq '.[0].state // empty' 2>/dev/null || true)
+                if [ "$DEPLOY_STATE" = "success" ]; then
+                  PREVIEW_URL=$(gh api "repos/$GITHUB_REPO/deployments/$LATEST_DEPLOY_ID/statuses" --jq '.[0].environment_url // empty' 2>/dev/null || true)
+                  [ -n "$PREVIEW_URL" ] && break
+                fi
+              fi
+            fi
+          done
+          # Update PR body with preview link if we got one
+          if [ -n "$PREVIEW_URL" ]; then
+            echo "  🔗 Preview: $PREVIEW_URL" | tee -a "$RUN_LOG"
+            gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPO" --body "$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPO" --json body -q .body)
 
-          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPO" --body "## 🔍 Review — Gemini Flash (mechanical)
-
-**Verdict: $L1_VERDICT_EMOJI $L1_VERDICT** | $BLOCKER_COUNT blocker(s) | $NOTE_COUNT note(s)
-
-${L1_FINDINGS_MD:+### Findings
-$L1_FINDINGS_MD
-}${L1_FINDINGS_MD:+
-}---
-_$L1_MODEL | Layer 1_" 2>&1 || echo "  ⚠️ Failed to post Layer 1 comment"
-        fi
-
-        # ── Decide if deep review (Layers 2+3) is needed ────────────────
-        # Run deep review if: Layer 1 found findings, OR high-risk category (feat/fix)
-        L1_HAS_FINDINGS=$(grep -c "^REVIEW_FIX:" "$L1_OUTPUT" 2>/dev/null || echo "0")
-        NEEDS_DEEP_REVIEW=false
-        if [ "$L1_HAS_FINDINGS" -gt 0 ]; then
-          NEEDS_DEEP_REVIEW=true
-          echo "  → Deep review triggered: Layer 1 found $L1_HAS_FINDINGS finding(s)" | tee -a "$RUN_LOG"
-        elif [ "$ISSUE_CATEGORY" = "feat" ] || [ "$ISSUE_CATEGORY" = "fix" ]; then
-          NEEDS_DEEP_REVIEW=true
-          echo "  → Deep review triggered: high-risk category ($ISSUE_CATEGORY)" | tee -a "$RUN_LOG"
-        else
-          echo "  → Skipping deep review: Layer 1 clean + low-risk category ($ISSUE_CATEGORY)" | tee -a "$RUN_LOG"
-        fi
-
-        L2_VERDICT="MERGE"; L2_MODEL="skipped"; L2_STATUS="⏭️"
-        L3_VERDICT="MERGE"; L3_MODEL="skipped"; L3_STATUS="⏭️"
-        PRIOR_FINDINGS_FILE=$(mktemp)
-        cat "$L1_OUTPUT" > "$PRIOR_FINDINGS_FILE" 2>/dev/null
-
-        if [ "$NEEDS_DEEP_REVIEW" = "true" ]; then
-          # ── Layer 2 Review: Gemini Pro (architecture) ──────────────────
-          # Refresh diff in case fix iteration added commits
-          git diff "${DEFAULT_BRANCH:-master}".."$ITER_BRANCH" > "$DIFF_FILE" 2>/dev/null
-
-          L2_OUTPUT="$OUTPUT_DIR/lift-review-$DATE-run${RUN}-layer2.txt"
-          bash "$REVIEW_ADAPTER" layer2 "$DIFF_FILE" "$L2_OUTPUT" --prior-findings "$PRIOR_FINDINGS_FILE" 2>&1 | tee -a "$RUN_LOG"
-
-          L2_VERDICT=$(grep "^REVIEW_VERDICT:" "$L2_OUTPUT" 2>/dev/null | head -1 | sed 's/REVIEW_VERDICT://' || echo "REVIEW")
-          L2_MODEL=$(grep "^REVIEW_MODEL:" "$L2_OUTPUT" 2>/dev/null | head -1 | sed 's/REVIEW_MODEL://' || echo "unknown")
-          L2_STATUS="✅"
-          [ "$L2_MODEL" = "skipped" ] && L2_STATUS="⏭️"
-
-          # Post Layer 2 comment
-          if [ -n "$PR_NUMBER" ] && [ "$L2_MODEL" != "skipped" ]; then
-            L2_FINDINGS_MD=$(format_review_findings "$L2_OUTPUT")
-            L2_CROSSCHECK_MD=$(format_review_crosschecks "$L2_OUTPUT")
-            L2_VERDICT_EMOJI=$(verdict_emoji "$L2_VERDICT")
-
-            gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPO" --body "## 🔍 Review — Gemini Pro (architecture)
-
-**Verdict: $L2_VERDICT_EMOJI $L2_VERDICT**
-
-${L2_CROSSCHECK_MD:+### Cross-check with Layer 1
-$L2_CROSSCHECK_MD
-}
-${L2_FINDINGS_MD:+### New findings
-$L2_FINDINGS_MD
-}
----
-_$L2_MODEL | Layer 2_" 2>&1 || echo "  ⚠️ Failed to post Layer 2 comment"
-          fi
-
-          # ── Layer 3 Review: Claude Sonnet (self-check) ─────────────────
-          cat "$L2_OUTPUT" >> "$PRIOR_FINDINGS_FILE" 2>/dev/null
-
-          L3_OUTPUT="$OUTPUT_DIR/lift-review-$DATE-run${RUN}-layer3.txt"
-          bash "$REVIEW_ADAPTER" layer3 "$DIFF_FILE" "$L3_OUTPUT" --prior-findings "$PRIOR_FINDINGS_FILE" 2>&1 | tee -a "$RUN_LOG"
-
-          L3_VERDICT=$(grep "^REVIEW_VERDICT:" "$L3_OUTPUT" 2>/dev/null | head -1 | sed 's/REVIEW_VERDICT://' || echo "REVIEW")
-          L3_MODEL=$(grep "^REVIEW_MODEL:" "$L3_OUTPUT" 2>/dev/null | head -1 | sed 's/REVIEW_MODEL://' || echo "unknown")
-          L3_STATUS="✅"
-          [ "$L3_MODEL" = "skipped" ] && L3_STATUS="⏭️"
-
-          # Post Layer 3 comment
-          if [ -n "$PR_NUMBER" ] && [ "$L3_MODEL" != "skipped" ]; then
-            L3_FINDINGS_MD=$(format_review_findings "$L3_OUTPUT")
-            L3_CROSSCHECK_MD=$(format_review_crosschecks "$L3_OUTPUT")
-            L3_VERDICT_EMOJI=$(verdict_emoji "$L3_VERDICT")
-
-            gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPO" --body "## 🔍 Review — Claude Sonnet (self-check)
-
-**Verdict: $L3_VERDICT_EMOJI $L3_VERDICT**
-
-${L3_CROSSCHECK_MD:+### Cross-check with Gemini
-$L3_CROSSCHECK_MD
-}
-${L3_FINDINGS_MD:+### New findings
-$L3_FINDINGS_MD
-}
----
-_$L3_MODEL | Layer 3_" 2>&1 || echo "  ⚠️ Failed to post Layer 3 comment"
+## Preview
+Test on your phone: $PREVIEW_URL" 2>/dev/null || true
           fi
         fi
-
-        rm -f "$DIFF_FILE" "$PRIOR_FINDINGS_FILE"
-
-        # ── Compute composite verdict ────────────────────────────────────
-        COMPOSITE_VERDICT=$(pick_worst_verdict "$L1_VERDICT" "$L2_VERDICT" "$L3_VERDICT")
-        # Track for end-of-night summary
-        NIGHTLY_VERDICTS+="${PR_URL}|${COMPOSITE_VERDICT}|${PR_TITLE} "
 
         # ── Slack notification for this iteration ────────────────────────
         DONE_LINKS=$({ grep -oE "ISSUE_DONE:${ISSUE_PREFIX}-[0-9]+\|[^\"]*" "$RUN_LOG" 2>/dev/null || true; } | sort -u | while IFS='|' read -r marker summary; do
@@ -737,28 +677,30 @@ _$L3_MODEL | Layer 3_" 2>&1 || echo "  ⚠️ Failed to post Layer 3 comment"
           echo "  • <https://github.com/$GITHUB_REPO/commit/$HASH|\`$HASH\`> $MSG"
         done)
 
-        # Build review summary line for Slack
-        COMPOSITE_EMOJI=$(verdict_emoji "$COMPOSITE_VERDICT")
-        L1_FINDING_COUNT=$(grep -c "^REVIEW_FIX:" "$L1_OUTPUT" 2>/dev/null || echo "0")
+        # Extract compact verification info for Slack
+        RISK_LINE=$(echo "$VERIFICATION" | grep -A1 '### Risk assessment' | grep -i 'scope\|confidence' | head -2 | sed 's/^- //' | tr '\n' ' ')
+        WATCH_FOR=$(echo "$VERIFICATION" | sed -n '/### What to watch for/,/### /p' | grep -v '^### ' | head -3 | sed 's/^- /• /' | tr '\n' ' ')
 
         thread_send "*Run $RUN complete* — $NEW_COMMITS commit(s)
 ${DONE_LINKS}
 
-🔍 *Review:* Flash $L1_STATUS | Pro $L2_STATUS | Sonnet $L3_STATUS → *$COMPOSITE_EMOJI $COMPOSITE_VERDICT*
-${L1_FINDING_COUNT:+  $L1_FINDING_COUNT finding(s) from Flash}
+🔍 Reviewed inline (Gemini 3.1 Pro on commit, Codex fallback)
 
 ${ITER_COMMITS:+*Commits:*
 $ITER_COMMITS}
-<$PR_URL|View PR>"
+${RISK_LINE:+📋 $RISK_LINE
+}${WATCH_FOR:+⚠️ *Watch for:* $WATCH_FOR
+}${PREVIEW_URL:+📱 *Preview:* <$PREVIEW_URL|Test on phone>
+}<$PR_URL|View PR>"
 
         # Collect metrics
         ITER_END=$(date +%s)
         ITER_DURATION=$((ITER_END - ITER_START))
-        DONE_COUNT=$(grep -oE "ISSUE_DONE:${ISSUE_PREFIX}-[0-9]+" "$RUN_LOG" 2>/dev/null | wc -l | tr -d ' ' || echo "0")
-        SKIPPED_COUNT=$(grep -oE "ISSUE_SKIPPED:${ISSUE_PREFIX}-[0-9]+" "$RUN_LOG" 2>/dev/null | wc -l | tr -d ' ' || echo "0")
-        CREATED_COUNT=$({ grep -oE 'ISSUE_CREATE:[1-4]:' "$RUN_LOG" 2>/dev/null || true; } | wc -l | tr -d ' ')
+        DONE_COUNT=$(grep -c "ISSUE_DONE:${ISSUE_PREFIX}-[0-9]" "$RUN_LOG" 2>/dev/null || echo "0")
+        SKIPPED_COUNT=$(grep -c "ISSUE_SKIPPED:${ISSUE_PREFIX}-[0-9]" "$RUN_LOG" 2>/dev/null || echo "0")
+        CREATED_COUNT=$(grep -c 'ISSUE_CREATE:[1-4]:' "$RUN_LOG" 2>/dev/null || echo "0")
         BUILD_SIZE=$(cd "$REPO" && npm run build 2>&1 | grep -oE '[0-9]+\.[0-9]+ KiB' | head -1 | grep -oE '[0-9.]+' || echo "")
-        echo "$DATE,$RUN,$ITER_START_FMT,$(date +%H:%M:%S),$ITER_DURATION,$NEW_COMMITS,$TESTS_BEFORE,$TESTS_AFTER,$TESTS_DELTA,$DONE_COUNT,$SKIPPED_COUNT,$CREATED_COUNT,$BUILD_SIZE,true" >> "$METRICS_FILE"
+        echo "$DATE,$RUN,$ITER_START_FMT,$(date +%H:%M:%S),$ITER_DURATION,$NEW_COMMITS,$TESTS_BEFORE,$TESTS_AFTER,$TESTS_DELTA,$DONE_COUNT,$SKIPPED_COUNT,$CREATED_COUNT,0,$BUILD_SIZE,true" >> "$METRICS_FILE"
       fi
     fi
   else
@@ -767,7 +709,7 @@ $ITER_COMMITS}
     echo "❌ Run $RUN failed at $(date) (failure $FAILURES/$MAX_CONSECUTIVE_FAILURES)" | tee -a "$RUN_LOG"
     ITER_END=$(date +%s)
     ITER_DURATION=$((ITER_END - ITER_START))
-    echo "$DATE,$RUN,$ITER_START_FMT,$(date +%H:%M:%S),$ITER_DURATION,0,$TESTS_BEFORE,$TESTS_BEFORE,0,0,0,0,,false" >> "$METRICS_FILE"
+    echo "$DATE,$RUN,$ITER_START_FMT,$(date +%H:%M:%S),$ITER_DURATION,0,$TESTS_BEFORE,$TESTS_BEFORE,0,0,0,0,0,,false" >> "$METRICS_FILE"
     # Clean up empty branch
     git checkout "${DEFAULT_BRANCH:-master}" 2>/dev/null || true
     git branch -D "$ITER_BRANCH" 2>/dev/null || true
@@ -946,58 +888,17 @@ for pr_url in $NIGHTLY_PRS; do
 "
 done
 
-# Categorize PRs by verdict for the summary
-MERGE_PRS=""
-REVIEW_PRS=""
-for entry in $NIGHTLY_VERDICTS; do
-  pr_url=$(echo "$entry" | cut -d'|' -f1)
-  verdict=$(echo "$entry" | cut -d'|' -f2)
-  title=$(echo "$entry" | cut -d'|' -f3- | tr '_' ' ')
-  pr_num=$(echo "$pr_url" | grep -oE '[0-9]+$' || true)
-  case "$verdict" in
-    MERGE)        MERGE_PRS+="  ✅ <$pr_url|#$pr_num> $title
-" ;;
-    DO_NOT_MERGE) REVIEW_PRS+="  🚫 <$pr_url|#$pr_num> $title (DO NOT MERGE)
-" ;;
-    *)            REVIEW_PRS+="  ⚠️ <$pr_url|#$pr_num> $title (REVIEW)
-" ;;
-  esac
-done
-
 # Send completion summary to thread
 thread_send "✅ *Build Complete — $DATE*
 
 *Stats:* $RUN iterations | ${BUILDER_RUNTIME_MIN}m runtime | $TOTAL_COMMITS commits | $FINAL_TESTS
 *Tokens:* ${NIGHTLY_OUTPUT_TOKENS} output (avg ${AVG_OUTPUT}/night over ${TREND_DAYS}d)
 
-${MERGE_PRS:+*Ready to merge:*
-$MERGE_PRS}${REVIEW_PRS:+*Needs review:*
-$REVIEW_PRS}
+${PR_LINKS:+*PRs:*
+$PR_LINKS}
 ${ALL_DONE_LINKS}
 
 <$(bash "$TRACKER" board-url)|Issue Board>"
-
-# Draft email summary
-claude --dangerously-skip-permissions -p "Create a Gmail draft (do NOT send) to aschung212@gmail.com with subject '$PROJECT_NAME Overnight Digest — $DATE' and this body as text/plain. Use the gmail_create_draft tool. Do not add any extra commentary:
-
-$PROJECT_NAME Overnight Digest — $DATE
-
-Iterations: $RUN
-PRs created: $NIGHTLY_PR_COUNT
-Total commits: $TOTAL_COMMITS
-Tests: $FINAL_TESTS
-Issues closed: $ISSUE_DONE_COUNT
-Issues in progress: $ISSUE_PROGRESS_COUNT
-
-PRs:
-$(for pr_url in $NIGHTLY_PRS; do echo "  $pr_url"; done)
-
-Issue board: $(bash "$TRACKER" board-url)
-
-Run-by-run:
-$RUN_SUMMARIES
-
-Next: Review PRs on GitHub, spot-check preview deploys, approve and merge." --max-turns 5 2>&1 | tail -5
 
 echo "✅ Notifications sent."
 

@@ -36,10 +36,10 @@ case "$cmd" in
     done
 
     if [ -n "$JSON_OUTPUT" ]; then
-      claude --dangerously-skip-permissions --output-format json --model "$MODEL" \
+      claude --allowedTools "Read Edit Write Glob Grep Bash(git:*) Bash(gh:*) Bash(npm:*) Bash(npx:*) Bash(ls:*) Bash(cat:*) Bash(head:*) Bash(tail:*) Bash(wc:*) Bash(mkdir:*)" --output-format json --model "$MODEL" \
         -p "$PROMPT_TEXT" --max-turns "$MAX_TURNS" 2>&1 > "$JSON_OUTPUT"
     else
-      claude --dangerously-skip-permissions --model "$MODEL" \
+      claude --allowedTools "Read Edit Write Glob Grep Bash(git:*) Bash(gh:*) Bash(npm:*) Bash(npx:*) Bash(ls:*) Bash(cat:*) Bash(head:*) Bash(tail:*) Bash(wc:*) Bash(mkdir:*)" --model "$MODEL" \
         -p "$PROMPT_TEXT" --max-turns "$MAX_TURNS" 2>&1
     fi
     ;;

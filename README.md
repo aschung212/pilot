@@ -11,7 +11,7 @@ Every night, Pilot:
 1. **Discovers** improvement opportunities by researching competitors, UI trends, accessibility standards, and more (Gemini + Claude)
 2. **Triages** each discovery — approves, enhances, rescopes, skips, or flags for your review (Gemini, Claude fallback)
 3. **Implements** the highest-priority approved issues — writes code, runs tests, commits, creates PRs (Claude Opus)
-4. **Reviews** its own PRs with a 3-layer cross-model review system (Gemini Flash mechanical gate, Gemini Pro architecture review, Claude Sonnet self-check with failover chains)
+4. **Reviews** its own PRs with Gemini 3.1 Pro adversarial review (Codex fallback)
 5. **Cleans up** — archives completed issues, deduplicates the backlog
 6. **Self-tunes** — adjusts iteration budgets, token limits, and review quality based on outcomes
 
@@ -94,6 +94,21 @@ The builder uses a **git worktree** so it never touches your working directory �
 
 See [docs/architecture.md](docs/architecture.md) for the full design.
 
+## Security
+
+Agentic systems that fetch web content and execute code are vulnerable to **indirect prompt injection** — malicious websites can embed instructions that flow through the research pipeline into code execution. Pilot mitigates this at multiple layers:
+
+| Layer | Defense | What it blocks |
+|-------|---------|---------------|
+| **Tool allowlists** | Each agent gets only the tools it needs (`--allowedTools`) | Arbitrary shell, curl, env var access, network exfil |
+| **Untrusted content fencing** | Web research is explicitly marked as untrusted input with instructions to extract facts only | LLM following injected instructions |
+| **Pre-push security scan** | Diffs are scanned for exfil, eval, obfuscation, and beacon patterns before pushing | Malicious code reaching the remote |
+| **Granular git permissions** | Specific git subcommands only (add, commit, push, checkout — no reset, clean, etc.) | Destructive git operations |
+| **Least-privilege agents** | Discovery: read-only. Triage: read-only. Review: read-only. Builder: read/write/git. | Lateral movement between agents |
+| **Slack alerting** | Security scan failures notify the automation channel | Silent attacks |
+
+No agent uses `--dangerously-skip-permissions`. Secrets live in `~/.zshenv`, never in the repo.
+
 ## Adapters
 
 Components are swappable via thin adapter scripts:
@@ -103,8 +118,8 @@ Components are swappable via thin adapter scripts:
 | Issue Tracker | Linear | GitHub Issues, Jira |
 | Notifications | Slack | Discord, email |
 | Code Generation | Claude Opus | — |
-| Research | Gemini Flash | ChatGPT, Perplexity |
-| Code Review | 3-layer (Flash + Pro + Sonnet) | — |
+| Research | Gemini 3.1 Pro | ChatGPT, Perplexity |
+| Code Review | Gemini 3.1 Pro (Codex fallback) | — |
 
 To swap a tool, rewrite one adapter file (~20 lines). No pipeline scripts change.
 

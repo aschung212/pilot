@@ -29,7 +29,7 @@ LOG_COMPONENT="triage"
 
 REPO="${REPO_PATH:?REPO_PATH not set — run init.sh}"
 DATE=$(date +%Y-%m-%d)
-OUTPUT_DIR="${OUTPUT_DIR:-$HOME/Documents/Claude/outputs}"
+OUTPUT_DIR="${OUTPUT_DIR:-$PILOT_DIR/data}"
 TRIAGE_LOG="$OUTPUT_DIR/lift-triage-$DATE.md"
 DRY_RUN="${1:-}"
 
@@ -48,7 +48,7 @@ PRODUCT_DECISIONS=$(cat "$DECISIONS_FILE" 2>/dev/null || echo "No product decisi
 
 # Get all backlog/unstarted issues
 ALL_ISSUES=$(bash "$TRACKER" list backlog unstarted)
-ISSUE_IDS=$(echo "$ALL_ISSUES" | grep -oE "${LINEAR_TEAM}-[0-9]+" || true)
+ISSUE_IDS=$(echo "$ALL_ISSUES" | grep -oE "${ISSUE_PREFIX}-[0-9]+" || true)
 
 if [ -z "$ISSUE_IDS" ]; then
   echo "  No issues to triage." | tee -a "$TRIAGE_LOG"
@@ -100,7 +100,7 @@ for issue_id in $UNTRIAGED_IDS; do
 
   # Get full issue details
   ISSUE_DETAIL=$(bash "$TRACKER" view "$issue_id" || echo "Could not fetch issue")
-  ISSUE_TITLE=$(echo "$ISSUE_DETAIL" | head -1 | sed "s/^# *${LINEAR_TEAM}-[0-9]*: *//" || echo "$issue_id")
+  ISSUE_TITLE=$(echo "$ISSUE_DETAIL" | head -1 | sed "s/^# *${ISSUE_PREFIX}-[0-9]*: *//" || echo "$issue_id")
   [ -z "$ISSUE_TITLE" ] && ISSUE_TITLE="$issue_id"
 
   # Load triage learnings (self-improving context from past corrections)
@@ -145,7 +145,9 @@ SUB_ISSUE_2_DESCRIPTION: ...
   if ! echo "$TRIAGE_RESULT" | grep -qE 'VERDICT: (APPROVE|ENHANCE|SKIP|FLAG|RESCOPE)'; then
     echo "    (Gemini failed, falling back to Claude Sonnet)" | tee -a "$TRIAGE_LOG"
     TRIAGE_MODEL="claude-sonnet"
-    TRIAGE_RESULT=$(claude --dangerously-skip-permissions --model sonnet -p "$TRIAGE_PROMPT" --max-turns 3 2>&1 || true)
+    # Triage only needs read access — no writes, no shell beyond git log
+    TRIAGE_ALLOWED_TOOLS="Read Glob Grep Bash(git log:*) Bash(git diff:*) Bash(ls:*) Bash(cat:*)"
+    TRIAGE_RESULT=$(claude --allowedTools $TRIAGE_ALLOWED_TOOLS --model sonnet -p "$TRIAGE_PROMPT" --max-turns 3 2>&1 || true)
   fi
 
   # Parse verdict
@@ -238,7 +240,7 @@ _Automated triage — this issue needs a human decision before the builder can p
         SUB_DESC="${SUB_DESC:-(no description)} (Split from ${issue_id}: ${ISSUE_TITLE})"
 
         CREATE_OUTPUT=$(bash "$TRACKER" create "$SUB_TITLE" "$SUB_PRIORITY" --state unstarted --description "$SUB_DESC" || echo "FAILED")
-        SUB_ID=$(echo "$CREATE_OUTPUT" | grep -oE "${LINEAR_TEAM}-[0-9]+" | head -1)
+        SUB_ID=$(echo "$CREATE_OUTPUT" | grep -oE "${ISSUE_PREFIX}-[0-9]+" | head -1)
 
         if [ -n "$SUB_ID" ]; then
           SUB_ISSUE_COUNT=$((SUB_ISSUE_COUNT + 1))
@@ -306,7 +308,7 @@ if [ "$DRY_RUN" != "--dry-run" ]; then
 ✅ $APPROVED approved | ✨ $ENHANCED enhanced | 🔀 $RESCOPED rescoped | ⏭️ $SKIPPED skipped | 🚩 $FLAGGED flagged
 
 $(echo -e "$RESULTS")
-<https://linear.app/${LINEAR_ORG}|Linear Board>"
+<$(bash "$TRACKER" board-url)|Issue Board>"
 fi
 
 echo ""
