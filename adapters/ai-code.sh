@@ -36,10 +36,10 @@ case "$cmd" in
     done
 
     if [ -n "$JSON_OUTPUT" ]; then
-      claude --allowedTools "Read Edit Write Glob Grep Bash(git:*) Bash(gh:*) Bash(npm:*) Bash(npx:*) Bash(ls:*) Bash(cat:*) Bash(head:*) Bash(tail:*) Bash(wc:*) Bash(mkdir:*)" --output-format json --model "$MODEL" \
+      claude --allowedTools "Read,Edit,Write,Glob,Grep,Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(git checkout:*),Bash(git branch:*),Bash(git log:*),Bash(git diff:*),Bash(git status:*),Bash(git fetch:*),Bash(git merge:*),Bash(git show:*),Bash(git rev-parse:*),Bash(gh:*),Bash(npm:*),Bash(npx:*),Bash(ls:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(mkdir:*)" --output-format json --model "$MODEL" \
         -p "$PROMPT_TEXT" --max-turns "$MAX_TURNS" 2>&1 > "$JSON_OUTPUT"
     else
-      claude --allowedTools "Read Edit Write Glob Grep Bash(git:*) Bash(gh:*) Bash(npm:*) Bash(npx:*) Bash(ls:*) Bash(cat:*) Bash(head:*) Bash(tail:*) Bash(wc:*) Bash(mkdir:*)" --model "$MODEL" \
+      claude --allowedTools "Read,Edit,Write,Glob,Grep,Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(git checkout:*),Bash(git branch:*),Bash(git log:*),Bash(git diff:*),Bash(git status:*),Bash(git fetch:*),Bash(git merge:*),Bash(git show:*),Bash(git rev-parse:*),Bash(gh:*),Bash(npm:*),Bash(npx:*),Bash(ls:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(mkdir:*)" --model "$MODEL" \
         -p "$PROMPT_TEXT" --max-turns "$MAX_TURNS" 2>&1
     fi
     ;;

@@ -146,7 +146,7 @@ SUB_ISSUE_2_DESCRIPTION: ...
     echo "    (Gemini failed, falling back to Claude Sonnet)" | tee -a "$TRIAGE_LOG"
     TRIAGE_MODEL="claude-sonnet"
     # Triage only needs read access — no writes, no shell beyond git log
-    TRIAGE_ALLOWED_TOOLS="Read Glob Grep Bash(git log:*) Bash(git diff:*) Bash(ls:*) Bash(cat:*)"
+    TRIAGE_ALLOWED_TOOLS="Read,Glob,Grep,Bash(git log:*),Bash(git diff:*),Bash(ls:*),Bash(cat:*)"
     TRIAGE_RESULT=$(claude --allowedTools $TRIAGE_ALLOWED_TOOLS --model sonnet -p "$TRIAGE_PROMPT" --max-turns 3 2>&1 || true)
   fi
 

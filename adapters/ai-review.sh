@@ -131,10 +131,10 @@ run_claude() {
   local start_time=$(date +%s)
 
   if command -v gtimeout >/dev/null 2>&1; then
-    gtimeout "$timeout_sec" claude --allowedTools "Read Glob Grep" --output-format json --model "$model" \
+    gtimeout "$timeout_sec" claude --allowedTools "Read,Glob,Grep" --output-format json --model "$model" \
       -p "$(cat "$prompt_file")" --max-turns 1 < /dev/null > "$json_file" 2>"$err_file"
   else
-    claude --allowedTools "Read Glob Grep" --output-format json --model "$model" \
+    claude --allowedTools "Read,Glob,Grep" --output-format json --model "$model" \
       -p "$(cat "$prompt_file")" --max-turns 1 < /dev/null > "$json_file" 2>"$err_file" &
     local pid=$!
     ( sleep "$timeout_sec" && kill "$pid" 2>/dev/null ) &
