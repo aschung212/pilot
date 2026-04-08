@@ -41,6 +41,11 @@ The pipeline includes a **test suite** (113 bats tests, two-tier execution, pre-
 
 Each stage runs independently on its own schedule. Your issue tracker (Linear, GitHub Issues) serves as the shared state store — like a message queue between microservices.
 
+<p align="center">
+  <img src="docs/screenshots/slack-overnight-build.png" alt="Slack channel showing an overnight build run — each agent reports independently" width="800" />
+</p>
+<p align="center"><em>Slack channel showing an overnight build run — each agent reports independently.</em></p>
+
 ## Quickstart
 
 ```bash
