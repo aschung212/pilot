@@ -4,7 +4,7 @@ tags:
   - pilot
   - automation
   - responsibilities
-updated: 2026-04-02
+updated: 2026-04-22
 ---
 
 # Aaron's Pilot Responsibilities
@@ -142,6 +142,12 @@ updated: 2026-04-02
 ---
 
 ## Changelog
+
+### 2026-04-22 — Builder permission block fix (0-PR outage)
+- **Fixed:** Builder had been stopping after 2 iterations with 0 commits since the 2026-04-08 security hardening. Root cause: `$BUILDER_ALLOWED_TOOLS` was passed unquoted to `claude --allowedTools`, so the shell word-split on the space inside patterns like `Bash(git add:*)`. Claude only received `Read,Edit,Write,Glob,Grep,Bash(git` as its allowlist — every git-write, npm test, and npm build was then blocked. Run logs literally said *"all git write operations and npm scripts are being blocked by the permission system."*
+- Quoted `"$BUILDER_ALLOWED_TOOLS"` / `"$DISCOVER_ALLOWED_TOOLS"` / `"$TRIAGE_ALLOWED_TOOLS"` in `scripts/builder.sh` (3 call sites), `scripts/discover.sh`, `scripts/triage.sh`.
+- **Cleanup:** `~/development/lift-builder` worktree was carrying uncommitted LIFT-325 leftovers (App.vue, index.css, cssRegression.test.ts) and was 14 commits behind master. Reset and fast-forwarded so tonight's run starts clean.
+- **Action needed:** None. Builder should produce PRs again tonight (Wed 2026-04-22 23:00).
 
 ### 2026-03-31
 - Replaced all Slack notifications with webhooks (zero tokens)

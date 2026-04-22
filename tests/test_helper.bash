@@ -27,6 +27,8 @@ setup() {
   export LINEAR_TEAM="TEST"
   export LINEAR_PROJECT="TestProject"
   export LINEAR_ORG="testorg"
+  export ISSUE_PREFIX="TEST"
+  export TRACKER_ADAPTER="linear"
   export SLACK_CHANNEL_AUTOMATION="C_TEST_AUTO"
   export SLACK_CHANNEL_REVIEW="C_TEST_REVIEW"
   export SLACK_CHANNEL_CHANGELOG="C_TEST_LOG"

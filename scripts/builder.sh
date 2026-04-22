@@ -216,7 +216,7 @@ $detail
   # Enable review-router builder mode — Gemini 3.1 Pro review on commit, Codex fallback
   export PILOT_BUILDER=1
   export PILOT_REVIEW_LOG="$OUTPUT_DIR/lift-review-$DATE-run${RUN}.log"
-  if claude --allowedTools $BUILDER_ALLOWED_TOOLS --output-format json -p "$(cat <<PROMPT
+  if claude --allowedTools "$BUILDER_ALLOWED_TOOLS" --output-format json -p "$(cat <<PROMPT
 You are iteration $RUN of the overnight self-improving enhancer for $PROJECT_NAME at $REPO. This is Aaron Chung's portfolio project — he's an ex-AWS SDE2 targeting SWE roles at companies like Notion, Airtable, and Linear.
 
 You are running in a loop. Previous iterations tonight and from recent days have already made improvements. Your job is to find the NEXT most impactful thing to do that hasn't been done yet.
@@ -498,7 +498,7 @@ $CLAUDE_RESULT"
               # Merge conflict — ask Claude to resolve
               CONFLICT_FILES=$(git diff --name-only --diff-filter=U 2>/dev/null || true)
               if [ -n "$CONFLICT_FILES" ]; then
-                claude --allowedTools $BUILDER_ALLOWED_TOOLS -p "You are in the $REPO repo on branch $ITER_BRANCH. There are merge conflicts with master in these files:
+                claude --allowedTools "$BUILDER_ALLOWED_TOOLS" -p "You are in the $REPO repo on branch $ITER_BRANCH. There are merge conflicts with master in these files:
 $CONFLICT_FILES
 
 Resolve all merge conflicts, keeping the intent of both sides. Then run npm test and npm run build to verify. Commit the resolution with message 'fix: resolve merge conflicts with master'." --max-turns 30 2>&1 | tee -a "$RUN_LOG" || true
@@ -513,7 +513,7 @@ Resolve all merge conflicts, keeping the intent of both sides. Then run npm test
             if [ "$CI_PASS" = "false" ]; then
               FAIL_SNIPPET=$(echo "$BUILD_OUT" | tail -30)
               TEST_SNIPPET=$(echo "$TEST_OUT" | tail -30)
-              claude --allowedTools $BUILDER_ALLOWED_TOOLS -p "You are in the $REPO repo on branch $ITER_BRANCH. The CI build or tests are failing. Fix the issues and commit the fix.
+              claude --allowedTools "$BUILDER_ALLOWED_TOOLS" -p "You are in the $REPO repo on branch $ITER_BRANCH. The CI build or tests are failing. Fix the issues and commit the fix.
 
 Build output (last 30 lines):
 $FAIL_SNIPPET
