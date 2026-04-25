@@ -143,6 +143,26 @@ updated: 2026-04-22
 
 ## Changelog
 
+### 2026-04-24 — Health report fixes (data was lying for ~3 weeks)
+Two compounding bugs caused the weekly health report to silently understate pipeline activity since the orchestrator decommission on 2026-04-02:
+
+1. **`grep -c || echo "0"` produced multiline output.** When `grep -c PATTERN file` finds no matches it prints `0\n` AND exits 1, so the `|| echo "0"` then appended a SECOND `0\n`. That double-zero broke the per-iteration row in `lift-metrics.csv` across 2-3 lines. Python's CSV reader saw the orphan halves as separate rows with `success=None`, so `successful = 0`. Bug existed in 6 call sites (builder.sh ×4, health-report.sh ×1, digest.sh ×2). Fixed by piping through `head -1`.
+2. **`nights_run` and `avg_pipeline_min` read from a dead CSV.** Both were sourced from `lift-runtime.csv`, which only `orchestrator.sh` writes to. Orchestrator was decommissioned 2026-04-02 — the CSV has been frozen at one row from 2026-04-01 ever since. Re-derived `nights_run` from distinct dates in `lift-metrics.csv`; renamed and re-derived `avg_builder_min` as `sum(duration_sec) / nights`. (Discovery+triage runtime not included — they were a small fraction of total time anyway.)
+3. **`BACKLOG_COUNT` in health-report.sh greppped for `MAS-` (Linear) instead of `LIFT-`.** Stale reference left over from the GitHub-tracker migration. Fixed to use `${ISSUE_PREFIX}`.
+
+Repaired `lift-metrics.csv` in place (one-shot script reconstructed 46 split rows). Backup at `data/lift-metrics.csv.bak-1777095849`. Past 14 days now show 18 iterations (12 successful, 6 stalls) and 13 commits — vs the report's previous claim of 0 successful and 0 commits. Added 4 new bats tests for `health-report.sh`.
+
+**Action needed:** None. Sunday's report should show real numbers. If you see "Nights run: 0" again, escalate.
+
+### 2026-04-24 — PR screenshot capture
+- **New:** Builder now captures local screenshots of routes affected by each PR for pre-merge review.
+- Builder Claude declares affected routes via `SCREENSHOT_ROUTE:/path` markers in its output (or `SCREENSHOT_ROUTE:NONE` for backend-only changes).
+- After PR creation, `scripts/capture-pr-screenshots.sh` boots a temporary `npm run dev` server in the worktree on a free port, signs in via `.authDevBtn`, and uses Playwright (already installed in Lift) to capture each route at iPhone 14 Pro viewport.
+- Output saved to `~/development/pilot/data/pr-screenshots/pr-{NUM}-{ISSUE}-{slug}/` with numbered PNGs and an `INDEX.md`. Folder path is included in the per-iteration Slack thread message.
+- New files: `scripts/capture-pr-screenshots.sh`, `scripts/capture-pr-screenshots.mjs`. `scripts/builder.sh` modified for prompt + integration.
+- Best-effort: failures (no Playwright, dev server crash, route timeout) are logged but never block PR creation.
+- **Action needed:** Before merging a PR, browse the screenshot folder in Finder Quick Look (`open ~/development/pilot/data/pr-screenshots/`) — it shows what changed visually without needing to load the Vercel preview on your phone.
+
 ### 2026-04-22 — Builder permission block fix (0-PR outage)
 - **Fixed:** Builder had been stopping after 2 iterations with 0 commits since the 2026-04-08 security hardening. Root cause: `$BUILDER_ALLOWED_TOOLS` was passed unquoted to `claude --allowedTools`, so the shell word-split on the space inside patterns like `Bash(git add:*)`. Claude only received `Read,Edit,Write,Glob,Grep,Bash(git` as its allowlist — every git-write, npm test, and npm build was then blocked. Run logs literally said *"all git write operations and npm scripts are being blocked by the permission system."*
 - Quoted `"$BUILDER_ALLOWED_TOOLS"` / `"$DISCOVER_ALLOWED_TOOLS"` / `"$TRIAGE_ALLOWED_TOOLS"` in `scripts/builder.sh` (3 call sites), `scripts/discover.sh`, `scripts/triage.sh`.
