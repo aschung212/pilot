@@ -2,8 +2,8 @@
 # Weekly Health Report — aggregates metrics across all pipeline components.
 # No AI tokens consumed — pure bash + python3 data analysis.
 #
-# Reads: lift-runtime.csv, lift-usage-tracking.csv, lift-metrics.csv,
-#        lift-tune-log.csv, lift-discovery-metrics.csv
+# Reads: lift-metrics.csv, lift-usage-tracking.csv, lift-tune-log.csv,
+#        lift-discovery-metrics.csv
 # Writes: lift-weekly-health-YYYY-MM-DD.md
 # Posts: summary to #system-changelog via webhook
 #
@@ -29,7 +29,6 @@ OUTPUT_DIR="${OUTPUT_DIR:-$HOME/Documents/Claude/outputs}"
 REPORT="$OUTPUT_DIR/lift-weekly-health-$DATE.md"
 
 # CSVs
-RUNTIME_CSV="$OUTPUT_DIR/lift-runtime.csv"
 USAGE_CSV="$OUTPUT_DIR/lift-usage-tracking.csv"
 METRICS_CSV="$OUTPUT_DIR/lift-metrics.csv"
 TUNE_LOG="$OUTPUT_DIR/lift-tune-log.csv"
@@ -56,21 +55,25 @@ def read_csv(path):
     except FileNotFoundError:
         return []
 
-# ── Runtime ──
-runtime_rows = [r for r in read_csv(f'{output_dir}/lift-runtime.csv') if r.get('date', '') >= week_start]
-total_pipeline_min = sum(int(r.get('total_sec', 0)) for r in runtime_rows) / 60
-avg_pipeline_min = total_pipeline_min / len(runtime_rows) if runtime_rows else 0
-nights_run = len(runtime_rows)
-
 # ── Builder metrics ──
+# Source of truth: lift-metrics.csv. The old lift-runtime.csv was written by
+# orchestrator.sh, which was decommissioned 2026-04-02 in favor of independent
+# launchd services — that CSV has been frozen ever since. We derive nights_run
+# and average runtime directly from the per-iteration rows now.
 metrics_rows = [r for r in read_csv(f'{output_dir}/lift-metrics.csv') if r.get('date', '') >= week_start]
-total_commits = sum(int(r.get('commits', 0)) for r in metrics_rows)
+total_commits = sum(int(r.get('commits', 0) or 0) for r in metrics_rows)
 total_iterations = len(metrics_rows)
 successful = sum(1 for r in metrics_rows if r.get('success') == 'true')
 stalls = sum(1 for r in metrics_rows if r.get('success') == 'stall')
 failures = sum(1 for r in metrics_rows if r.get('success') == 'false')
 stall_rate = stalls / total_iterations * 100 if total_iterations else 0
 commits_per_iter = total_commits / successful if successful else 0
+
+# Nights = distinct dates with at least one builder iteration.
+nights_run = len({r['date'] for r in metrics_rows if r.get('date')})
+# Builder runtime per night = sum of iteration durations / nights.
+total_builder_sec = sum(int(r.get('duration_sec', 0) or 0) for r in metrics_rows)
+avg_builder_min = (total_builder_sec / nights_run / 60) if nights_run else 0
 
 # ── Token usage ──
 usage_rows = [r for r in read_csv(f'{output_dir}/lift-usage-tracking.csv') if r.get('date', '') >= week_start]
@@ -102,7 +105,7 @@ if nights_run == 0:
 report = {
     'period': f'{week_start} to {now.strftime("%Y-%m-%d")}',
     'nights_run': nights_run,
-    'avg_pipeline_min': round(avg_pipeline_min, 1),
+    'avg_builder_min': round(avg_builder_min, 1),
     'total_iterations': total_iterations,
     'successful_iterations': successful,
     'stalls': stalls,
@@ -125,7 +128,7 @@ PYEOF
 # Parse JSON into bash variables
 PERIOD=$(echo "$REPORT_DATA" | python3 -c "import json,sys; print(json.load(sys.stdin)['period'])")
 NIGHTS=$(echo "$REPORT_DATA" | python3 -c "import json,sys; print(json.load(sys.stdin)['nights_run'])")
-AVG_MIN=$(echo "$REPORT_DATA" | python3 -c "import json,sys; print(json.load(sys.stdin)['avg_pipeline_min'])")
+AVG_MIN=$(echo "$REPORT_DATA" | python3 -c "import json,sys; print(json.load(sys.stdin)['avg_builder_min'])")
 ITERATIONS=$(echo "$REPORT_DATA" | python3 -c "import json,sys; print(json.load(sys.stdin)['total_iterations'])")
 SUCCESSFUL=$(echo "$REPORT_DATA" | python3 -c "import json,sys; print(json.load(sys.stdin)['successful_iterations'])")
 STALLS=$(echo "$REPORT_DATA" | python3 -c "import json,sys; print(json.load(sys.stdin)['stalls'])")
@@ -141,7 +144,7 @@ TUNE_CHANGES=$(echo "$REPORT_DATA" | python3 -c "import json,sys; print(json.loa
 ANOMALIES=$(echo "$REPORT_DATA" | python3 -c "import json,sys; a=json.load(sys.stdin)['anomalies']; print('\n'.join(f'  ⚠️ {x}' for x in a) if a else '  ✅ No anomalies')")
 
 # Current backlog depth
-BACKLOG_COUNT=$(bash "$TRACKER" list backlog unstarted started 2>/dev/null | grep -c "${LINEAR_TEAM}-" || echo "0")
+BACKLOG_COUNT=$({ bash "$TRACKER" list backlog unstarted started 2>/dev/null | grep -c "${ISSUE_PREFIX}-" || echo "0"; } | head -1)
 
 # Check launchd services are loaded
 LOADED_SERVICES=$(launchctl list 2>/dev/null || true)
@@ -166,7 +169,7 @@ cat > "$REPORT" << REPORT_EOF
 
 ## Pipeline Activity
 - **Nights run:** $NIGHTS
-- **Avg pipeline runtime:** ${AVG_MIN}m
+- **Avg builder runtime:** ${AVG_MIN}m
 - **Builder iterations:** $ITERATIONS ($SUCCESSFUL successful, $STALLS stalls)
 - **Stall rate:** ${STALL_RATE}%
 - **Commits:** $COMMITS (${COMMITS_PER}/iteration)
@@ -207,7 +210,7 @@ _${PERIOD}_
 
 *Pipeline*
   • Nights run: *$NIGHTS*
-  • Avg runtime: *${AVG_MIN}m*
+  • Avg builder runtime: *${AVG_MIN}m*
   • Iterations: *$ITERATIONS* ($SUCCESSFUL successful, $STALLS stalls)
   • ${STALL_EMOJI} Stall rate: *${STALL_RATE}%*
   • ${COMMITS_EMOJI} Commits: *$COMMITS* (${COMMITS_PER}/iteration)

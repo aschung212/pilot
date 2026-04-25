@@ -371,6 +371,17 @@ Specific things that could go wrong with this change. Think about: theme renderi
 - **Confidence:** How confident are you this is correct (high/medium/low and why)
 - **Rollback:** If this breaks something, what is the revert path
 
+## Screenshots
+List the routes/screens this change affects so the pipeline can auto-capture screenshots from a local dev server. Output one route per line, prefixed with SCREENSHOT_ROUTE: and starting with /. Only include routes whose VISUAL output changed.
+
+Examples:
+SCREENSHOT_ROUTE:/
+SCREENSHOT_ROUTE:/settings/themes
+SCREENSHOT_ROUTE:/workout
+
+If the change is purely backend/data/test/refactor with no visual impact, output exactly:
+SCREENSHOT_ROUTE:NONE
+
 ## Summary
 - Issue: LIFT-XXX (title)
 - Tests: X passing
@@ -663,6 +674,25 @@ Test on your phone: $PREVIEW_URL" 2>/dev/null || true
           fi
         fi
 
+        # ── Capture local screenshots of affected routes ──────────────────
+        # Saved to ~/development/pilot/data/pr-screenshots/pr-NUM-ISSUE-slug/
+        # so Aaron can browse them in Finder before merging.
+        SCREENSHOT_DIR=""
+        SCREENSHOT_ROUTES=$({ grep -oE '^SCREENSHOT_ROUTE:[^ ]+' "$RUN_LOG" 2>/dev/null || true; } | sed 's|^SCREENSHOT_ROUTE:||' | grep -v '^NONE$' | sort -u)
+        if [ -n "$SCREENSHOT_ROUTES" ] && [ -n "$PR_NUMBER" ]; then
+          # Build a folder name like: pr-42-LIFT-123-fix-theme-toggle
+          PR_SLUG=$(echo "$PR_TITLE" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-\|-$//g' | head -c 40)
+          SCREENSHOT_SUBDIR="pr-${PR_NUMBER}${PRIMARY_ISSUE:+-$PRIMARY_ISSUE}${PR_SLUG:+-$PR_SLUG}"
+          SCREENSHOT_DIR="$OUTPUT_DIR/pr-screenshots/$SCREENSHOT_SUBDIR"
+          # Convert newline-separated routes into args for the capture script.
+          # shellcheck disable=SC2086
+          PR_TITLE="$PR_TITLE" PR_URL="$PR_URL" ISSUE_ID="$PRIMARY_ISSUE" \
+            bash "$SCRIPT_DIR/capture-pr-screenshots.sh" "$REPO" "$SCREENSHOT_DIR" $SCREENSHOT_ROUTES 2>&1 | tee -a "$RUN_LOG" || true
+          if [ ! -d "$SCREENSHOT_DIR" ] || [ -z "$(ls -A "$SCREENSHOT_DIR" 2>/dev/null)" ]; then
+            SCREENSHOT_DIR=""  # capture failed — don't advertise the path
+          fi
+        fi
+
         # ── Slack notification for this iteration ────────────────────────
         DONE_LINKS=$({ grep -oE "ISSUE_DONE:${ISSUE_PREFIX}-[0-9]+\|[^\"]*" "$RUN_LOG" 2>/dev/null || true; } | sort -u | while IFS='|' read -r marker summary; do
           id=$(echo "$marker" | sed 's/ISSUE_DONE://')
@@ -691,14 +721,18 @@ $ITER_COMMITS}
 ${RISK_LINE:+📋 $RISK_LINE
 }${WATCH_FOR:+⚠️ *Watch for:* $WATCH_FOR
 }${PREVIEW_URL:+📱 *Preview:* <$PREVIEW_URL|Test on phone>
+}${SCREENSHOT_DIR:+📸 *Screenshots:* \`$SCREENSHOT_DIR\`
 }<$PR_URL|View PR>"
 
         # Collect metrics
         ITER_END=$(date +%s)
         ITER_DURATION=$((ITER_END - ITER_START))
-        DONE_COUNT=$(grep -c "ISSUE_DONE:${ISSUE_PREFIX}-[0-9]" "$RUN_LOG" 2>/dev/null || echo "0")
-        SKIPPED_COUNT=$(grep -c "ISSUE_SKIPPED:${ISSUE_PREFIX}-[0-9]" "$RUN_LOG" 2>/dev/null || echo "0")
-        CREATED_COUNT=$(grep -c 'ISSUE_CREATE:[1-4]:' "$RUN_LOG" 2>/dev/null || echo "0")
+        # `grep -c PATTERN file` prints "0\n" AND exits 1 when no matches, so the
+        # `|| echo "0"` would APPEND another "0\n", corrupting the CSV row across
+        # multiple lines. Pipe through head -1 to keep just the first count.
+        DONE_COUNT=$({ grep -c "ISSUE_DONE:${ISSUE_PREFIX}-[0-9]" "$RUN_LOG" 2>/dev/null || echo "0"; } | head -1)
+        SKIPPED_COUNT=$({ grep -c "ISSUE_SKIPPED:${ISSUE_PREFIX}-[0-9]" "$RUN_LOG" 2>/dev/null || echo "0"; } | head -1)
+        CREATED_COUNT=$({ grep -c 'ISSUE_CREATE:[1-4]:' "$RUN_LOG" 2>/dev/null || echo "0"; } | head -1)
         BUILD_SIZE=$(cd "$REPO" && npm run build 2>&1 | grep -oE '[0-9]+\.[0-9]+ KiB' | head -1 | grep -oE '[0-9.]+' || echo "")
         echo "$DATE,$RUN,$ITER_START_FMT,$(date +%H:%M:%S),$ITER_DURATION,$NEW_COMMITS,$TESTS_BEFORE,$TESTS_AFTER,$TESTS_DELTA,$DONE_COUNT,$SKIPPED_COUNT,$CREATED_COUNT,0,$BUILD_SIZE,true" >> "$METRICS_FILE"
       fi
@@ -733,8 +767,7 @@ git checkout "${DEFAULT_BRANCH:-master}" 2>/dev/null || true
 
 # ── Backpressure signal ──────────────────────────────────────────────────────
 BACKLOG_FLAG="$OUTPUT_DIR/.lift-backlog-low"
-UNSTARTED_COUNT=$(bash "$TRACKER" list unstarted | grep -c "${ISSUE_PREFIX}-" || echo "0")
-UNSTARTED_COUNT=$(echo "$UNSTARTED_COUNT" | tr -d ' \n')
+UNSTARTED_COUNT=$({ bash "$TRACKER" list unstarted | grep -c "${ISSUE_PREFIX}-" || echo "0"; } | head -1 | tr -d ' \n')
 if [ "$UNSTARTED_COUNT" -lt 3 ] 2>/dev/null; then
   touch "$BACKLOG_FLAG"
   echo "📉 Backlog low ($UNSTARTED_COUNT unstarted) — signaling discovery to run extra session"

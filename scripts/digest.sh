@@ -32,12 +32,15 @@ fetch_issues() {
   bash "$TRACKER" list --project "$project" $states
 }
 
-# Count issues matching a pattern
+# Count issues matching a pattern.
+# `grep -c` prints "0\n" AND exits 1 when no matches, so a naked `|| echo 0`
+# would APPEND a second "0\n" and break any caller that uses the value as a
+# single number. head -1 keeps just the first count line.
 count_lift_lines() {
-  echo "$1" | grep -c "${ISSUE_PREFIX}-" 2>/dev/null || echo "0"
+  { echo "$1" | grep -c "${ISSUE_PREFIX}-" 2>/dev/null || echo "0"; } | head -1
 }
 count_tracker_lines() {
-  echo "$1" | grep -c "${LINEAR_TEAM}-" 2>/dev/null || echo "0"
+  { echo "$1" | grep -c "${LINEAR_TEAM}-" 2>/dev/null || echo "0"; } | head -1
 }
 
 # --- Lift ---

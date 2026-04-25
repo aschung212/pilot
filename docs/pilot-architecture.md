@@ -316,6 +316,18 @@ See [Pilot Responsibilities](pilot-responsibilities.md) for the complete list of
 
 ## Changelog
 
+### 2026-04-24 — Health report data sources rewired
+- `nights_run` and average runtime now derived from `lift-metrics.csv` instead of the orphaned `lift-runtime.csv` (the latter was only written by the decommissioned orchestrator). New formula: `nights_run = len(set(dates))`, `avg_builder_min = sum(duration_sec) / nights / 60`.
+- Renamed metric "Avg pipeline runtime" → "Avg builder runtime" — accurate to what's actually measured (builder iteration time, not discovery+triage).
+- Fixed `grep -c PATTERN file 2>/dev/null || echo "0"` idiom in 6 places (builder.sh, health-report.sh, digest.sh). The fallback fired even on legitimate-zero matches, appending an extra "0\n" that corrupted the metrics CSV across multiple lines. Wrapped each call in `{ ...; } | head -1`.
+- Repaired `lift-metrics.csv` one-shot to rejoin 46 split rows; backup retained at `data/lift-metrics.csv.bak-*`.
+
+### 2026-04-24 — PR screenshot capture
+- Added a post-PR screenshot capture step to the builder loop. Affected routes are declared by builder Claude (`SCREENSHOT_ROUTE:/path` markers in the run log); after `gh pr create`, the pipeline boots a temporary `npm run dev` in the worktree on a free port, signs in via the dev button, and uses the project's existing Playwright install to capture each route at iPhone 14 Pro viewport (390×844).
+- Screenshots land at `$OUTPUT_DIR/pr-screenshots/pr-{NUM}-{ISSUE}-{slug}/` with an `INDEX.md`. Path is surfaced in the per-iteration Slack thread.
+- Best-effort: capture failures (Playwright missing, dev server timeout, route 404) are logged and skipped — never block the PR.
+- New scripts: `capture-pr-screenshots.sh` (dev-server lifecycle), `capture-pr-screenshots.mjs` (Playwright capture). Module resolution uses `createRequire` against the target repo's `package.json` so the `.mjs` can live in pilot while Playwright lives in the project repo.
+
 ### 2026-04-02 — Builder Overhaul: Branch-per-Issue + 3-Layer Review
 - Builder switched from single nightly branch/PR to branch-per-issue (`enhance/MAS-{id}-{date}`) with individual PRs
 - Per-iteration review upgraded to 3-layer cross-model system:
