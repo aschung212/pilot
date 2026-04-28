@@ -161,8 +161,11 @@ while should_continue; do
   git checkout "${DEFAULT_BRANCH:-master}" 2>/dev/null || true
   git pull --ff-only origin "${DEFAULT_BRANCH:-master}" 2>/dev/null || true
 
-  # Snapshot state before this iteration
-  TESTS_BEFORE=$(cd "$REPO" && npm test -- --reporter=dot 2>&1 | grep -oE '[0-9]+ passed' | tail -1 | grep -oE '[0-9]+' || echo "0")
+  # Snapshot state before this iteration.
+  # `head -1` guards against pipefail: if `npm test` exits non-zero (e.g. a broken
+  # build), the pipeline already emitted "1335" then `|| echo "0"` appends "0",
+  # producing a multi-line value that breaks `$((TESTS_AFTER - TESTS_BEFORE))`.
+  TESTS_BEFORE=$({ cd "$REPO" && npm test -- --reporter=dot 2>&1 | grep -oE '[0-9]+ passed' | tail -1 | grep -oE '[0-9]+' || echo "0"; } | head -1)
   ITER_START=$(date +%s)
   ITER_START_FMT=$(date +%H:%M:%S)
 
@@ -586,7 +589,7 @@ $summary
         PLAN=$(sed -n '/^## Plan/,/^## /p' "$RUN_LOG" 2>/dev/null | grep -v '^## ' | head -5)
         CHANGES=$(sed -n '/^## Changes/,/^## /p' "$RUN_LOG" 2>/dev/null | grep -v '^## ' | head -10)
         VERIFICATION=$(sed -n '/^## Verification/,/^## Summary/p' "$RUN_LOG" 2>/dev/null | grep -v '^## Summary' | head -40)
-        TESTS_AFTER=$(cd "$REPO" && npm test -- --reporter=dot 2>&1 | grep -oE '[0-9]+ passed' | tail -1 | grep -oE '[0-9]+' || echo "0")
+        TESTS_AFTER=$({ cd "$REPO" && npm test -- --reporter=dot 2>&1 | grep -oE '[0-9]+ passed' | tail -1 | grep -oE '[0-9]+' || echo "0"; } | head -1)
         TESTS_DELTA=$((TESTS_AFTER - TESTS_BEFORE))
 
         PR_COMMIT_LIST=$(git log --oneline "${DEFAULT_BRANCH:-master}".."$ITER_BRANCH" 2>/dev/null | while read -r line; do
@@ -733,7 +736,7 @@ ${RISK_LINE:+📋 $RISK_LINE
         DONE_COUNT=$({ grep -c "ISSUE_DONE:${ISSUE_PREFIX}-[0-9]" "$RUN_LOG" 2>/dev/null || echo "0"; } | head -1)
         SKIPPED_COUNT=$({ grep -c "ISSUE_SKIPPED:${ISSUE_PREFIX}-[0-9]" "$RUN_LOG" 2>/dev/null || echo "0"; } | head -1)
         CREATED_COUNT=$({ grep -c 'ISSUE_CREATE:[1-4]:' "$RUN_LOG" 2>/dev/null || echo "0"; } | head -1)
-        BUILD_SIZE=$(cd "$REPO" && npm run build 2>&1 | grep -oE '[0-9]+\.[0-9]+ KiB' | head -1 | grep -oE '[0-9.]+' || echo "")
+        BUILD_SIZE=$({ cd "$REPO" && npm run build 2>&1 | grep -oE '[0-9]+\.[0-9]+ KiB' | head -1 | grep -oE '[0-9.]+' || echo ""; } | head -1)
         echo "$DATE,$RUN,$ITER_START_FMT,$(date +%H:%M:%S),$ITER_DURATION,$NEW_COMMITS,$TESTS_BEFORE,$TESTS_AFTER,$TESTS_DELTA,$DONE_COUNT,$SKIPPED_COUNT,$CREATED_COUNT,0,$BUILD_SIZE,true" >> "$METRICS_FILE"
       fi
     fi
@@ -813,7 +816,7 @@ AVG_ITERS=$(echo "$USAGE_TRENDS" | cut -d',' -f2)
 TREND_DAYS=$(echo "$USAGE_TRENDS" | cut -d',' -f3)
 
 # Count total commits and tests across all PRs tonight
-FINAL_TESTS=$(cd "$REPO" && npm test -- --reporter=dot 2>&1 | grep -oE '[0-9]+ passed' | tail -1 || echo "unknown")
+FINAL_TESTS=$({ cd "$REPO" && npm test -- --reporter=dot 2>&1 | grep -oE '[0-9]+ passed' | tail -1 || echo "unknown"; } | head -1)
 TOTAL_COMMITS=0
 for pr_url in $NIGHTLY_PRS; do
   PR_BRANCH=$(echo "$pr_url" | grep -oE '[^/]+$' || true)

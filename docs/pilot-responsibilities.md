@@ -293,3 +293,9 @@ Repaired `lift-metrics.csv` in place (one-shot script reconstructed 46 split row
 - GNU parallel for parallel test execution (`bats -j 8`)
 - Added RESCOPE verdict to triage agent: splits oversized issues into 2-4 sub-issues and cancels the original
 - **New responsibility:** When making manual changes to pilot scripts, add/update corresponding bats tests. Pre-commit hook will catch missing coverage for new scripts.
+
+### 2026-04-28 — Builder Crash Fix: Multi-Line Numeric Capture
+- The 2026-04-27 overnight builder ran 6 minutes / 0 PRs instead of the usual 8 hours. Root cause: `TESTS_BEFORE`/`TESTS_AFTER` in `scripts/builder.sh` used `pipeline | … || echo "0"`. With `set -o pipefail`, when `npm test` exited non-zero (broken `node_modules` from a missing `html-to-image` install), the pipeline emitted `1335` *and* the `||` fallback then appended `0` — producing a multi-line value that crashed the next `$((TESTS_AFTER - TESTS_BEFORE))` with `syntax error in expression (error token is "0")`. The iteration body bailed before `gh pr create`.
+- Wrapped four sites (`TESTS_BEFORE`, `TESTS_AFTER`, `BUILD_SIZE`, `FINAL_TESTS`) in `{ … ; } | head -1` — same pattern already used for `DONE_COUNT`/`SKIPPED_COUNT`/`CREATED_COUNT` in commit 88796c0. Bug reproduced and fix verified in isolation; all 119 bats tests still pass.
+- The orphaned commit from that night (branch `enhance/LIFT-439-2026-04-27`, commit `8545fdd`) was already CI-green and is being opened as a manual PR.
+- **No change to Aaron's responsibilities** — overnight builder behavior is unchanged when the build is healthy.
