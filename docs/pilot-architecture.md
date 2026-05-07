@@ -4,7 +4,7 @@ tags:
   - pilot
   - architecture
   - automation
-updated: 2026-04-02
+updated: 2026-04-06
 ---
 
 # Pilot Architecture
@@ -27,10 +27,10 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
 │  │ Discovery │───▶│  Triage  │───▶│  Builder │               │
 │  │ (Gemini  │    │ (Gemini  │    │  (Opus)  │               │
 │  │ + Claude)│    │  Flash)  │    │    +     │               │
-│  └──────────┘    └──────────┘    │ 3-layer  │               │
-│       │               │          │ review   │               │
+│  └──────────┘    └──────────┘    │ Gemini   │               │
+│       │               │          │ 3.1 Pro │               │
 │       ▼               ▼          └──────────┘               │
-│  Linear issues   Comments with       │                      │
+│  GitHub issues   Comments with        │                      │
 │  created         impl. plans    Per-issue PRs               │
 │                                 (branch per issue,          │
 │                                  inline review)             │
@@ -59,13 +59,13 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
 │  1. Open Slack #lift-automation                               │
 │  2. Read nightly summary — PRs as "Ready to merge" or        │
 │     "Needs review"                                            │
-│  3. Merge green PRs directly (CI passed, 3-layer review      │
+│  3. Merge green PRs directly (CI passed, Gemini  3.1 Pro    │
 │     clean — verdict: MERGE)                                   │
 │  4. Open yellow PRs (verdict: REVIEW), read review comments, │
 │     decide                                                    │
 │  5. Failed PRs auto-retry next night — ignore them           │
 │  6. Glance at flagged issues — make decisions                │
-│  7. Run /ai-review                                           │
+│  7. Run /ai-3.1 Pro                                         │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -80,7 +80,7 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
 
 **What it does:**
 - Phase 1 (Gemini): Searches the web for the current focus area — competitors, UI trends, performance, accessibility, testing, SEO, data viz, onboarding, DX/CI, PWA patterns, security, monetization
-- Phase 2 (Claude): Cross-references findings against the codebase, existing backlog, canceled issues, and product decisions. Creates specific, actionable Linear issues.
+- Phase 2 (Claude): Cross-references findings against the codebase, existing backlog, canceled issues, and product decisions. Creates specific, actionable GitHub issues.
 
 **Focus area rotation:** 12 focus areas in a weighted 19-slot cycle (~3 weeks). High-value areas (competitors, UI trends) run every ~6 days. Slow-moving areas (security, monetization) run every ~19 days.
 
@@ -111,17 +111,17 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
 **Model:** Claude Opus 4.6
 
 **What it does:**
-- Picks the highest-priority triaged issue from Linear
+- Picks the highest-priority triaged issue from the backlog
 - Reads the triage agent's implementation plan from comments
-- Creates a dedicated branch per issue: `enhance/MAS-{id}-{date}`
+- Creates a dedicated branch per issue: `enhance/LIFT-{id}-{date}`
 - Implements the change: writes code, runs tests, commits with conventional prefixes (feat/fix/a11y/test/perf/style/refactor/chore)
-- Per-iteration 3-layer cross-model review after each iteration's commits (see section 4 below)
-  - Critical/high findings → Opus auto-fix attempt; if fix fails, revert + create Linear issue
+- Per-iteration Gemini  cross-model review after each iteration's commits (see section 4 below)
+  - Critical/high findings → Opus auto-fix attempt; if fix fails, revert + create GitHub issue
   - Medium/low findings → auto-created as Linear issues for future work
-- Creates a PR per issue with structured description: Linear links, test results, review status
+- Creates a PR per issue with structured description: issue links, test results, review status
 - PRs labeled by type (type:a11y, type:test, type:bugfix, type:feature, etc.)
 - Failed PR retry: PRs labeled `ci:failed` from previous nights are auto-retried
-- Updates Linear (marks issues Done/In Progress/Blocked)
+- Updates issue tracker (marks issues Done/In Progress/Blocked)
 - Repeats for up to 12 iterations or 500K output tokens
 
 **Controls** (auto-tuned nightly by `lift-tune-budget.sh`):
@@ -131,32 +131,26 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
 - Stops on 3 consecutive failures or 2 consecutive stalls
 - Runtime tracked per-iteration and per-pipeline — tuner uses utilization % to adjust caps
 
-### 4. 3-Layer Cross-Model Review (inline)
-**When:** After each iteration's commits (integrated into builder loop, not a separate stage)
-**Models:** Gemini 2.5 Flash (L1) → Gemini 2.5 Pro (L2) → Claude Sonnet 4.6 (L3)
+### 4. Inline Hook-Based Review
+**When:** Automatically during Claude's implementation, via git pre-push hook
+**Model:** Gemini 3.1 Pro (single model, adversarial review of full branch diff)
+**Script:** `~/.claude/scripts/review-router.sh` (builder mode, triggered by `PILOT_BUILDER=1`)
 
-**What it does:**
-- 3-layer review of the diff produced by the current iteration, using cross-model validation:
-  - **Layer 1 — Gemini Flash (mechanical gate):** Bugs, types, CSS, security. Runs on every iteration. Fast (~30s).
-  - **Layer 2 — Gemini Pro (architecture):** Cross-component issues, edge cases, missed scenarios. Runs conditionally — only when L1 has findings OR the change is a feat/fix category.
-  - **Layer 3 — Claude Sonnet (self-check):** Known Opus failure patterns, validates Gemini findings, catches what Gemini misses. Runs conditionally (same trigger as L2).
-- **Conditional deep review:** Clean low-risk PRs get Layer 1 only (~1 min). High-risk or flagged PRs get all 3 layers (~5 min). This saves time and tokens on routine changes.
-- **Failover chains** (build never blocks on failed review):
-  - L1: Flash → Sonnet → skip
-  - L2: Pro → Flash (deeper prompt) → skip
-  - L3: Sonnet → Haiku → skip
-- **Verdicts:** MERGE (green) / REVIEW (yellow) / DO NOT MERGE (red)
-- **Finding statuses:** Fixed (auto-fixed by Opus) / Deferred (Linear issue created) / Noted (informational)
-- **Auto-fix cycle:** Critical/high findings trigger an Opus fix attempt before PR creation. If fix fails, changes are reverted and a Linear issue is created.
-- Medium/low findings → auto-created as Linear issues for future work (does not block PR)
-- Review verdicts and findings included in structured PR description so Aaron sees status at a glance
+**How it works:**
+- **Primary mechanism — git pre-push hook (fires for any git operation, including headless `claude -p` mode):**
+  - `.husky/pre-push`: Gemini 3.1 Pro adversarial review before push (blocks until complete)
+- **No post-commit hook** — removed 2026-04-06. Gemini Flash had a 71% false positive rate, generating noise that trained developers to ignore review output.
+- **No Codex (GPT-5.4)** — removed 2026-04-06. Head-to-head testing showed Gemini 3.1 Pro matched or exceeded Codex on all findings (8 bugs found vs Codex's 5 on the same diff).
+- **Builder prompt references Gemini 3.1 Pro pre-push hook** — Claude sees review findings and fixes before push completes.
+- **Claude fixes issues naturally:** Findings appear inline; builder prompt instructs Claude to fix before pushing. No separate fix iteration needed.
+- **No PR comments:** Issues resolved before PR creation. PRs that reach morning triage are already reviewed.
+- **Audit trail:** Output logged to `$OUTPUT_DIR/lift-review-$DATE-run${RUN}.log`.
+- **Graceful degradation:** If Gemini is unavailable, review is skipped and build continues.
 
-**Self-improvement:** All review layers receive a learnings file (`lift-review-learnings.md`) that accumulates patterns from Aaron's past PR feedback. The review tuner (`lift-tune-reviews.sh`) analyzes merged PRs to detect what reviewers miss and injects those patterns into future prompts.
-
-> **Note:** The previous single-layer Sonnet review has been replaced by the 3-layer cross-model system. Different models catch different classes of issues, and conditional execution keeps review fast for clean changes.
+> **Note:** The review pipeline has been progressively simplified: Gemini  review (Flash → Pro → Sonnet) was replaced with inline hooks on 2026-04-06, then further simplified to Gemini 3.1 Pro only on 2026-04-06 after head-to-head testing showed Flash's 71% false positive rate and Gemini 3.1 Pro matching/exceeding Codex. The old adapter (`adapters/ai-review.sh`) and tuner (`scripts/tune-reviews.sh`) are deprecated.
 
 ### 5. Auto-Tuners
-**Scripts:** `lift-tune-budget.sh` + `lift-tune-reviews.sh`
+**Scripts:** `lift-tune-budget.sh` (review tuner deprecated 2026-04-06)
 **When:** After each overnight session completes
 
 **Budget tuner:**
@@ -166,20 +160,19 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
 - Runtime-aware: if pipeline uses <25% of the overnight window, suggests raising iteration cap
 - Detects context bloat: flags when per-iteration duration trends up >50%
 
-**Review tuner:**
-- Analyzes merged PRs: what reviewers flagged vs. what Aaron caught
-- Tracks clean merge rate (goal: 100%)
-- Builds custom rules from Aaron's corrections
-- Injects learnings into future review prompts
+**Review tuner (deprecated 2026-04-06):**
+- Previously analyzed merged PR comments to learn from reviewer misses
+- No longer active — inline hook-based review doesn't post PR comments
+- Learnings file (`lift-review-learnings.md`) frozen with existing patterns
 
-### 6. Linear Cleanup
-**Script:** `~/Documents/Scripts/lift-linear-cleanup.sh`
+### 6. Issue Cleanup
+**Script:** `cleanup.sh`
 **When:** After each overnight session (final stage of pipeline)
 
 **What it does:**
-- Archives all completed and canceled issues via Linear GraphQL API
+- Closes all completed and canceled issues via tracker adapter
 - Detects duplicate issues by title (keeps oldest, cancels+archives newer copies)
-- Preserves free tier capacity — Linear free plan has issue limits
+- Keeps issue list clean — closes resolved/duplicate issues
 
 ---
 
@@ -219,7 +212,7 @@ Pipeline is fully decomposed — each service has its own launchd plist. No orch
 | 9:00 PM Sun | Budget Tuner | Weekly | `com.aaron.pilot-tune-budget` |
 | 9:15 PM Sun | Review Tuner | Weekly | `com.aaron.pilot-tune-reviews` |
 | 8:00 AM Sun | Health Report | Weekly | `com.aaron.pilot-health` |
-| 6:15 AM | Linear Digest | Daily | `com.aaron.linear-digest` |
+| 6:15 AM | Issue Digest | Daily | `com.aaron.linear-digest` |
 
 ---
 
@@ -231,9 +224,7 @@ Pipeline is fully decomposed — each service has its own launchd plist. No orch
 | Discovery (analysis) | Claude Opus 4.6 | Best at codebase reasoning + issue creation |
 | Triage | Gemini 2.5 Flash (Claude Sonnet fallback) | Good at planning, uses Google AI Plus (free) |
 | Builder | Claude Opus 4.6 | Best coding model, complex multi-file changes |
-| Review L1 (mechanical gate) | Gemini 2.5 Flash | Fast, cheap, good at mechanical checks (bugs, types, CSS, security). Runs every iteration. Fallback: Sonnet → skip |
-| Review L2 (architecture) | Gemini 2.5 Pro | Deep architectural reasoning, cross-component analysis. Conditional (L1 findings or feat/fix). Fallback: Flash (deeper prompt) → skip |
-| Review L3 (self-check) | Claude Sonnet 4.6 | Catches known Opus failure patterns, validates Gemini findings. Conditional (same as L2). Fallback: Haiku → skip |
+| Review (push) | Gemini 3.1 Pro | Inline via pre-push hook — adversarial review of full branch diff. Single model, single pass. Paid via Google AI Pro ($20/mo). |
 | Cover letter review | Gemini 2.5 Flash | Second opinion, zero extra cost |
 
 ---
@@ -243,8 +234,8 @@ Pipeline is fully decomposed — each service has its own launchd plist. No orch
 | Channel | What posts there |
 |---|---|
 | #lift-automation | Build iterations, discovery digests, triage summaries, PR reviews, auto-tuner decisions |
-| #daily-review | Linear digest (6:15 AM), AI review summaries, LeetCode updates |
-| #system-changelog | Workflow changes — posted automatically when scripts or responsibilities change |
+| #daily-review | Issue digest (6:15 AM), AI review summaries, LeetCode updates |
+| #pilot | Workflow changes — posted automatically when scripts or responsibilities change |
 
 **Slack bot identities:** Each agent posts with a distinct username and emoji avatar for visual distinction. The `notify.sh` adapter supports `--as <identity>` flag to set username/icon_emoji per agent. Falls back to Bot API when webhook fails.
 
@@ -264,19 +255,16 @@ Pipeline is fully decomposed — each service has its own launchd plist. No orch
 ```
 Gemini (web research)
     ↓
-Claude (analysis) → Linear issues created
+Claude (analysis) → GitHub issues created
     ↓
 Gemini (triage) → Implementation plans added as comments
     ↓
 Claude Opus (builder) → Per-issue branch + code committed
     ↓
-3-Layer Cross-Model Review (per iteration):
-    L1: Gemini Flash (mechanical gate — every iteration)
-    L2: Gemini Pro (architecture — conditional: L1 findings or feat/fix)
-    L3: Claude Sonnet (self-check — conditional: same as L2)
-    → Critical/high: Opus auto-fix attempt → if fail, revert + Linear issue
-    → Medium/low: Linear issues created (non-blocking)
-    → Verdicts: ✅ MERGE | ⚠️ REVIEW | 🚫 DO NOT MERGE
+Gemini 3.1 Pro adversarial review (pre-push hook):
+    → Single model, single pass — reviews full branch diff
+    → Claude sees findings inline and fixes before push completes
+    → No PR comments — issues resolved before PR creation
     ↓
 Per-issue PR created with structured description (Linear links, test results, review verdicts)
     ↓
@@ -284,7 +272,7 @@ CI runs (branch protection requires build-and-test to pass)
     ↓
 Auto-tuners → Budget + review prompts adjusted
     ↓
-Linear cleanup → Completed/canceled archived, duplicates removed
+Issue cleanup → Completed/canceled closed, duplicates removed
     ↓
 Aaron (morning) → Merges green PRs directly, reviews yellow PRs, ignores failed (auto-retry next night)
     ↓
@@ -307,14 +295,28 @@ Feedback loop → Aaron's corrections improve future reviews + discovery
 | `~/development/pilot/.githooks/pre-commit` | Pre-commit hook — fast test tier on every commit |
 | `~/development/pilot/project.env` | Lift-specific configuration (git-ignored) |
 | `~/development/pilot/init.sh` | Interactive setup wizard |
-| `~/Documents/Claude/outputs/` | All logs, metrics, usage tracking, learnings |
-| `~/Documents/Claude/outputs/pilot-YYYY-MM-DD.log` | Unified structured log (all components) |
+| `pilot/data/` | All logs, metrics, usage tracking, learnings |
+| `pilot/data/pilot-YYYY-MM-DD.log` | Unified structured log (all components) |
 
 See [Pilot Responsibilities](pilot-responsibilities.md) for the complete list of Aaron's manual tasks, automated tasks, environment variables, and changelog.
 
 ---
 
 ## Changelog
+
+### 2026-05-06 — Auditor detector split + builder early-exit prompt fix
+
+**Auditor detectors (`scripts/pipeline-auditor.sh`):** the `num_turns_one_spike` detector was conflating two distinct failure modes. Split into:
+- `subagent_delegation` — fires when num_turns=1, parent_out<100, AND a non-opus model (haiku/sonnet) appears in `modelUsage`. Remediation lives in `--disallowedTools` configuration.
+- `early_exit_no_markers` — fires when num_turns=1, parent_out<100, opus-only modelUsage, AND opus_outputTokens ≥ 500. Indicates the parent did real work but exited before emitting the structured response. Remediation lives in the builder prompt.
+
+The `marker_emission_collapse` finding now points readers to whichever of the two companion findings actually fired, rather than asserting "subagent delegation drift" as the cause.
+
+**Builder prompt (`scripts/builder.sh`):** two changes to address the early-exit pattern:
+- **Step 4** rewritten from "After your final push, you are done" to "Output structured response, THEN exit" — explicitly forbids the chatty one-liner exit pattern that was producing 80% of marker losses in the 04-30..05-06 window.
+- **New Rule:** `CRITICAL — DO NOT BACKGROUND GIT OPERATIONS`. The trigger for early exit was always a `run_in_background:true` git push completing — when the bash result returned, the agent treated the iteration as done and skipped the structured output.
+
+**Auditor label bootstrap (`lib/auditor-utils.sh`):** added `ensure_audit_labels` helper that idempotently creates `audit` and `severity:p1/p2/p3` labels in the pilot repo at audit start. This unblocks `gh issue create` calls that were failing silently when labels didn't exist (root cause of the 2026-05-06 missing-issue incident).
 
 ### 2026-04-24 — Health report data sources rewired
 - `nights_run` and average runtime now derived from `lift-metrics.csv` instead of the orphaned `lift-runtime.csv` (the latter was only written by the decommissioned orchestrator). New formula: `nights_run = len(set(dates))`, `avg_builder_min = sum(duration_sec) / nights / 60`.
@@ -329,8 +331,8 @@ See [Pilot Responsibilities](pilot-responsibilities.md) for the complete list of
 - New scripts: `capture-pr-screenshots.sh` (dev-server lifecycle), `capture-pr-screenshots.mjs` (Playwright capture). Module resolution uses `createRequire` against the target repo's `package.json` so the `.mjs` can live in pilot while Playwright lives in the project repo.
 
 ### 2026-04-02 — Builder Overhaul: Branch-per-Issue + 3-Layer Review
-- Builder switched from single nightly branch/PR to branch-per-issue (`enhance/MAS-{id}-{date}`) with individual PRs
-- Per-iteration review upgraded to 3-layer cross-model system:
+- Builder switched from single nightly branch/PR to branch-per-issue (`enhance/LIFT-{id}-{date}`) with individual PRs
+- Per-iteration review upgraded to Gemini  cross-model system:
   - L1 (Gemini Flash): Mechanical gate — bugs, types, CSS, security. Every iteration.
   - L2 (Gemini Pro): Architecture — cross-component, edge cases. Conditional (L1 findings or feat/fix).
   - L3 (Claude Sonnet): Self-check — Opus failure patterns, validates Gemini. Conditional (same as L2).
@@ -372,8 +374,72 @@ See [Pilot Responsibilities](pilot-responsibilities.md) for the complete list of
 - Removed all hardcoded `/Users/aaron/development/lift` fallback paths — scripts now fail fast with clear error
 - Parameterized all AI prompts: `$PROJECT_NAME`, `$TECH_STACK`, `$PROJECT_DESC` replace hardcoded Lift/Vue/workout references
 - Bot identities now use `${PROJECT_NAME:-Pilot}` instead of hardcoded "Lift"
-- init.sh updated: 3-layer review config, budget.conf creation, git hooks setup, discovery queue init, bats/parallel/gtimeout checks, digest.sh plist
+- init.sh updated: Gemini  review config, budget.conf creation, git hooks setup, discovery queue init, bats/parallel/gtimeout checks, digest.sh plist
 - project.env.example now documents all 30+ variables
-- README, docs/architecture.md, docs/adapters.md updated for 3-layer review, RESCOPE, test suite, bot identities
+- README, docs/architecture.md, docs/adapters.md updated for Gemini  review, RESCOPE, test suite, bot identities
 - Removed 2 orphaned launchd plists, fixed script paths in remaining 6
 - Pilot is now fully project-agnostic — configure for any repo via `init.sh`
+
+### 2026-04-06 — Review Pipeline Reliability Fixes
+- **Bug fix:** Gemini rate limits (`MODEL_CAPACITY_EXHAUSTED`) caused 57% L1 skip rate. `run_gemini()` now retries 3x with exponential backoff (10s → 20s → 40s) before falling to fallback chain.
+- **Bug fix:** Claude Sonnet fallback in `run_claude()` never successfully ran (all `.json` files were 0 bytes). Root causes:
+  - `--max-turns 15` let Sonnet attempt tool use and file reads instead of single-turn review → timeouts
+  - Missing `< /dev/null` caused potential stdin hang
+  - No stderr capture made failures silent
+- `run_claude()` now uses `--max-turns 1`, closes stdin, captures stderr to `.err` file for diagnostics
+- Python JSON parser reports specific failure reason (invalid JSON, empty result, Claude error)
+- All 9 ai-review.bats tests pass
+- **No change to Aaron's workflow** — fixes are internal to overnight pipeline
+
+### 2026-04-06 — Replace 3-Layer Review with Inline Hook-Based Review
+- **MAJOR CHANGE:** Removed ~300 lines of review orchestration from builder.sh
+- Review now happens inline via `~/.claude/scripts/review-router.sh` (PostToolUse hook):
+  - Every commit: Gemini Flash review (free, inline — Claude sees and acts on findings)
+  - On push: Gemini Flash + Gemini Pro architectural review (for high-risk changes)
+  - Claude fixes issues naturally from hook feedback — no separate fix iteration
+- Removed: Gemini  ai-review.sh adapter calls, fix iteration logic, revert-on-failure, PR comment posting, composite verdict computation, deferred issue creation
+- Removed 4 helper functions from builder-utils.sh: `pick_worst_verdict`, `verdict_emoji`, `format_review_findings`, `format_review_crosschecks`
+- Deprecated: `adapters/ai-review.sh`, `scripts/tune-reviews.sh` (retained 30 days for rollback)
+- Commented out review env vars in project.env (AI_REVIEW_MODEL_L1/L2/L3, etc.)
+- Updated builder prompt with review feedback instructions
+- Fixed 3 Codex-identified bugs in tracker.sh: `create` now routes by TRACKER_ADAPTER, `gh_create` outputs issue ID for callers, `close` works for Linear via state update
+- Tests updated: removed 8 verdict helper tests from builder.bats, removed ai-review contract tests
+- **No change to Aaron's workflow** — reviews happen automatically, PRs arrive clean
+
+### 2026-04-06 — Builder Hardening, Git Hook Reviews, Preview Mode
+- **Builder script fixes:**
+  - Fixed backtick command substitution bug in heredoc prompt (shell was executing `git push` as commands)
+  - Fixed `<branch-name>` placeholder — changed to `HEAD` for reliable pushing
+  - Changed from relying on PostToolUse hooks to explicit `bash review-router.sh` calls in prompt (hooks don't fire in headless `claude -p` mode)
+  - Added CI validation step: after push, runs build + test; auto-fixes merge conflicts and build/test errors before creating PR
+  - Removed Gmail draft summary (Slack notifications sufficient)
+  - Added Verification section to Claude's output format (steps to test, expected behavior, risk assessment)
+  - Builder extracts verification section and includes it in PR description
+  - Added Vercel preview URL fetching: polls GitHub deployments API after PR creation, adds preview URL to PR body and Slack message
+  - Condensed risk/confidence + preview link in Slack thread messages
+- **Review system moved to git hooks (primary mechanism):**
+  - `.husky/post-commit` — Gemini Flash review after every commit (non-blocking)
+  - `.husky/pre-push` — Gemini Flash + Pro/Codex review before push (blocks until complete)
+  - Git hooks fire at the git level regardless of caller (Claude, builder, manual)
+  - PostToolUse hooks in settings.json kept as belt-and-suspenders backup
+- **Preview mode for Vercel deploy testing:**
+  - Detects Vercel preview deployments via hostname check in `src/lib/supabase.ts` and `src/App.vue`
+  - Blocks Supabase writes by default (syncQueue + direct inserts skip when isPreviewMode is true)
+  - Shows blue "Preview mode" banner with "Enable writes" toggle
+  - Allows safe testing with real Google account (reads work, writes blocked)
+  - Test account created in Supabase (test@lift.local / LiftTest2026!) for full write-path testing
+- **Supabase auth redirect fix:** Added wildcard redirect URL for all Vercel preview deployments
+- **TypeScript fix:** Removed unused `updateSW` variable in App.vue that was failing typecheck across all PRs; rebased all 3 open PRs onto master
+- **New responsibility for Aaron:** PRs now include Verification sections and Vercel preview URLs — use these for faster morning review. Preview mode available for safe manual testing on preview deploys.
+
+### 2026-04-06 — Review Pipeline Simplified to Gemini 3.1 Pro Only
+- **Removed Gemini Flash** from post-commit hook — 71% false positive rate (5/7 reviews wrong), generated noise that trained developers to ignore output
+- **Removed Codex (GPT-5.4)** from pre-push — Gemini 3.1 Pro matched or exceeded Codex on all findings in head-to-head testing (8 bugs vs 5 on same diff, LIFT-127)
+- **Removed post-commit hook entirely** — no review on commit, only on push
+- **Pre-push hook now runs Gemini 3.1 Pro only** — adversarial review of full branch diff before push completes
+- `review-router.sh` rewritten — single model (`gemini-3.1-pro-preview`), single mode (push only)
+- Builder prompt updated to reference Gemini 3.1 Pro pre-push hook
+- Model allocation: review rows consolidated from 2 (Flash + Pro) to 1 (Gemini 3.1 Pro)
+- Cost: Gemini 3.1 Pro covered by existing Google AI Pro subscription ($20/mo) — no additional cost
+- SWE-bench Verified scores: Gemini 3.1 Pro (80.6%) vs GPT-5.4 Codex (80.0%)
+- **No change to Aaron's workflow** — reviews remain fully automated inline

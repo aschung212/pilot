@@ -4,7 +4,7 @@ tags:
   - pilot
   - automation
   - responsibilities
-updated: 2026-04-22
+updated: 2026-04-30
 ---
 
 # Aaron's Pilot Responsibilities
@@ -23,7 +23,8 @@ updated: 2026-04-22
 | **Merge green PRs** | PRs with MERGE verdict — CI passed, 3-layer review clean. Merge directly. | github.com/aschung212/Lift/pulls |
 | **Review yellow PRs** | PRs with REVIEW verdict — read review comments in PR description, decide merge/comment | github.com/aschung212/Lift/pulls |
 | **Ignore failed PRs** | PRs labeled `ci:failed` auto-retry next night — no action needed | — |
-| **Check per-PR review status** | Each PR has 3-layer cross-model review results in description (Gemini Flash gate → Gemini Pro architecture → Claude Sonnet self-check). Verdicts: MERGE / REVIEW / DO NOT MERGE | PR description shows review findings + resolution |
+| **Check per-PR review status** | Each PR has inline review results in description (Gemini 3.1 Pro pre-push review). PRs now include a Verification section (steps to test, expected behavior, risk assessment) and a Vercel preview URL for quick testing. | PR description shows review findings + verification checklist + preview link |
+| **Test on preview deploys** | Click the Vercel preview URL in the PR description. Preview mode is enabled by default — Supabase writes are blocked (safe to use real Google account). Toggle "Enable writes" in the blue banner if you need full write-path testing. Test account available: test@lift.local / LiftTest2026! | Vercel preview URL in PR body |
 | **Test locally if needed** | `cd ~/development/lift && npm run dev` | localhost |
 | **Merge or request changes** | GitHub PR UI — merge individually, each PR is self-contained | Vercel auto-deploys on merge to master |
 | **Triage discovery issues** | Review new Linear issues from discovery agent, set priorities, add comments, cancel junk | linear.app/masterchung -> Lift project |
@@ -51,8 +52,8 @@ updated: 2026-04-22
 | **Review Linear digest** | Auto-posted to #daily-review at 6:15 AM via launchd. Check it during morning Slack review. |
 | **Manage Linear backlog** | Reprioritize, add comments/context to flagged issues. Completed/canceled issues and duplicates are archived automatically each night. When canceling, add a comment explaining why — discovery agent learns from this. |
 | **Update product decisions** | If you reject a category of feature (not just one issue), update `Lift - Product Decisions.md` in your vault |
-| **Review metrics** | `~/Documents/Claude/outputs/lift-metrics.csv` and `lift-discovery-metrics.csv` |
-| **Review token usage + runtime** | `~/Documents/Claude/outputs/lift-usage-tracking.csv` and `lift-runtime.csv` — budgets auto-tune but review if unexpected |
+| **Review metrics** | `pilot/data/lift-metrics.csv` and `lift-discovery-metrics.csv` |
+| **Review token usage + runtime** | `pilot/data/lift-usage-tracking.csv` and `lift-runtime.csv` — budgets auto-tune but review if unexpected |
 | **Update CLAUDE.md** | If design principles or code standards evolve |
 
 ---
@@ -69,7 +70,7 @@ updated: 2026-04-22
 - Decomposed pipeline — 6 independent services, each with own launchd plist:
   - Discovery (Sun/Tue/Thu 10 PM): finds improvements, creates Linear issues (Gemini + Claude)
   - Triage (Sun/Tue/Thu 10:30 PM): reviews issues, adds implementation plans (Gemini, Claude fallback)
-  - Builder (Mon-Fri 11 PM): implements per-issue branches (`enhance/MAS-{id}-{date}`), per-issue PRs with 3-layer cross-model review (Gemini Flash gate → Gemini Pro architecture → Claude Sonnet self-check) + auto-fix cycle, CI check. Uses git worktree for isolation. Failed PRs (`ci:failed`) auto-retried next night. Conditional deep review: Layers 2+3 only run when needed (L1 findings or high-risk category).
+  - Builder (Mon-Fri 11 PM): implements per-issue branches (`enhance/LIFT-{id}-{date}`), per-issue PRs with Gemini 3.1 Pro adversarial review (pre-push hook, single model) + auto-fix cycle, CI check. Uses git worktree for isolation. Failed PRs (`ci:failed`) auto-retried next night.
   - Cleanup: runs at end of builder — archives completed/canceled, deduplicates backlog
   - Budget Tuner (Sunday 9 PM): adjusts iteration/token caps based on week's data
   - Review Tuner (Sunday 9:15 PM): learns from PR feedback
@@ -86,7 +87,6 @@ updated: 2026-04-22
 - Slack webhooks: all notifications are token-free (no Claude instances spawned)
 - Test suite (bats-core, 105 tests across 16 files): fast tier (101 tests) runs on every commit via pre-commit hook, full tier (105 tests) runs on push via GitHub Actions CI
 - Auto-discovery smoke tests: fail when new scripts lack test coverage — enforces that every new script gets tests
-- Gmail draft: morning digest email drafted at end of overnight run
 - Linear digest: posts board snapshot to #daily-review at 6:15 AM daily (launchd)
 - Overnight runner: discovery → triage → builder chain starts at 11 PM nightly (launchd)
 
@@ -120,7 +120,7 @@ updated: 2026-04-22
 | `~/Documents/Scripts/lift-budget.conf` | Token budget config — auto-tuned nightly by `lift-tune-budget.sh` |
 | `~/Documents/Scripts/lift-tune-budget.sh` | Auto-tuner — analyzes usage + runtime history and adjusts budget config |
 | `~/Documents/Scripts/lift-linear-cleanup.sh` | Linear cleanup — archives done/canceled issues, deduplicates backlog |
-| `~/Documents/Claude/outputs/` | Logs, metrics, digests, cost tracking |
+| `pilot/data/` | Logs, metrics, digests, cost tracking |
 | `Obsidian: 20_Learning/Vibe Coding Projects/Lift - Product Decisions.md` | Product direction — rejected concepts, approved direction. Discovery agent reads this. |
 
 ## Slack Channels
@@ -129,7 +129,7 @@ updated: 2026-04-22
 |---|---|
 | #lift-automation | Overnight build iterations, discovery digests, GitHub activity (pending setup) |
 | #daily-review | AI review summary, LeetCode updates, Linear digest |
-| #system-changelog | Pilot changelog — what changed, new responsibilities |
+| #pilot | Pilot changelog — what changed, new responsibilities |
 
 ## Environment Variables (`~/.zshenv`)
 
@@ -137,11 +137,27 @@ updated: 2026-04-22
 |---|---|
 | `SLACK_WEBHOOK_URL` | Webhook for #lift-automation |
 | `SLACK_WEBHOOK_DAILY_REVIEW` | Webhook for #daily-review |
-| `SLACK_WEBHOOK_CHANGELOG` | Webhook for #system-changelog |
+| `SLACK_WEBHOOK_CHANGELOG` | Webhook for #pilot |
 
 ---
 
 ## Changelog
+
+### 2026-05-06 — Auditor unblocked + builder early-exit fix
+
+Three changes triggered by today's auditor P1 findings ([pilot#4](https://github.com/aschung212/pilot/issues/4), [pilot#5](https://github.com/aschung212/pilot/issues/5)):
+
+1. **Auditor was silently dropping P1 findings.** `gh issue create` rejected calls because `audit` and `severity:p1/p2/p3` labels didn't exist in `aschung212/pilot`. Created the labels and added `ensure_audit_labels` (`lib/auditor-utils.sh`) that runs at audit start. Now the labels are guaranteed before any issue is filed.
+
+2. **Builder prompt fix for the real root cause.** The auditor's "subagent delegation" narrative was outdated — that bug was fixed weeks ago. The current pattern is **early-exit-after-background-push**: parent agent does all the work itself (opus_outputTokens 5k–44k), pushes via a background bash task, then exits with a chatty one-liner like "background task completed, pipeline will handle PR creation" — never emitting the structured `## Issue updates` block, so `ISSUE_DONE` markers are missing in 80% of recent runs. Two prompt edits to `scripts/builder.sh`:
+   - **Step 4 rewrite:** "After your final push, you are done" → "Output structured response, THEN exit" with explicit warning about the chatty-one-liner failure mode.
+   - **New rule (foreground git):** `CRITICAL — DO NOT BACKGROUND GIT OPERATIONS`. Backgrounding the push is what triggers the early exit; foregrounding kills the upstream cause.
+
+3. **Auditor detector split.** The original `num_turns_one_spike` detector lumped two distinct failure modes (delegation vs early-exit) into one finding. Split into `subagent_delegation_pct` (haiku/sonnet visible in modelUsage) and `early_exit_pct` (opus-only with high opus_outputTokens). Both new metrics added to `classify_severity` in `lib/auditor-utils.sh`. Marker-emission summary updated to point at the right companion finding for remediation.
+
+**Action needed:** None for the prompt fix — overnight builders pick up the new prompt automatically on next run. For the auditor detector split, the next scheduled audit (Wed 18:00) will exercise it against live data.
+
+**P2 time-to-merge regression (40.5h → 114h):** Confirmed Aaron-attention bottleneck, not a CI loop (zero `ci:failed` PRs). Slowest 5 PRs (#420, #423, #424, #428, #429) are sitting 11-12 days waiting for review. No code fix; auditor will keep flagging it.
 
 ### 2026-04-24 — Health report fixes (data was lying for ~3 weeks)
 Two compounding bugs caused the weekly health report to silently understate pipeline activity since the orchestrator decommission on 2026-04-02:
@@ -178,9 +194,9 @@ Repaired `lift-metrics.csv` in place (one-shot script reconstructed 46 split row
 - Created this responsibilities document
 - Created global `~/.claude/CLAUDE.md`
 - Discovery agent now reads canceled issues with full details and a product decisions file to understand approved vs rejected product direction
-- New file: `~/Documents/Claude/outputs/lift-product-decisions.md` — Aaron should update this when rejecting categories of features
+- New file: `pilot/data/lift-product-decisions.md` — Aaron should update this when rejecting categories of features
 - New responsibility: when canceling Linear issues, add a comment explaining why (discovery agent reads this)
-- Added #system-changelog Slack channel — all workflow changes are now posted there automatically
+- Added #pilot Slack channel — all workflow changes are now posted there automatically
 - All Claude instances instructed to post changelogs via `~/.claude/CLAUDE.md`
 - Scheduled `linear-digest.sh` via launchd at 6:15 AM daily — no longer needs manual runs
 - Updated app icon to gold barbell + arrow design, removed old SVG icon
@@ -191,7 +207,7 @@ Repaired `lift-metrics.csv` in place (one-shot script reconstructed 46 split row
 - **Removed responsibility:** no longer need to manually start overnight scripts before bed
 - Added token usage monitoring to overnight builder and discovery agent (Claude Max = no $ cost, rate limits matter)
 - New file: `~/Documents/Scripts/lift-budget.conf` — iteration cap (8/night), token cap (500K output/night), cooldown (30s)
-- Usage tracking CSV: `~/Documents/Claude/outputs/lift-usage-tracking.csv`
+- Usage tracking CSV: `pilot/data/lift-usage-tracking.csv`
 - Auto-stops overnight builder when iteration or token cap reached
 - Slack alerts at 80% of token cap and when caps are hit
 - Morning digest includes token usage summary and per-night averages
@@ -200,7 +216,7 @@ Repaired `lift-metrics.csv` in place (one-shot script reconstructed 46 split row
   - Adjusts token cap to 2x average nightly usage
   - Tunes cooldown based on failure rate
   - Needs 3+ nights of data before it starts tuning
-  - Tuning log: `~/Documents/Claude/outputs/lift-tune-log.csv`
+  - Tuning log: `pilot/data/lift-tune-log.csv`
   - Posts tuning decisions to #lift-automation
 - 2-layer automated PR review added to overnight builder:
   - Layer 1: Claude adversarial review (bugs, security, performance, accessibility)
@@ -212,8 +228,8 @@ Repaired `lift-metrics.csv` in place (one-shot script reconstructed 46 split row
   - Tracks clean merge rate (reviewers caught everything) vs. misses
   - Builds custom rules from patterns Aaron catches that reviewers miss
   - Injects learnings into future review prompts — reviewers get smarter over time
-  - History: `~/Documents/Claude/outputs/lift-review-history.json`
-  - Learnings: `~/Documents/Claude/outputs/lift-review-learnings.md`
+  - History: `pilot/data/lift-review-history.json`
+  - Learnings: `pilot/data/lift-review-learnings.md`
 - Discovery agent now uses Gemini for web research (Phase 1) + Claude for analysis/issue creation (Phase 2)
   - Gemini has native Google Search — better research results
   - Saves Claude tokens by offloading the search-heavy phase
@@ -299,3 +315,21 @@ Repaired `lift-metrics.csv` in place (one-shot script reconstructed 46 split row
 - Wrapped four sites (`TESTS_BEFORE`, `TESTS_AFTER`, `BUILD_SIZE`, `FINAL_TESTS`) in `{ … ; } | head -1` — same pattern already used for `DONE_COUNT`/`SKIPPED_COUNT`/`CREATED_COUNT` in commit 88796c0. Bug reproduced and fix verified in isolation; all 119 bats tests still pass.
 - The orphaned commit from that night (branch `enhance/LIFT-439-2026-04-27`, commit `8545fdd`) was already CI-green and is being opened as a manual PR.
 - **No change to Aaron's responsibilities** — overnight builder behavior is unchanged when the build is healthy.
+
+### 2026-04-30 — Coach's Questions Surfaced in Next Day's Daily Note
+- Section 9c ("What Would Help Me Coach You Better") questions are now mirrored into the next day's daily note so Aaron can actually answer them. Previously, 9c lived only in the AI Review file, which Aaron rarely reopened — questions were effectively unanswerable.
+- Added `### 💬 Coach's Questions` placeholder to `60_Reference/Templates/Daily Note Template.md` (in the Morning section, right after `### 📚 Study & Job Search`).
+- Updated `~/.claude/commands/ai-review.md`:
+  - Added new "Vault Update: Coach's Questions (next day's daily note)" step that mirrors 9c bullets verbatim into the daily note.
+  - Updated Path A step 6 and Path B step 5 vault-update lists to include the new prefill/refresh.
+- Idempotency: placeholder gets replaced on first populate; on Path B re-runs, refresh in-place if Aaron hasn't yet added response bullets. If Aaron has answered, do not overwrite — append new questions with an `<!-- updated YYYY-MM-DD -->` comment instead.
+- If 9c is omitted from the review (no questions to ask that day), the placeholder line is left untouched. Older daily notes that pre-date this feature do not get the heading retroactively.
+- **New responsibility (light):** Answer Coach's Questions inline in the daily note (nested bullet under each), in the Log, or in the Evening recap. Answers are picked up by the next AI Review's coaching analysis.
+
+
+### 2026-04-30 — Vault Frontmatter Compliance Templates
+- Patched periodic-note templates (Weekly, Monthly, Quarterly, Yearly), AI-Review-Template, and Rest Day Note Template to include `created`, `source`, and `tags` frontmatter. Daily Note Template was already compliant.
+- Updated `~/.claude/commands/ai-review.md` Output Structure spec to require `source: ai-generated` and `tags: [ai-review, daily]` on every AI Review file.
+- Source: 2026-04-30 vault audit found only 30% frontmatter compliance; templates were the systemic root cause.
+- Compounding effect: every new periodic note + AI Review from today forward ships compliant.
+- Existing files untouched (handled by separate backfill agent).

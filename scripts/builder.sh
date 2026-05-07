@@ -36,6 +36,14 @@ slack_send() {
 # Note: git push is allowed but the security scan runs before any push in the loop.
 BUILDER_ALLOWED_TOOLS="Read,Edit,Write,Glob,Grep,Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(git checkout:*),Bash(git branch:*),Bash(git log:*),Bash(git diff:*),Bash(git status:*),Bash(git fetch:*),Bash(git merge:*),Bash(git stash:*),Bash(git show:*),Bash(git rev-parse:*),Bash(git config user:*),Bash(gh:*),Bash(npm run build:*),Bash(npm run lint:*),Bash(npm test:*),Bash(npx vitest:*),Bash(npm run dev:*),Bash(npm ci:*),Bash(ls:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(mkdir:*),Bash(cp:*),Bash(mv:*)"
 
+# Builder DISALLOWED tools — explicitly deny subagent invocation so Claude does
+# the work in its own session and emits ISSUE_DONE markers in its final message.
+# Origin: 2026-04-30 Auditor finding — 57% of runs in the prior week showed parent
+# num_turns=1 with output_tokens<100, real work hiding in modelUsage (Haiku 5–10K
+# tokens per run). Even though Task wasn't in --allowedTools, Claude was clearly
+# delegating somehow; --disallowedTools makes it explicit.
+BUILDER_DISALLOWED_TOOLS="Task,Agent,WebFetch,WebSearch"
+
 REPO="${REPO_PATH:?REPO_PATH not set — run init.sh}"
 DATE=$(date +%Y-%m-%d)
 OUTPUT_DIR="${OUTPUT_DIR:-$PILOT_DIR/data}"
@@ -133,6 +141,10 @@ fi
 NIGHTLY_PRS=""
 NIGHTLY_PR_COUNT=0
 
+# Track issues already attempted tonight — even when Claude doesn't emit
+# ISSUE_DONE markers, so the next iteration won't pick the same issue.
+NIGHTLY_ATTEMPTED_ISSUES=""
+
 # ── Check for failed PRs from previous nights to retry ──────────────────────
 FAILED_PRS=$(cd "$REPO" && gh pr list --author "@me" --label "ci:failed" --json number,headRefName,title -q '.[].headRefName' 2>/dev/null || echo "")
 RETRY_ISSUES=""
@@ -219,7 +231,7 @@ $detail
   # Enable review-router builder mode — Gemini 3.1 Pro review on commit, Codex fallback
   export PILOT_BUILDER=1
   export PILOT_REVIEW_LOG="$OUTPUT_DIR/lift-review-$DATE-run${RUN}.log"
-  if claude --allowedTools "$BUILDER_ALLOWED_TOOLS" --output-format json -p "$(cat <<PROMPT
+  if claude --allowedTools "$BUILDER_ALLOWED_TOOLS" --disallowedTools "$BUILDER_DISALLOWED_TOOLS" --output-format json -p "$(cat <<PROMPT
 You are iteration $RUN of the overnight self-improving enhancer for $PROJECT_NAME at $REPO. This is Aaron Chung's portfolio project — he's an ex-AWS SDE2 targeting SWE roles at companies like Notion, Airtable, and Linear.
 
 You are running in a loop. Previous iterations tonight and from recent days have already made improvements. Your job is to find the NEXT most impactful thing to do that hasn't been done yet.
@@ -272,6 +284,10 @@ $ISSUE_DETAILS
 
 ${SKIPPED_ISSUES:-None}
 
+## Issues already ATTEMPTED tonight (do NOT pick any of these — even if they appear in the backlog above)
+
+${NIGHTLY_ATTEMPTED_ISSUES:-None}
+
 ## Your job (this iteration)
 
 1. **Read the repo** — look at what exists NOW (code, tests, config, README, etc.)
@@ -313,8 +329,8 @@ Read the review output carefully. If Pro identifies real issues (P1/P2):
 
 If findings are false positives (e.g. concerns about persistence that's already handled by a watcher), ignore them and move on.
 
-### Step 4: Exit
-After your final push, you are done. The pipeline handles PR creation.
+### Step 4: Output structured response, THEN exit
+After your final push completes, you MUST emit the full structured response below (Plan / Changes / Issue updates / Verification / Screenshots / Summary) **as your final assistant message in this session**. The pipeline parses ISSUE_DONE / ISSUE_PROGRESS markers from this response — if you exit without them, the issue is dropped from tomorrow's tracking and gets re-attempted next night, wasting a full iteration of compute. "The pipeline handles PR creation" does NOT mean you can skip the response format. Specifically: do NOT exit with a chatty one-liner like "background task completed, pipeline will handle the rest" — that is the failure mode that caused the 2026-05-06 P1 audit finding. Generate the full response.
 
 ## Rules
 
@@ -330,6 +346,8 @@ After your final push, you are done. The pipeline handles PR creation.
 - Do NOT create branches — you are already on the correct branch. Just commit to the current branch.
 - Do NOT create pull requests — the pipeline handles PR creation after your work is done.
 - You MUST push to remote when your implementation is complete: git push -u origin HEAD. A Gemini 3.1 Pro review runs automatically via the pre-push hook. After addressing any findings, push again.
+- CRITICAL — DO NOT DELEGATE: do this work yourself in this session. Do not invoke Task, Agent, or any sub-agent. The pipeline parses your final assistant message for the structured \`## Issue updates\` markers below; if you delegate, those markers end up inside a sub-agent's response that the pipeline cannot read, and the iteration gets re-run on the same issue tomorrow night. The 2026-04-29 builder run produced 12 duplicate PRs because the parent kept exiting after one turn while the real work was happening in a sub-agent. Stay in your own session, emit the markers, finish the iteration.
+- CRITICAL — DO NOT BACKGROUND GIT OPERATIONS: run \`git commit\`, \`git push\`, and pre-push hooks in the FOREGROUND. Do not pass run_in_background:true for any git command. When the push completes as a background task, you receive the completion result and the natural temptation is to exit with a one-liner like "background task completed, pipeline will handle the rest" — never doing so. That pattern caused the 2026-05-06 P1 audit finding (33/55 runs missing ISSUE_DONE markers). Foreground git, then generate the structured response, then exit.
 
 ## Output format
 
@@ -454,6 +472,18 @@ $CLAUDE_RESULT"
         if [ -z "$PRIMARY_ISSUE" ]; then
           PRIMARY_ISSUE=$(grep -oE "ISSUE_PROGRESS:${ISSUE_PREFIX}-[0-9]+" "$RUN_LOG" 2>/dev/null | head -1 | sed "s/ISSUE_PROGRESS://" || true)
         fi
+        # Fallback: when Claude doesn't emit ISSUE_DONE markers (happens when
+        # the inline pre-push review hook makes Claude exit with a terse ack),
+        # infer the issue from the commit messages so the branch still gets
+        # renamed and the dedupe guard below can fire.
+        if [ -z "$PRIMARY_ISSUE" ]; then
+          ISSUE_NUM_FROM_COMMIT=$(git log --format=%s "${DEFAULT_BRANCH:-master}".."$ITER_BRANCH" 2>/dev/null \
+            | grep -oE "${ISSUE_PREFIX}-[0-9]+|#[0-9]+" | head -1 | grep -oE '[0-9]+' || true)
+          if [ -n "$ISSUE_NUM_FROM_COMMIT" ]; then
+            PRIMARY_ISSUE="${ISSUE_PREFIX}-${ISSUE_NUM_FROM_COMMIT}"
+            echo "  ℹ️ Inferred PRIMARY_ISSUE=$PRIMARY_ISSUE from commit message (no ISSUE_DONE marker emitted)" | tee -a "$RUN_LOG"
+          fi
+        fi
         if [ -n "$PRIMARY_ISSUE" ]; then
           NEW_BRANCH="enhance/${PRIMARY_ISSUE}-$DATE"
           if [ "$NEW_BRANCH" != "$ITER_BRANCH" ]; then
@@ -461,6 +491,23 @@ $CLAUDE_RESULT"
             ITER_BRANCH="$NEW_BRANCH"
           fi
         fi
+
+        # Track every issue touched this iteration so the next iteration's
+        # prompt can steer away from it, even if Claude didn't mark it Done.
+        ATTEMPTED_THIS_RUN=$(git log --format=%s "${DEFAULT_BRANCH:-master}".."$ITER_BRANCH" 2>/dev/null \
+          | grep -oE "${ISSUE_PREFIX}-[0-9]+|#[0-9]+" | sort -u || true)
+        [ -n "$PRIMARY_ISSUE" ] && ATTEMPTED_THIS_RUN+="
+$PRIMARY_ISSUE"
+        for _ref in $ATTEMPTED_THIS_RUN; do
+          # Normalize "#438" -> "LIFT-438" so SKIPPED/ATTEMPTED lists use one shape.
+          if [[ "$_ref" =~ ^#([0-9]+)$ ]]; then
+            _ref="${ISSUE_PREFIX}-${BASH_REMATCH[1]}"
+          fi
+          case " $NIGHTLY_ATTEMPTED_ISSUES " in
+            *" $_ref "*) ;;
+            *) NIGHTLY_ATTEMPTED_ISSUES+="$_ref " ;;
+          esac
+        done
 
         # ── Extract issue category for PR labeling ───────────────────────
         ISSUE_CATEGORY=$(grep -oE 'Category: (feat|fix|a11y|test|perf|style|refactor|chore)' "$RUN_LOG" 2>/dev/null | head -1 | sed 's/Category: //' || echo "feat")
@@ -512,7 +559,7 @@ $CLAUDE_RESULT"
               # Merge conflict — ask Claude to resolve
               CONFLICT_FILES=$(git diff --name-only --diff-filter=U 2>/dev/null || true)
               if [ -n "$CONFLICT_FILES" ]; then
-                claude --allowedTools "$BUILDER_ALLOWED_TOOLS" -p "You are in the $REPO repo on branch $ITER_BRANCH. There are merge conflicts with master in these files:
+                claude --allowedTools "$BUILDER_ALLOWED_TOOLS" --disallowedTools "$BUILDER_DISALLOWED_TOOLS" -p "You are in the $REPO repo on branch $ITER_BRANCH. There are merge conflicts with master in these files:
 $CONFLICT_FILES
 
 Resolve all merge conflicts, keeping the intent of both sides. Then run npm test and npm run build to verify. Commit the resolution with message 'fix: resolve merge conflicts with master'." --max-turns 30 2>&1 | tee -a "$RUN_LOG" || true
@@ -527,7 +574,7 @@ Resolve all merge conflicts, keeping the intent of both sides. Then run npm test
             if [ "$CI_PASS" = "false" ]; then
               FAIL_SNIPPET=$(echo "$BUILD_OUT" | tail -30)
               TEST_SNIPPET=$(echo "$TEST_OUT" | tail -30)
-              claude --allowedTools "$BUILDER_ALLOWED_TOOLS" -p "You are in the $REPO repo on branch $ITER_BRANCH. The CI build or tests are failing. Fix the issues and commit the fix.
+              claude --allowedTools "$BUILDER_ALLOWED_TOOLS" --disallowedTools "$BUILDER_DISALLOWED_TOOLS" -p "You are in the $REPO repo on branch $ITER_BRANCH. The CI build or tests are failing. Fix the issues and commit the fix.
 
 Build output (last 30 lines):
 $FAIL_SNIPPET
@@ -612,6 +659,30 @@ $summary
           style)    PR_LABEL_ARGS="--label type:style" ;;
           *)        PR_LABEL_ARGS="" ;;
         esac
+
+        # ── Skip if an open PR already exists for this issue ──────────────
+        # Load-bearing guard: even if Claude didn't emit ISSUE_DONE markers
+        # and the tracker still shows the issue as unstarted, never create
+        # a second PR for the same issue. Match against both `#NNN` and
+        # `LIFT-NNN` shapes since commit messages and PR titles may use either.
+        ISSUE_NUM_FOR_DEDUPE=$(echo "${FIRST_COMMIT_MSG:-}" | grep -oE "#[0-9]+|${ISSUE_PREFIX}-[0-9]+" | head -1 | grep -oE '[0-9]+' || true)
+        if [ -n "$ISSUE_NUM_FOR_DEDUPE" ]; then
+          EXISTING_PR=$(gh pr list --repo "$GITHUB_REPO" --state open --json number,title --limit 100 \
+            -q ".[] | select(.title | test(\"#${ISSUE_NUM_FOR_DEDUPE}\\\\b|${ISSUE_PREFIX}-${ISSUE_NUM_FOR_DEDUPE}\\\\b\")) | .number" \
+            2>/dev/null | head -1)
+          if [ -n "$EXISTING_PR" ]; then
+            DUP_URL="https://github.com/$GITHUB_REPO/pull/$EXISTING_PR"
+            echo "♻️ PR #$EXISTING_PR already exists for issue #$ISSUE_NUM_FOR_DEDUPE — skipping duplicate" | tee -a "$RUN_LOG"
+            thread_send "♻️ *Run $RUN — skipped duplicate PR* for issue #$ISSUE_NUM_FOR_DEDUPE (existing: <$DUP_URL|PR #$EXISTING_PR>)"
+            git checkout "${DEFAULT_BRANCH:-master}" 2>/dev/null || true
+            git push origin --delete "$ITER_BRANCH" 2>/dev/null || true
+            git branch -D "$ITER_BRANCH" 2>/dev/null || true
+            ITER_END=$(date +%s)
+            ITER_DURATION=$((ITER_END - ITER_START))
+            echo "$DATE,$RUN,$ITER_START_FMT,$(date +%H:%M:%S),$ITER_DURATION,$NEW_COMMITS,$TESTS_BEFORE,$TESTS_BEFORE,0,0,0,0,0,,duplicate" >> "$METRICS_FILE"
+            continue
+          fi
+        fi
 
         PR_URL=$(gh pr create --base "${DEFAULT_BRANCH:-master}" --head "$ITER_BRANCH" \
           --title "$PR_TITLE" \
