@@ -26,7 +26,7 @@ _LOG_PROJECT_DIR="$(cd "$_LOG_SCRIPT_DIR/.." && pwd)"
 # Source project.env if not already loaded (skip in test mode)
 [ -z "${_PILOT_TEST_MODE:-}" ] && [ -z "${OUTPUT_DIR:-}" ] && [ -f "$_LOG_PROJECT_DIR/project.env" ] && source "$_LOG_PROJECT_DIR/project.env"
 
-OUTPUT_DIR="${OUTPUT_DIR:-$HOME/Documents/Claude/outputs}"
+OUTPUT_DIR="${OUTPUT_DIR:-$PILOT_DIR/data}"
 LOG_COMPONENT="${LOG_COMPONENT:-unknown}"
 
 _UNIFIED_LOG="$OUTPUT_DIR/pilot-$(date +%Y-%m-%d).log"

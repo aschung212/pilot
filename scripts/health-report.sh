@@ -5,7 +5,7 @@
 # Reads: lift-metrics.csv, lift-usage-tracking.csv, lift-tune-log.csv,
 #        lift-discovery-metrics.csv
 # Writes: lift-weekly-health-YYYY-MM-DD.md
-# Posts: summary to #system-changelog via webhook
+# Posts: summary to #pilot via webhook
 #
 # Usage:
 #   ./health-report.sh              # generate and post
@@ -25,7 +25,7 @@ LOG_COMPONENT="health-report"
 
 DATE=$(date +%Y-%m-%d)
 DRY_RUN="${1:-}"
-OUTPUT_DIR="${OUTPUT_DIR:-$HOME/Documents/Claude/outputs}"
+export OUTPUT_DIR="${OUTPUT_DIR:-$PILOT_DIR/data}"
 REPORT="$OUTPUT_DIR/lift-weekly-health-$DATE.md"
 
 # CSVs
@@ -42,7 +42,7 @@ import csv, json, sys, os
 from datetime import datetime, timedelta
 from collections import defaultdict
 
-output_dir = os.environ.get('OUTPUT_DIR', os.path.expanduser('~/Documents/Claude/outputs'))
+output_dir = os.environ.get('OUTPUT_DIR', os.environ.get('PILOT_DIR', '') + '/data')
 
 now = datetime.now()
 week_ago = now - timedelta(days=7)
@@ -227,10 +227,10 @@ _${PERIOD}_
 *Status*
 $ANOMALIES
 
-<https://linear.app/${LINEAR_ORG}|Linear Board>"
+<$(bash "$TRACKER" board-url)|Issue Board>"
   bash "$NOTIFY" --as health send changelog "$HEALTH_MSG"
   bash "$NOTIFY" --as health send automation "$HEALTH_MSG"
-  echo "📨 Posted to #system and #lift-automation"
+  echo "📨 Posted to #pilot and #lift-automation"
 fi
 
 # Log rotation — archive files older than 14 days

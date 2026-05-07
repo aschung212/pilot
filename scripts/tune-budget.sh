@@ -12,7 +12,7 @@ REAL_SCRIPT="$(readlink "$0" 2>/dev/null || echo "$0")"
 SCRIPT_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
 [ -z "${_PILOT_TEST_MODE:-}" ] && [ -f "$SCRIPT_DIR/../project.env" ] && source "$SCRIPT_DIR/../project.env"
 
-OUTPUT_DIR="${OUTPUT_DIR:-$HOME/Documents/Claude/outputs}"
+OUTPUT_DIR="${OUTPUT_DIR:-$PILOT_DIR/data}"
 BUDGET_CONF="${SCRIPT_DIR}/../config/budget.conf"
 USAGE_CSV="$OUTPUT_DIR/lift-usage-tracking.csv"
 METRICS_CSV="$OUTPUT_DIR/lift-metrics.csv"

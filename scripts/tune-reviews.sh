@@ -1,5 +1,11 @@
 #!/bin/bash
-# Lift Review Auto-Tuner — learns from PR outcomes to improve reviewer prompts.
+# DEPRECATED 2026-04-06: Review is now inline via hook-based review-router.
+# No PR comments are posted, so there's nothing to learn from.
+# The learnings file (lift-review-learnings.md) is frozen and can still be
+# referenced by the review-router prompts.
+# Safe to delete after 2026-05-06 if no issues arise.
+#
+# Original: Lift Review Auto-Tuner — learns from PR outcomes to improve reviewer prompts.
 # Runs after each overnight session. Analyzes:
 #   1. What each reviewer flagged
 #   2. What Aaron commented/requested on the PR
@@ -15,7 +21,7 @@ REAL_SCRIPT="$(readlink "$0" 2>/dev/null || echo "$0")"
 SCRIPT_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
 [ -z "${_PILOT_TEST_MODE:-}" ] && [ -f "$SCRIPT_DIR/../project.env" ] && source "$SCRIPT_DIR/../project.env"
 
-OUTPUT_DIR="${OUTPUT_DIR:-$HOME/Documents/Claude/outputs}"
+OUTPUT_DIR="${OUTPUT_DIR:-$PILOT_DIR/data}"
 LEARNINGS="$OUTPUT_DIR/lift-review-learnings.md"
 REVIEW_HISTORY="$OUTPUT_DIR/lift-review-history.json"
 REPO="${REPO_PATH:?REPO_PATH not set — run init.sh}"

@@ -1,9 +1,13 @@
 # Project-specific config (contains paths, team names, webhooks)
 project.env
 
-# Output artifacts
+# Runtime state (logs, metrics, queue, outputs)
+data/
 outputs/
 *.log
+
+# Claude Code session state (worktrees, settings)
+.claude/
 
 # macOS
 .DS_Store
