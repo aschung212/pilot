@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.aaron.pilot-architect</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/aaron/development/pilot/scripts/architect.sh</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <!-- Wednesday 20:00 — after Auditor (18:00) and Roadmap (19:00), before Builder (23:00) -->
+        <key>Weekday</key>
+        <integer>3</integer>
+        <key>Hour</key>
+        <integer>20</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/Users/aaron/Documents/Claude/outputs/pilot-architect-launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/aaron/Documents/Claude/outputs/pilot-architect-launchd.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:/Users/aaron/.npm-global/bin</string>
+        <key>HOME</key>
+        <string>/Users/aaron</string>
+    </dict>
+</dict>
+</plist>

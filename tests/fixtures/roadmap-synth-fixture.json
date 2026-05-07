@@ -1,0 +1,51 @@
+{
+  "themes": [
+    {
+      "name": "Performance & Bundle Size",
+      "description": "Issues focused on improving load times and reducing JavaScript bundle weight.",
+      "issues": ["LIFT-12", "LIFT-34"]
+    },
+    {
+      "name": "Accessibility Compliance",
+      "description": "Screen-reader, keyboard navigation, and WCAG colour-contrast fixes.",
+      "issues": ["LIFT-15", "LIFT-22", "LIFT-31"]
+    },
+    {
+      "name": "Onboarding & Growth",
+      "description": "First-run experience, retention hooks, and shareability.",
+      "issues": ["LIFT-8", "LIFT-44"]
+    }
+  ],
+  "epics": [
+    {
+      "name": "Core Accessibility Pass",
+      "motivation": "Users relying on assistive technology are currently blocked from key flows.",
+      "issues": ["LIFT-15", "LIFT-22", "LIFT-31"],
+      "sequence": "Fix contrast first (#15), then ARIA (#22), then keyboard traps (#31)."
+    },
+    {
+      "name": "Performance Budget",
+      "motivation": "Time-to-interactive on mid-range phones exceeds 4 s; impacts job-demo quality.",
+      "issues": ["LIFT-12", "LIFT-34"],
+      "sequence": "Bundle split (#12), then image optimisation (#34)."
+    }
+  ],
+  "orphans": [
+    {
+      "id": "LIFT-3",
+      "title": "Investigate Capacitor upgrade path",
+      "age_days": 45,
+      "reason": "Open 45 days, no comments, superseded by newer infra tickets."
+    }
+  ],
+  "risks": [
+    {
+      "type": "theme_imbalance",
+      "description": "Accessibility issues make up 38% of the open backlog; infra has zero open issues."
+    },
+    {
+      "type": "stale_accumulation",
+      "description": "1 issue (LIFT-3) has been open >30 days with no activity."
+    }
+  ]
+}

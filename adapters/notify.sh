@@ -11,13 +11,14 @@
 # Channels:
 #   automation  → #lift-automation (C0AQAEXQWBT)
 #   review      → #daily-review (C0APVGJ5KRC)
-#   changelog   → #system (C0APLN358UF)
+#   changelog   → #pilot (C0APLN358UF)
 #
 # Identity overrides (optional):
 #   notify.sh --as builder send <channel> <message>
 #   notify.sh --as triage thread-start <channel> <message>
 #
-# Supported identities: builder, discovery, triage, review-tuner, budget-tuner, health
+# Supported identities: builder, discovery, triage, review-tuner, budget-tuner, health,
+#                       auditor, roadmap, architect
 # Sets a distinct username and icon_emoji per agent for visual distinction in Slack.
 #
 # Threading requires SLACK_BOT_TOKEN in env. Falls back to webhook if not set.
@@ -49,6 +50,9 @@ get_identity() {
     review-tuner)  echo "${PROJECT_NAME:-Pilot} Review Tuner|:control_knobs:" ;;
     budget-tuner)  echo "${PROJECT_NAME:-Pilot} Budget Tuner|:control_knobs:" ;;
     health)        echo "${PROJECT_NAME:-Pilot} Health|:hospital:" ;;
+    auditor)       echo "${PROJECT_NAME:-Pilot} Auditor|:mag:" ;;
+    roadmap)       echo "${PROJECT_NAME:-Pilot} Roadmap|:world_map:" ;;
+    architect)     echo "${PROJECT_NAME:-Pilot} Architect|:classical_building:" ;;
     *)             echo "" ;;
   esac
 }

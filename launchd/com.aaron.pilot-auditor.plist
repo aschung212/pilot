@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.aaron.pilot-auditor</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/aaron/development/pilot/scripts/pipeline-auditor.sh</string>
+    </array>
+    <!-- Mid-week audit: Wednesday 18:00 local time. -->
+    <!-- Rationale: -->
+    <!--   * After Tue night's builder run completes (Wed 7:00 AM), so -->
+    <!--     Wed's data is fully written before we read it. -->
+    <!--   * Before Wed night's builder fires (23:00), so any P1 finding -->
+    <!--     gets reviewed and acted on within the same week. -->
+    <!--   * Wednesday is mid-cycle for Aaron's job-search week — gives him -->
+    <!--     time to react to a flagged regression before the weekly health -->
+    <!--     report fires Sunday morning. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key>
+        <integer>3</integer>
+        <key>Hour</key>
+        <integer>18</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/Users/aaron/Documents/Claude/outputs/pilot-auditor-launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/aaron/Documents/Claude/outputs/pilot-auditor-launchd.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:/Users/aaron/.npm-global/bin</string>
+        <key>HOME</key>
+        <string>/Users/aaron</string>
+    </dict>
+</dict>
+</plist>
