@@ -1,10 +1,10 @@
 #!/bin/bash
-# Issue Tracker Cleanup — archives completed/canceled issues and deduplicates backlog.
-# Runs at the end of each overnight session to preserve free tier capacity.
+# Issue Tracker Cleanup — closes completed/canceled issues and deduplicates backlog.
+# Runs at the end of each overnight session to keep the board clean.
 #
 # What it does:
-#   1. Archives all completed and canceled issues
-#   2. Detects and cancels+archives duplicate issues (same title, keeps oldest)
+#   1. Closes all completed and canceled issues (via tracker.sh)
+#   2. Detects and closes duplicate issues (same title, keeps oldest)
 #   3. Reports what was cleaned up
 #
 # Usage:
@@ -24,63 +24,38 @@ LOG_COMPONENT="cleanup"
 
 DRY_RUN="${1:-}"
 DATE=$(date +%Y-%m-%d)
+OUTPUT_DIR="${OUTPUT_DIR:-$PILOT_DIR/data}"
 
-# Get Linear API token from CLI config (needed for archive — not in CLI)
-LINEAR_TOKEN=$(grep -v '^default\|^\[' ~/.config/linear/credentials.toml 2>/dev/null | head -1 | sed 's/.*= *"//' | sed 's/"//')
-if [ -z "$LINEAR_TOKEN" ]; then
-  echo "  ⚠️ No Linear API token found — skipping cleanup."
-  exit 0
-fi
-
-# Helper: get UUID for an issue ID (e.g., MAS-123)
-get_uuid() {
-  curl -s -X POST https://api.linear.app/graphql \
-    -H "Authorization: $LINEAR_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d "{\"query\": \"{ issue(id: \\\"$1\\\") { id } }\"}" \
-    | python3 -c "import json,sys; print(json.load(sys.stdin)['data']['issue']['id'])" 2>/dev/null
-}
-
-# Helper: archive an issue by UUID
-archive_issue() {
-  curl -s -X POST https://api.linear.app/graphql \
-    -H "Authorization: $LINEAR_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d "{\"query\": \"mutation { issueArchive(id: \\\"$1\\\") { success } }\"}" >/dev/null 2>&1
-}
-
-ARCHIVED=0
+CLOSED=0
 DEDUPED=0
-ARCHIVED_LIST=""
+CLOSED_LIST=""
 
-# ── Step 1: Archive completed and canceled issues ──────────────────────────
+# ── Step 1: Close completed and canceled issues ──────────────────────────
 for state in completed canceled; do
   RAW_OUTPUT=$(bash "$TRACKER" list "$state" || true)
-  IDS=$(echo "$RAW_OUTPUT" | grep -oE "${LINEAR_TEAM}-[0-9]+" || true)
+  IDS=$(echo "$RAW_OUTPUT" | grep -oE "${ISSUE_PREFIX}-[0-9]+" || true)
 
   for issue_id in $IDS; do
-    # Get clean title via view command (avoids parsing fixed-width CLI columns)
     TITLE=$(bash "$TRACKER" view "$issue_id" 2>/dev/null | head -1 | sed "s/^# *${issue_id}: *//" | sed 's/[[:space:]]*$//')
     [ -z "$TITLE" ] && TITLE="(unknown)"
     if [ "$DRY_RUN" = "--dry-run" ]; then
-      echo "  [dry-run] Would archive $issue_id ($state): $TITLE"
+      echo "  [dry-run] Would close $issue_id ($state): $TITLE"
     else
-      UUID=$(get_uuid "$issue_id")
-      if [ -n "$UUID" ]; then
-        archive_issue "$UUID"
-        ARCHIVED=$((ARCHIVED + 1))
-        ARCHIVED_LIST+="  • ${issue_id} (${state}): ${TITLE}\n"
-      fi
+      REASON="completed"
+      [ "$state" = "canceled" ] && REASON="not_planned"
+      bash "$TRACKER" close "$issue_id" "$REASON" 2>/dev/null || true
+      CLOSED=$((CLOSED + 1))
+      CLOSED_LIST+="  • ${issue_id} (${state}): ${TITLE}\n"
     fi
   done
 done
 
-# ── Step 2: Deduplicate issues (same title, cancel+archive newer ones) ─────
+# ── Step 2: Deduplicate issues (same title, close newer ones) ────────────
 ALL_ISSUES=$(bash "$TRACKER" list backlog unstarted started triage || true)
 
 # Extract ID and title pairs, find duplicates by title
-echo "$ALL_ISSUES" | grep -oE "${LINEAR_TEAM}-[0-9]+" | while read -r issue_id; do
-  TITLE=$(bash "$TRACKER" view "$issue_id" | head -1 | sed "s/^# *${LINEAR_TEAM}-[0-9]*: *//")
+echo "$ALL_ISSUES" | grep -oE "${ISSUE_PREFIX}-[0-9]+" | while read -r issue_id; do
+  TITLE=$(bash "$TRACKER" view "$issue_id" 2>/dev/null | head -1 | sed "s/^# *${ISSUE_PREFIX}-[0-9]*: *//")
   echo "$issue_id|$TITLE"
 done | sort -t'|' -k2 | python3 -c "
 import sys
@@ -106,30 +81,27 @@ for title, ids in by_title.items():
             print(dup_id)
 " | while read -r dup_id; do
   if [ "$DRY_RUN" = "--dry-run" ]; then
-    echo "  [dry-run] Would cancel+archive duplicate $dup_id"
+    echo "  [dry-run] Would close duplicate $dup_id"
   else
-    bash "$TRACKER" update "$dup_id" --state canceled >/dev/null
-    UUID=$(get_uuid "$dup_id")
-    if [ -n "$UUID" ]; then
-      archive_issue "$UUID"
-      DEDUPED=$((DEDUPED + 1))
-    fi
+    bash "$TRACKER" update "$dup_id" --state canceled >/dev/null 2>&1 || true
+    bash "$TRACKER" close "$dup_id" "not_planned" 2>/dev/null || true
+    DEDUPED=$((DEDUPED + 1))
   fi
 done
 
 # Cleanup metrics CSV
 CLEANUP_METRICS_CSV="$OUTPUT_DIR/lift-cleanup-metrics.csv"
 if [ ! -f "$CLEANUP_METRICS_CSV" ]; then
-  echo "date,archived,deduped" > "$CLEANUP_METRICS_CSV"
+  echo "date,closed,deduped" > "$CLEANUP_METRICS_CSV"
 fi
 
 if [ "$DRY_RUN" != "--dry-run" ]; then
-  echo "$DATE,$ARCHIVED,$DEDUPED" >> "$CLEANUP_METRICS_CSV"
-  log_info "Cleanup: $ARCHIVED archived, $DEDUPED deduped"
-  echo "  ✅ Linear cleanup: $ARCHIVED archived, $DEDUPED deduped"
-  if [ -n "$ARCHIVED_LIST" ]; then
-    echo "  Archived issues:"
-    echo -e "$ARCHIVED_LIST"
+  echo "$DATE,$CLOSED,$DEDUPED" >> "$CLEANUP_METRICS_CSV"
+  log_info "Cleanup: $CLOSED closed, $DEDUPED deduped"
+  echo "  ✅ Cleanup: $CLOSED closed, $DEDUPED deduped"
+  if [ -n "$CLOSED_LIST" ]; then
+    echo "  Closed issues:"
+    echo -e "$CLOSED_LIST"
   fi
 else
   echo "  [dry-run] Cleanup preview complete."

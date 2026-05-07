@@ -367,13 +367,16 @@ focus_to_label() {
 }
 FOCUS_LABEL=$(focus_to_label "$FOCUS")
 
-# Create issues for discoveries — skip if Claude already created them inline
+# Create issues for discoveries — skip only if Claude actually created them via gh
 DISCOVER_COUNT=0
 DISCOVER_PRIORITIES=""
-CLAUDE_CREATED=$(grep -c "${ISSUE_PREFIX}-[0-9]" "$RUN_LOG" 2>/dev/null | tr -d ' \n' || true)
+# Detect actual issue creation: gh issue create outputs github.com URLs like
+# https://github.com/owner/repo/issues/123 — mere mentions of LIFT-NNN in
+# analysis text do NOT count as created issues.
+CLAUDE_CREATED=$(grep -cE "github\.com/.*/issues/[0-9]+" "$RUN_LOG" 2>/dev/null | tr -d ' \n' || true)
 CLAUDE_CREATED=${CLAUDE_CREATED:-0}
 if [ "$CLAUDE_CREATED" -gt 0 ] 2>/dev/null; then
-  echo "  ℹ️  Claude already created $CLAUDE_CREATED issues inline — skipping duplicate creation." | tee -a "$RUN_LOG"
+  echo "  ℹ️  Claude already created $CLAUDE_CREATED issues inline (URLs found) — skipping duplicate creation." | tee -a "$RUN_LOG"
 else
   { grep -oE 'ISSUE_DISCOVER:[1-4]:.*' "$RUN_LOG" 2>/dev/null || true; } | sort -u | while IFS='|' read -r marker desc; do
     priority=$(echo "$marker" | sed 's/ISSUE_DISCOVER:\([1-4]\):.*/\1/')
@@ -395,39 +398,9 @@ echo "$DATE,$FOCUS,$DISCOVER_COUNT,$DISCOVER_PRIORITIES,$DISCOVER_DURATION" >> "
 done
 
 # Post discovery digest to Slack — include issue links
-DISCOVERY_LIST=$(python3 -c "
-import re, subprocess
-with open('$RUN_LOG') as f:
-    log = f.read()
-
-tracker = '$TRACKER'
-prefix = '${ISSUE_PREFIX}'
-
-def issue_url(iid):
-    try:
-        return subprocess.check_output(['bash', tracker, 'issue-url', iid], text=True).strip()
-    except:
-        return ''
-
-# Extract titles from ISSUE_DISCOVER lines
-titles = re.findall(r'ISSUE_DISCOVER:[1-4]:([^|]+)', log)
-# Extract issue IDs (prefix-N format)
-issue_ids = re.findall(prefix + r'-\d+', log)
-
-# Pair them up (best effort — same order)
-lines = []
-for i, title in enumerate(titles):
-    title = title.strip()
-    if i < len(issue_ids):
-        iid = issue_ids[i]
-        url = issue_url(iid)
-        lines.append(f'  • <{url}|{iid}: {title}>')
-    else:
-        lines.append(f'  • {title}')
-print('\n'.join(lines) if lines else '  (none)')
-" 2>/dev/null)
 SEARCH_SUMMARY=$({ sed -n '/^## Search Summary/,/^## /p' "$RUN_LOG" 2>/dev/null || true; } | grep -v '^## ' | head -3 | tr '\n' ' ')
-# Map priority numbers to labels for readability
+# Build labeled discovery list — only use issue IDs from tracker create output
+# (lines starting with "  📋 Creating:" are followed by tracker output with the real ID)
 DISCOVERY_LIST_LABELED=$(python3 -c "
 import re, subprocess
 with open('$RUN_LOG') as f:
@@ -444,18 +417,28 @@ def issue_url(iid):
 
 prio_labels = {'1': '🔴 Urgent', '2': '🟠 High', '3': '🟡 Medium', '4': '🔵 Low'}
 titles = re.findall(r'ISSUE_DISCOVER:([1-4]):([^|]+)', log)
-issue_ids = re.findall(prefix + r'-\d+', log)
+
+# Extract issue IDs only from tracker create output lines (after '📋 Creating:' lines),
+# or from github.com URLs that gh issue create produces — NOT from Claude's analysis text.
+# Look for IDs in lines that contain 'Creating:' or github.com issue URLs.
+created_ids = re.findall(r'https://github\.com/[^/]+/[^/]+/issues/(\d+)', log)
+created_ids = [f'{prefix}-{n}' for n in created_ids]
+# Also check for tracker create output pattern (e.g., 'Created LIFT-205')
+created_ids += re.findall(r'(?:Created|created)\s+(' + prefix + r'-\d+)', log)
 
 lines = []
 for i, (prio, title) in enumerate(titles):
     title = title.strip()
     label = prio_labels.get(prio, f'P{prio}')
-    if i < len(issue_ids):
-        iid = issue_ids[i]
+    if i < len(created_ids):
+        iid = created_ids[i]
         url = issue_url(iid)
-        lines.append(f'  • {label} <{url}|{iid}>: {title}')
+        if url:
+            lines.append(f'  \u2022 {label} <{url}|{iid}>: {title}')
+        else:
+            lines.append(f'  \u2022 {label} {iid}: {title}')
     else:
-        lines.append(f'  • {label} {title}')
+        lines.append(f'  \u2022 {label} {title}')
 print('\n'.join(lines) if lines else '  (none)')
 " 2>/dev/null)
 

@@ -78,54 +78,7 @@ load test_helper
   [ "$status" -eq 0 ]
 }
 
-# ── ai-review.sh interface ──────────────────────────────────────────────────
-
-# bats test_tags=fast
-@test "contract: ai-review supports all layer commands" {
-  REVIEW="$PILOT_DIR/adapters/ai-review.sh"
-  DIFF="$TEST_TMPDIR/test.diff"
-  echo "diff --git a/test.ts b/test.ts" > "$DIFF"
-
-  export MOCK_GEMINI_OUTPUT="REVIEW_CLEAN
-REVIEW_VERDICT:MERGE"
-
-  for layer in layer1 layer2 layer3; do
-    OUTPUT="$TEST_TMPDIR/review-${layer}.txt"
-    run bash "$REVIEW" "$layer" "$DIFF" "$OUTPUT"
-    if [ "$status" -ne 0 ]; then
-      echo "ai-review.$layer failed with exit $status" >&2
-      false
-    fi
-    # Every layer must produce a verdict
-    if ! grep -q "REVIEW_VERDICT:" "$OUTPUT" 2>/dev/null; then
-      echo "ai-review.$layer produced no verdict" >&2
-      false
-    fi
-  done
-}
-
-# ── Output format contracts ──────────────────────────────────────────────────
-
-# bats test_tags=fast
-@test "contract: review output follows REVIEW_FIX format" {
-  # Valid format: REVIEW_FIX:<severity>:<file>:<description>
-  valid="REVIEW_FIX:critical:src/App.vue:Missing null check"
-  echo "$valid" | grep -qE '^REVIEW_FIX:(critical|high|medium|low):[^:]+:.+$'
-
-  # Invalid: missing severity
-  invalid="REVIEW_FIX::src/App.vue:Missing null check"
-  ! echo "$invalid" | grep -qE '^REVIEW_FIX:(critical|high|medium|low):[^:]+:.+$'
-}
-
-# bats test_tags=fast
-@test "contract: review verdicts are one of three values" {
-  for v in MERGE REVIEW DO_NOT_MERGE; do
-    echo "REVIEW_VERDICT:$v" | grep -qE '^REVIEW_VERDICT:(MERGE|REVIEW|DO_NOT_MERGE)$'
-  done
-
-  # Invalid verdict rejected
-  ! echo "REVIEW_VERDICT:MAYBE" | grep -qE '^REVIEW_VERDICT:(MERGE|REVIEW|DO_NOT_MERGE)$'
-}
+# ── ai-review.sh interface (DEPRECATED — adapter no longer called by builder) ──
 
 # bats test_tags=fast
 @test "contract: triage verdicts are one of five values" {

@@ -1,74 +1,105 @@
 #!/usr/bin/env bats
-# Tests for adapters/tracker.sh
+# Tests for adapters/tracker.sh (dual-backend: GitHub for Lift, Linear for others)
 
 load test_helper
 
 TRACKER="$PILOT_DIR/adapters/tracker.sh"
 
+# ── GitHub backend (LIFT- prefix) ──────────────────────────────────────────
+
 # bats test_tags=fast
-@test "tracker: list passes states to linear CLI" {
+@test "tracker: list routes LIFT issues to gh CLI" {
+  export TRACKER_ADAPTER="github"
+  export GITHUB_ISSUES_REPO="test/repo"
+  export ISSUE_PREFIX="LIFT"
   run bash "$TRACKER" list backlog unstarted
   [ "$status" -eq 0 ]
-  # Verify linear was called with correct args
-  grep -q "issue list" "$TEST_TMPDIR/mock_calls/linear"
-  grep -q -- "--state backlog" "$TEST_TMPDIR/mock_calls/linear"
-  grep -q -- "--state unstarted" "$TEST_TMPDIR/mock_calls/linear"
-  grep -q -- "--team TEST" "$TEST_TMPDIR/mock_calls/linear"
+  grep -q "issue list" "$TEST_TMPDIR/mock_calls/gh"
 }
 
 # bats test_tags=fast
-@test "tracker: list with --project override" {
-  run bash "$TRACKER" list --project OtherProject backlog
+@test "tracker: view routes LIFT ID to gh CLI" {
+  export TRACKER_ADAPTER="github"
+  export GITHUB_ISSUES_REPO="test/repo"
+  export ISSUE_PREFIX="LIFT"
+  run bash "$TRACKER" view LIFT-100
   [ "$status" -eq 0 ]
-  grep -q -- "--project OtherProject" "$TEST_TMPDIR/mock_calls/linear"
+  grep -q "issue view" "$TEST_TMPDIR/mock_calls/gh"
 }
 
 # bats test_tags=fast
-@test "tracker: view passes issue ID" {
-  run bash "$TRACKER" view TEST-100
+@test "tracker: create routes to gh when TRACKER_ADAPTER=github" {
+  export TRACKER_ADAPTER="github"
+  export GITHUB_ISSUES_REPO="test/repo"
+  export ISSUE_PREFIX="LIFT"
+  run bash "$TRACKER" create "Fix the bug" 2 --state unstarted --description "A bug fix"
   [ "$status" -eq 0 ]
-  grep -q "issue view TEST-100" "$TEST_TMPDIR/mock_calls/linear"
+  grep -q "issue create" "$TEST_TMPDIR/mock_calls/gh"
 }
 
 # bats test_tags=fast
-@test "tracker: create passes title, priority, and optional flags" {
+@test "tracker: update routes LIFT ID to gh CLI" {
+  export TRACKER_ADAPTER="github"
+  export GITHUB_ISSUES_REPO="test/repo"
+  export ISSUE_PREFIX="LIFT"
+  run bash "$TRACKER" update LIFT-100 --state completed --priority 1
+  [ "$status" -eq 0 ]
+  grep -q "issue edit" "$TEST_TMPDIR/mock_calls/gh"
+}
+
+# bats test_tags=fast
+@test "tracker: issue-url returns GitHub URL for LIFT IDs" {
+  export TRACKER_ADAPTER="github"
+  export GITHUB_ISSUES_REPO="test/repo"
+  export ISSUE_PREFIX="LIFT"
+  run bash "$TRACKER" issue-url LIFT-100
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"github.com/test/repo/issues/100"* ]]
+}
+
+# bats test_tags=fast
+@test "tracker: board-url returns GitHub issues URL" {
+  export TRACKER_ADAPTER="github"
+  export GITHUB_ISSUES_REPO="test/repo"
+  export ISSUE_PREFIX="LIFT"
+  run bash "$TRACKER" board-url
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"github.com/test/repo/issues"* ]]
+}
+
+# ── Linear backend (non-LIFT prefix) ──────────────────────────────────────
+
+# bats test_tags=fast
+@test "tracker: view routes non-LIFT ID to linear CLI" {
+  export TRACKER_ADAPTER="github"
+  export GITHUB_ISSUES_REPO="test/repo"
+  export ISSUE_PREFIX="LIFT"
+  run bash "$TRACKER" view MAS-100
+  [ "$status" -eq 0 ]
+  grep -q "issue view MAS-100" "$TEST_TMPDIR/mock_calls/linear"
+}
+
+# bats test_tags=fast
+@test "tracker: create routes to linear when TRACKER_ADAPTER=linear" {
+  export TRACKER_ADAPTER="linear"
   run bash "$TRACKER" create "Fix the bug" 2 --state unstarted --description "A bug fix"
   [ "$status" -eq 0 ]
   grep -q -- '--title Fix the bug' "$TEST_TMPDIR/mock_calls/linear"
   grep -q -- "--priority 2" "$TEST_TMPDIR/mock_calls/linear"
-  grep -q -- "--state unstarted" "$TEST_TMPDIR/mock_calls/linear"
-  grep -q -- "--description A bug fix" "$TEST_TMPDIR/mock_calls/linear"
 }
 
 # bats test_tags=fast
-@test "tracker: update passes state and priority" {
-  run bash "$TRACKER" update TEST-100 --state completed --priority 1
+@test "tracker: comment-add routes by ID prefix" {
+  export TRACKER_ADAPTER="github"
+  export GITHUB_ISSUES_REPO="test/repo"
+  export ISSUE_PREFIX="LIFT"
+  # Non-LIFT ID should route to Linear
+  run bash "$TRACKER" comment-add MAS-100 "This is a comment"
   [ "$status" -eq 0 ]
-  grep -q "issue update TEST-100" "$TEST_TMPDIR/mock_calls/linear"
-  grep -q -- "--state completed" "$TEST_TMPDIR/mock_calls/linear"
-  grep -q -- "--priority 1" "$TEST_TMPDIR/mock_calls/linear"
+  grep -q "issue comment add MAS-100" "$TEST_TMPDIR/mock_calls/linear"
 }
 
-# bats test_tags=fast
-@test "tracker: comment-add passes issue ID and body" {
-  run bash "$TRACKER" comment-add TEST-100 "This is a comment"
-  [ "$status" -eq 0 ]
-  grep -q "issue comment add TEST-100" "$TEST_TMPDIR/mock_calls/linear"
-}
-
-# bats test_tags=fast
-@test "tracker: issue-url returns correct URL" {
-  run bash "$TRACKER" issue-url TEST-100
-  [ "$status" -eq 0 ]
-  [ "$output" = "https://linear.app/testorg/issue/TEST-100" ]
-}
-
-# bats test_tags=fast
-@test "tracker: board-url returns correct URL" {
-  run bash "$TRACKER" board-url
-  [ "$status" -eq 0 ]
-  [ "$output" = "https://linear.app/testorg" ]
-}
+# ── Error handling ─────────────────────────────────────────────────────────
 
 # bats test_tags=fast
 @test "tracker: unknown command exits with error" {

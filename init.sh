@@ -41,16 +41,19 @@ if [ "${1:-}" = "--check" ]; then
   fi
 
   # Check tools
-  for tool in claude gemini linear gh git node npm; do
+  for tool in claude gh git node npm; do
     if command -v "$tool" &>/dev/null; then
       ok "$tool installed ($(command -v "$tool"))"
     else
-      if [ "$tool" = "gemini" ]; then
-        warn "$tool not found (optional — discovery research will be limited)"
-      else
-        fail "$tool not found"
-        ERRORS=$((ERRORS + 1))
-      fi
+      fail "$tool not found"
+      ERRORS=$((ERRORS + 1))
+    fi
+  done
+  for tool in gemini linear; do
+    if command -v "$tool" &>/dev/null; then
+      ok "$tool installed (optional)"
+    else
+      warn "$tool not found (optional)"
     fi
   done
 
@@ -136,8 +139,9 @@ echo ""
 # ── 2. Issue Tracker ──────────────────────────────────────────
 say "2. Issue Tracker"
 echo ""
-echo "  1) Linear (recommended)"
-echo "  2) GitHub Issues"
+echo "  1) GitHub Issues (recommended)"
+echo "  2) Linear"
+echo "  3) Both (GitHub for this project, Linear for others)"
 echo ""
 ask "Choose [1]: "
 read -r TRACKER_CHOICE
@@ -146,9 +150,22 @@ TRACKER_CHOICE="${TRACKER_CHOICE:-1}"
 LINEAR_TEAM=""
 LINEAR_PROJECT=""
 LINEAR_ORG=""
+ISSUE_PREFIX=""
+GITHUB_ISSUES_REPO=""
+LIFT_PROJECT=""
 
 case "$TRACKER_CHOICE" in
   1)
+    TRACKER_ADAPTER="github"
+    GITHUB_ISSUES_REPO="$GITHUB_REPO"
+    ask "Issue ID prefix (e.g., LIFT, PROJ) [${PROJECT_NAME^^}]: "
+    read -r ISSUE_PREFIX
+    ISSUE_PREFIX="${ISSUE_PREFIX:-${PROJECT_NAME^^}}"
+    LIFT_PROJECT="$PROJECT_NAME"
+    ok "GitHub Issues: $GITHUB_ISSUES_REPO with ${ISSUE_PREFIX}-N IDs"
+    ;;
+  2)
+    TRACKER_ADAPTER="linear"
     if ! command -v linear &>/dev/null; then
       warn "Linear CLI not found. Install: npm install -g @anthropic-ai/linear-cli"
       warn "Then run: linear auth"
@@ -161,11 +178,23 @@ case "$TRACKER_CHOICE" in
     read -r LINEAR_PROJECT
     ask "Linear org slug (from your Linear URL): "
     read -r LINEAR_ORG
-    TRACKER_ADAPTER="linear"
+    ISSUE_PREFIX="$LINEAR_TEAM"
     ;;
-  2)
+  3)
     TRACKER_ADAPTER="github"
-    warn "GitHub Issues adapter — you may need to customize adapters/tracker.sh"
+    GITHUB_ISSUES_REPO="$GITHUB_REPO"
+    ask "Issue ID prefix for GitHub (e.g., LIFT) [${PROJECT_NAME^^}]: "
+    read -r ISSUE_PREFIX
+    ISSUE_PREFIX="${ISSUE_PREFIX:-${PROJECT_NAME^^}}"
+    LIFT_PROJECT="$PROJECT_NAME"
+    echo ""
+    echo "  Linear config (for other projects):"
+    ask "Linear team key: "
+    read -r LINEAR_TEAM
+    ask "Linear org slug: "
+    read -r LINEAR_ORG
+    LINEAR_PROJECT="$PROJECT_NAME"
+    ok "Dual backend: GitHub for $PROJECT_NAME, Linear for others"
     ;;
 esac
 
@@ -267,7 +296,7 @@ if [ "$SETUP_SLACK" = "y" ]; then
   read -r SLACK_CHANNEL_AUTOMATION
   ask "Daily review channel ID (or press Enter to skip): "
   read -r SLACK_CHANNEL_REVIEW
-  ask "System changelog channel ID (or press Enter to skip): "
+  ask "Pilot channel ID (or press Enter to skip): "
   read -r SLACK_CHANNEL_CHANGELOG
 fi
 
@@ -312,12 +341,14 @@ echo "  9) data-viz          — charts, dashboards, data display"
 echo "  10) onboarding       — first-run UX, empty states, tutorials"
 echo "  11) dx-cicd          — CI/CD, build tools, developer experience"
 echo "  12) monetization     — pricing, freemium, revenue"
+echo "  13) marketing        — social media, launch strategy, content"
+echo "  14) growth           — user acquisition, retention, referrals"
 echo ""
 ask "Enter numbers to include (comma-separated) [1,2,3,4,5,6]: "
 read -r FOCUS_CHOICES
 FOCUS_CHOICES="${FOCUS_CHOICES:-1,2,3,4,5,6}"
 
-FOCUS_MAP=("" "competitors" "performance" "ui-trends" "accessibility" "testing" "security-deps" "pwa-patterns" "seo-aso" "data-viz" "onboarding" "dx-cicd" "monetization")
+FOCUS_MAP=("" "competitors" "performance" "ui-trends" "accessibility" "testing" "security-deps" "pwa-patterns" "seo-aso" "data-viz" "onboarding" "dx-cicd" "monetization" "marketing" "growth")
 FOCUS_AREAS=""
 IFS=',' read -ra CHOICES <<< "$FOCUS_CHOICES"
 for c in "${CHOICES[@]}"; do
@@ -344,6 +375,9 @@ DEFAULT_BRANCH="$DEFAULT_BRANCH"
 
 # ── Issue Tracker ────────────────────────────────────────────
 TRACKER_ADAPTER="$TRACKER_ADAPTER"
+GITHUB_ISSUES_REPO="$GITHUB_ISSUES_REPO"
+ISSUE_PREFIX="$ISSUE_PREFIX"
+LIFT_PROJECT="$LIFT_PROJECT"
 LINEAR_TEAM="$LINEAR_TEAM"
 LINEAR_PROJECT="$LINEAR_PROJECT"
 LINEAR_ORG="$LINEAR_ORG"
@@ -378,7 +412,7 @@ BUILDER_STOP_TIME="$BUILDER_STOP_TIME"
 PILOT_DIR="$PILOT_DIR"
 SCRIPTS_DIR="$PILOT_DIR/scripts"
 ADAPTER_DIR="$PILOT_DIR/adapters"
-OUTPUT_DIR="\$HOME/Documents/Claude/outputs"
+OUTPUT_DIR="$PILOT_DIR/data"
 PRODUCT_DECISIONS_FILE=""
 PRODUCT_FEATURES_FILE=""
 ENV_EOF
@@ -409,7 +443,7 @@ else
 fi
 
 # ── Discovery queue ──────────────────────────────────────────
-DISCOVERY_QUEUE="$HOME/Documents/Claude/outputs/${PROJECT_NAME,,}-discovery-queue.txt"
+DISCOVERY_QUEUE="$PILOT_DIR/data/${PROJECT_NAME,,}-discovery-queue.txt"
 mkdir -p "$(dirname "$DISCOVERY_QUEUE")"
 echo -e "$FOCUS_AREAS" | sed '/^$/d' > "$DISCOVERY_QUEUE"
 ok "Discovery queue written to $DISCOVERY_QUEUE"
@@ -456,9 +490,9 @@ PLIST_DAY
   cat >> "$plist_path" << PLIST_TAIL
     </array>
     <key>StandardOutPath</key>
-    <string>$HOME/Documents/Claude/outputs/pilot-${name}-launchd.log</string>
+    <string>$PILOT_DIR/data/pilot-${name}-launchd.log</string>
     <key>StandardErrorPath</key>
-    <string>$HOME/Documents/Claude/outputs/pilot-${name}-launchd.log</string>
+    <string>$PILOT_DIR/data/pilot-${name}-launchd.log</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
@@ -511,7 +545,7 @@ fi
 echo ""
 
 # ── Create output directory ───────────────────────────────────
-mkdir -p "$HOME/Documents/Claude/outputs"
+mkdir -p "$PILOT_DIR/data"
 ok "Output directory ready"
 
 # ── Summary ───────────────────────────────────────────────────

@@ -66,7 +66,7 @@ Only paths change. Everything else (Linear team, GitHub repo, models) stays the 
 ```bash
 # Personal machine
 REPO_PATH="/Users/aaron/development/lift"
-OUTPUT_DIR="/Users/aaron/Documents/Claude/outputs"
+OUTPUT_DIR="/Users/aaron/development/pilot/data"
 PRODUCT_DECISIONS_FILE="/Users/aaron/Documents/Obsidian Vault/.../Lift - Product Decisions.md"
 
 # Dedicated machine
