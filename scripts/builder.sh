@@ -204,8 +204,15 @@ $(sed -n '/## Plan/,/## /p' "$f" 2>/dev/null | head -20)
   TEST_COUNT=$(cd "$REPO" && npm test -- --reporter=dot 2>&1 | tail -5 || echo "unknown")
   GIT_LOG=$(cd "$REPO" && git log --oneline -10)
 
-  # Pull issue backlog for the Lift project
-  BACKLOG_ISSUES=$(bash "$TRACKER" list unstarted started || echo "Could not fetch issues")
+  # Pull pickable issue backlog (unstarted only — issues already in progress are
+  # surfaced in a separate prompt section so Claude does not pick them again).
+  BACKLOG_ISSUES=$(bash "$TRACKER" list unstarted || echo "Could not fetch issues")
+
+  # In-progress issues — work is already underway (state:started label set when
+  # commits land in any iteration, or when Claude emits ISSUE_PROGRESS markers).
+  # Shown to Claude as informational so it knows not to pick them, even if the
+  # tracker has not been refreshed since they were marked.
+  IN_PROGRESS_ISSUES=$(bash "$TRACKER" list started 2>/dev/null || true)
 
   # Fetch full details (description + comments) for top priority issues
   TOP_ISSUE_IDS=$({ echo "$BACKLOG_ISSUES" | grep -oE "${ISSUE_PREFIX}-[0-9]+" | head -5; } || true)
@@ -301,9 +308,15 @@ $TEST_COUNT
 
 $PREVIOUS_SUMMARIES
 
-## Issue backlog (open issues for $PROJECT_NAME)
+## Issue backlog (UNSTARTED issues for $PROJECT_NAME — these are pickable)
 
 $BACKLOG_ISSUES
+
+## Issues already IN PROGRESS — DO NOT PICK (work already underway)
+
+These issues have the \`state:started\` label, meaning a previous builder iteration (tonight or earlier) committed work against them. Picking one of these will produce a redundant branch on top of work that is already underway. If you think one looks genuinely stalled and should be retried, output \`ISSUE_SKIPPED:<id>:looks stalled, needs human review\` and pick something different from the backlog instead.
+
+${IN_PROGRESS_ISSUES:-None}
 
 ## Issue details (descriptions + comments — may include triage agent suggestions as a STARTING POINT — read the codebase and use your own judgment; deviate from suggestions if you find a better approach)
 
@@ -542,6 +555,28 @@ $PRIMARY_ISSUE"
             *" $_ref "*) ;;
             *) NIGHTLY_ATTEMPTED_ISSUES+="$_ref " ;;
           esac
+        done
+
+        # ── Mark touched issues as In Progress in the tracker ────────────
+        # Commit-driven, not marker-driven: even when Claude exits without
+        # emitting ISSUE_PROGRESS markers (the 2026-05-07 stall pattern), the
+        # tracker state reflects that work has started. Subsequent iterations
+        # query "tracker.sh list unstarted" for the pickable backlog, so once
+        # the label flips, the issue disappears from the picking list.
+        # The later ISSUE_DONE handler at line ~620 closes issues that finished;
+        # this only sets In Progress for issues that received commits but no
+        # completion marker.
+        for _ref in $ATTEMPTED_THIS_RUN; do
+          if [[ "$_ref" =~ ^#([0-9]+)$ ]]; then
+            _ref="${ISSUE_PREFIX}-${BASH_REMATCH[1]}"
+          fi
+          # Skip if Claude already emitted an ISSUE_DONE marker for this issue
+          # (the Done update later in the iteration is the right end state).
+          if grep -qE "ISSUE_DONE:${_ref}\b" "$RUN_LOG" 2>/dev/null; then
+            continue
+          fi
+          echo "  🟡 Marking $_ref as In Progress (commit detected)" | tee -a "$RUN_LOG"
+          bash "$TRACKER" update "$_ref" --state "In Progress" 2>&1 | tee -a "$RUN_LOG" || true
         done
 
         # ── Extract issue category for PR labeling ───────────────────────

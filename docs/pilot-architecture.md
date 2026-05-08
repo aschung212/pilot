@@ -304,6 +304,20 @@ See [Pilot Responsibilities](pilot-responsibilities.md) for the complete list of
 
 ## Changelog
 
+### 2026-05-08 — Builder marks issues "In Progress" when commits land
+
+**Problem.** Even with the picking-time dedupe and `gh pr create` lockdown landed earlier the same day, an issue could still be re-picked across nights because the tracker rarely flipped state. State changes were marker-driven (`ISSUE_PROGRESS:` / `ISSUE_DONE:` from Claude's structured response), and the 2026-05-07 stall pattern showed Claude exiting terse without emitting any markers — so the `state:started` label was rare in practice. The pickable backlog (`tracker.sh list unstarted started`) kept surfacing the same issue across runs.
+
+**Fix.** State change is now commit-driven. As soon as commits with `#NNN` / `LIFT-NNN` refs land on the iteration branch, the script calls `tracker.sh update <id> --state "In Progress"` for each ref. The label flips even when Claude exits without markers.
+
+**Picking query split.**
+- `BACKLOG_ISSUES`: `tracker.sh list unstarted` (was `list unstarted started`) — only truly-pickable issues appear in the prompt's primary backlog.
+- `IN_PROGRESS_ISSUES` (new): `tracker.sh list started` — surfaced separately under `## Issues already IN PROGRESS — DO NOT PICK`. Tells Claude what is in flight without making it pickable. Stalled work can be flagged via `ISSUE_SKIPPED:<id>:looks stalled, needs human review`.
+
+**Race avoidance.** The new "mark In Progress" loop short-circuits when Claude has already emitted an `ISSUE_DONE:<id>` marker — the existing close handler at line ~620 will run a moment later and we want the issue to land in Done, not bounce through In Progress first.
+
+**Trade-off.** Issues that get committed against but never finish now stay in `state:started` until manually triaged. This is intentional — silent re-picking was the failure mode. Aaron has a (light) new responsibility: periodically scan `state:started` issues that linger and either revert to `unstarted` (retry) or move to `blocked`.
+
 ### 2026-05-08 — Builder picking-time dedupe + `gh pr create` lockdown
 
 **Problem.** The 2026-05-07 overnight produced PRs #515 and #517 for issue #501 — same content, two PRs. Two of the three "real" runs (6 and 11) emitted duplicates despite the post-PR dedupe guard that landed 2026-05-06. Six of twelve runs that night were stalls. Combined waste: ~25 minutes of compute and a duplicate to clean up by hand.
