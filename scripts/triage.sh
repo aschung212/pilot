@@ -46,8 +46,15 @@ DECISIONS_FILE="${PRODUCT_DECISIONS_FILE:-}"
 [ -n "$DECISIONS_FILE" ] && [ ! -f "$DECISIONS_FILE" ] && echo "  ⚠️ Product decisions file not found: $DECISIONS_FILE" >&2
 PRODUCT_DECISIONS=$(cat "$DECISIONS_FILE" 2>/dev/null || echo "No product decisions file found")
 
-# Get all backlog/unstarted issues
-ALL_ISSUES=$(bash "$TRACKER" list backlog unstarted)
+# Get every issue in scope for triage. "triageable" is exclusion-based:
+# every open issue that is NOT in {state:started, state:blocked, state:canceled}.
+# This includes state:triage, state:backlog, state:unstarted, AND issues with
+# no state:* label at all (manual issues Aaron creates without labels, plus
+# any legacy issue from before the labeling convention). Was previously
+# `list backlog unstarted` (inclusion-based), which silently skipped every
+# unlabeled issue — #216, #358, #434 sat untriaged for weeks because of this.
+# tracker.sh's gh_list "triageable" implements the underlying jq exclusion.
+ALL_ISSUES=$(bash "$TRACKER" list triageable)
 ISSUE_IDS=$(echo "$ALL_ISSUES" | grep -oE "${ISSUE_PREFIX}-[0-9]+" || true)
 
 if [ -z "$ISSUE_IDS" ]; then

@@ -81,6 +81,28 @@ gh_list() {
               )
             | "'"${ISSUE_PREFIX}"'-\(.number) \(.title)"' 2>/dev/null || true
         ;;
+      triageable)
+        # Triage scope: open issues that the triage agent should consider.
+        # Wider than pickable — includes state:triage, state:backlog, and
+        # state:unstarted (so the triage agent can re-review or promote them),
+        # plus any open issue with no state:* label at all (manual issues
+        # Aaron creates without bothering with labels; legacy issues from
+        # before the labeling convention; #216/#358/#434 are examples).
+        # Excludes only terminal/in-flight states so triage does not interrupt
+        # active work or revive intentionally-blocked issues.
+        # The triage agent further filters out issues that already have a
+        # "Triaged by" comment (its own idempotency check).
+        gh issue list --repo "$GITHUB_ISSUES_REPO" --limit 200 --state open \
+          --json number,title,labels \
+          --jq '.[]
+            | select(
+                (.labels | map(.name)) as $l
+                | ($l | index("state:started")  | not)
+                  and ($l | index("state:blocked")  | not)
+                  and ($l | index("state:canceled") | not)
+              )
+            | "'"${ISSUE_PREFIX}"'-\(.number) \(.title)"' 2>/dev/null || true
+        ;;
       completed)
         gh issue list --repo "$GITHUB_ISSUES_REPO" --limit 100 --state closed \
           --json number,title,labels \

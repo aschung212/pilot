@@ -36,6 +36,26 @@ TRACKER="$PILOT_DIR/adapters/tracker.sh"
 }
 
 # bats test_tags=fast
+@test "tracker: list triageable runs an open-state exclusion query" {
+  # Parallel to "pickable" but the triage scope: every open issue that is not
+  # already in flight (state:started), blocked, or canceled. Includes
+  # state:triage, state:backlog, state:unstarted, and unlabeled issues. Without
+  # this, manually-created issues (no state label) sit forever — #216, #358,
+  # and #434 were ignored for 2-3 weeks under the prior `list backlog unstarted`
+  # inclusion query. Lock the contract.
+  export TRACKER_ADAPTER="github"
+  export GITHUB_ISSUES_REPO="test/repo"
+  export ISSUE_PREFIX="LIFT"
+  run bash "$TRACKER" list triageable
+  [ "$status" -eq 0 ]
+  grep -q "issue list" "$TEST_TMPDIR/mock_calls/gh"
+  grep -q -- "--state open" "$TEST_TMPDIR/mock_calls/gh"
+  ! grep -q -- "--label state:backlog" "$TEST_TMPDIR/mock_calls/gh"
+  ! grep -q -- "--label state:unstarted" "$TEST_TMPDIR/mock_calls/gh"
+  ! grep -q -- "--label state:triageable" "$TEST_TMPDIR/mock_calls/gh"
+}
+
+# bats test_tags=fast
 @test "tracker: view routes LIFT ID to gh CLI" {
   export TRACKER_ADAPTER="github"
   export GITHUB_ISSUES_REPO="test/repo"
