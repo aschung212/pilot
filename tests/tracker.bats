@@ -18,6 +18,24 @@ TRACKER="$PILOT_DIR/adapters/tracker.sh"
 }
 
 # bats test_tags=fast
+@test "tracker: list pickable runs an open-state exclusion query" {
+  # The "pickable" pseudo-state must hit `gh issue list --state open` (no
+  # state:* label filter) and pass the exclusion logic in --jq. If a future
+  # refactor regresses to a label-based inclusion query, every architect-
+  # created issue (which lacks state:unstarted due to a separate labeling
+  # bug) silently drops out of the picking pool. Lock the contract here.
+  export TRACKER_ADAPTER="github"
+  export GITHUB_ISSUES_REPO="test/repo"
+  export ISSUE_PREFIX="LIFT"
+  run bash "$TRACKER" list pickable
+  [ "$status" -eq 0 ]
+  grep -q "issue list" "$TEST_TMPDIR/mock_calls/gh"
+  grep -q -- "--state open" "$TEST_TMPDIR/mock_calls/gh"
+  ! grep -q -- "--label state:unstarted" "$TEST_TMPDIR/mock_calls/gh"
+  ! grep -q -- "--label state:pickable" "$TEST_TMPDIR/mock_calls/gh"
+}
+
+# bats test_tags=fast
 @test "tracker: view routes LIFT ID to gh CLI" {
   export TRACKER_ADAPTER="github"
   export GITHUB_ISSUES_REPO="test/repo"

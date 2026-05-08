@@ -204,9 +204,14 @@ $(sed -n '/## Plan/,/## /p' "$f" 2>/dev/null | head -20)
   TEST_COUNT=$(cd "$REPO" && npm test -- --reporter=dot 2>&1 | tail -5 || echo "unknown")
   GIT_LOG=$(cd "$REPO" && git log --oneline -10)
 
-  # Pull pickable issue backlog (unstarted only — issues already in progress are
-  # surfaced in a separate prompt section so Claude does not pick them again).
-  BACKLOG_ISSUES=$(bash "$TRACKER" list unstarted || echo "Could not fetch issues")
+  # Pull pickable issue backlog. "pickable" is exclusion-based: every open
+  # issue NOT in {state:triage, state:backlog, state:started, state:blocked,
+  # state:canceled}. Issues without any state:* label (architect orphans, old
+  # untriaged items) are included — that way a single label-omitting agent
+  # cannot silently drop issues from the picking pool. In-progress issues are
+  # surfaced separately in a do-not-pick prompt section. See tracker.sh
+  # gh_list "pickable" for the underlying jq query.
+  BACKLOG_ISSUES=$(bash "$TRACKER" list pickable || echo "Could not fetch issues")
 
   # In-progress issues — work is already underway (state:started label set when
   # commits land in any iteration, or when Claude emits ISSUE_PROGRESS markers).
@@ -670,7 +675,7 @@ $PRIMARY_ISSUE"
         # Commit-driven, not marker-driven: even when Claude exits without
         # emitting ISSUE_PROGRESS markers (the 2026-05-07 stall pattern), the
         # tracker state reflects that work has started. Subsequent iterations
-        # query "tracker.sh list unstarted" for the pickable backlog, so once
+        # query "tracker.sh list pickable" for the picking pool, so once
         # the label flips, the issue disappears from the picking list.
         # The later ISSUE_DONE handler at line ~620 closes issues that finished;
         # this only sets In Progress for issues that received commits but no

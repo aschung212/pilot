@@ -304,6 +304,51 @@ See [Pilot Responsibilities](pilot-responsibilities.md) for the complete list of
 
 ## Changelog
 
+### 2026-05-08 — Single source of truth for "pickable": exclusion-based query in tracker.sh
+
+**Why this is its own entry.** The two-stage pre-pick fix earlier today narrowed the picking pool to whatever `tracker.sh list unstarted` returned (4 issues). That accidentally cut off the side channel that was rescuing architect-created issues — they lack `state:unstarted` due to a separate labeling bug, but Claude's main builder call had `Bash(gh:*)` and was finding them via direct `gh issue list` queries. Locking stage 1 to `Read,Glob,Grep` made the picking deterministic but also made the builder blind to those orphans. A 9-issue pool effectively shrank to 4.
+
+**The structural problem.** Picking eligibility was determined by an **inclusion** query (`--label state:unstarted`). One agent's omission silently removed an issue from the pool. Every issue-creating agent became a single point of failure for the builder's input.
+
+**Fix.** `adapters/tracker.sh` `gh_list` now accepts a pseudo-state `pickable`:
+
+```
+gh issue list --state open --json number,title,labels --jq '
+  .[] | select((.labels | map(.name)) as $l |
+    ($l | index("state:triage")   | not) and
+    ($l | index("state:backlog")  | not) and
+    ($l | index("state:started")  | not) and
+    ($l | index("state:blocked")  | not) and
+    ($l | index("state:canceled") | not)
+  ) | "LIFT-\(.number) \(.title)"'
+```
+
+Exclusion-based: every open issue NOT in {triage, backlog, started, blocked, canceled} is pickable. Issues with no `state:*` label at all are pickable by default — a single label-omitting agent cannot silently drop issues.
+
+**`scripts/builder.sh`** stage 1 now calls `tracker.sh list pickable` (was `list unstarted`). Other call sites (the backpressure signal at end-of-night that asks "should discovery run extra?") still use `list unstarted` because that one specifically measures discovery-pipeline output.
+
+**Issue lifecycle.**
+
+```
+discover     ─→ state:triage
+triage       ─→ state:backlog | state:unstarted | (closed canceled)
+architect    ─→ (intended state:unstarted, currently no label — separate bug)
+builder pick ─→ state:started     (deterministic at pre-pick stage)
+builder done ─→ closed            (state:started removed)
+stalled      ─→ state:started     (lingers; manual triage)
+```
+
+**Single source of truth per question.**
+
+| Question | Answer |
+|---|---|
+| What can builder pick next? | `tracker.sh list pickable` |
+| Who is working on this? | `state:started` label |
+| Is there a PR for this? | `gh pr list` (OPEN_PR_ISSUES filter) |
+| What did builder attempt this run? | `NIGHTLY_ATTEMPTED_ISSUES` |
+
+**Locked in via test.** `tests/tracker.bats` now asserts that `list pickable` hits `--state open` and does NOT regress to `--label state:unstarted` (the pattern this fix replaces).
+
 ### 2026-05-08 — Two-stage builder: pre-pick stage flips state BEFORE implementation
 
 **Problem.** The commit-driven In-Progress flip (landed earlier today) only fires after Claude's main session ends. If iteration N stalls without commits — the 2026-05-07 pattern, where Claude exits terse after the pre-push review hook fires — no commits exist, the state never flips, and iteration N+1 within the same nightly run re-picks the same issue.

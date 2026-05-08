@@ -57,9 +57,30 @@ gh_number() {
 
 gh_list() {
   # Args: state1 [state2 ...]
-  # gh issue list ANDs labels, so we query per state and combine
+  # gh issue list ANDs labels, so we query per state and combine.
+  #
+  # Special pseudo-state "pickable": every open issue that is NOT in any of
+  # {triage, backlog, started, blocked, canceled}. This is exclusion-based on
+  # purpose — issues created without any state:* label (the architect bug,
+  # 2026-05-08) still count as pickable. The builder uses this to decide what
+  # to work on next; a single label-omitting agent does not silently remove
+  # issues from the picking pool.
   for state in "$@"; do
     case "$state" in
+      pickable)
+        gh issue list --repo "$GITHUB_ISSUES_REPO" --limit 200 --state open \
+          --json number,title,labels \
+          --jq '.[]
+            | select(
+                (.labels | map(.name)) as $l
+                | ($l | index("state:triage")   | not)
+                  and ($l | index("state:backlog")  | not)
+                  and ($l | index("state:started")  | not)
+                  and ($l | index("state:blocked")  | not)
+                  and ($l | index("state:canceled") | not)
+              )
+            | "'"${ISSUE_PREFIX}"'-\(.number) \(.title)"' 2>/dev/null || true
+        ;;
       completed)
         gh issue list --repo "$GITHUB_ISSUES_REPO" --limit 100 --state closed \
           --json number,title,labels \
