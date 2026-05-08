@@ -503,6 +503,7 @@ After your final push completes, you MUST emit the full structured response belo
 - Quality over quantity — fully implement the issue rather than doing it halfway
 - If you cannot find anything meaningful to improve, output ONLY the line "NO_IMPROVEMENTS_REMAINING" and exit
 - Commit with clear conventional commit messages (feat/fix/a11y/test/perf/style/refactor/chore prefix)
+- Include \`Closes #N\` (where N is the issue number, no LIFT- prefix) in at least one commit body so GitHub auto-closes the issue when the PR merges. The pipeline depends on this — it no longer closes issues at implementation time because that orphaned issues whose PRs failed CI (see PR #467 / LIFT-436, 2026-04-30).
 - If a test is failing when you start, you may try to fix it ONCE. If it still fails after one attempt, skip it and move on to new work. Do not spend more than 10 turns on any single fix.
 - IMPORTANT: Focus on SHIPPING, not perfecting. Commit working improvements and move on.
 - Do NOT create branches — you are already on the correct branch. Just commit to the current branch.
@@ -790,16 +791,26 @@ Fix the failing build/tests. Do NOT revert the feature — fix the actual issue.
         LATEST_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
         COMMIT_URL="https://github.com/$GITHUB_REPO/commit/$LATEST_COMMIT"
 
+        # ── Mark ISSUE_DONE issues as In Progress, NOT closed ──────────────
+        # Actual closure happens when GitHub auto-closes the issue on PR merge
+        # via "Closes #N" in the commit message. Closing here is premature:
+        # PR #467 (LIFT-436) failed CI and never merged, but the issue was
+        # marked Done by this loop and got swept closed by cleanup.sh. The
+        # PR is still open while the issue shows Closed — orphaned state.
+        # Builder requires Claude to include "Closes #N" in commit bodies so
+        # the GitHub merge mechanism is the single source of truth.
         { grep -oE "ISSUE_DONE:${ISSUE_PREFIX}-[0-9]+\|[^\"]*" "$RUN_LOG" 2>/dev/null || true; } | sort -u | while IFS='|' read -r marker summary; do
           issue_id=$(echo "$marker" | sed 's/ISSUE_DONE://')
           summary=${summary:-No details provided}
-          echo "  Marking $issue_id as Done" | tee -a "$RUN_LOG"
-          bash "$TRACKER" update "$issue_id" --state "Done" 2>&1 | tee -a "$RUN_LOG"
-          bash "$TRACKER" comment-add "$issue_id" "Completed by overnight automation on $DATE.
+          echo "  Marking $issue_id as In Progress (closes on PR merge)" | tee -a "$RUN_LOG"
+          bash "$TRACKER" update "$issue_id" --state "In Progress" 2>&1 | tee -a "$RUN_LOG"
+          bash "$TRACKER" comment-add "$issue_id" "Implementation complete on $DATE — PR opened.
 
 $summary
 
-[View commit]($COMMIT_URL)" 2>&1 | tee -a "$RUN_LOG"
+[View commit]($COMMIT_URL)
+
+This issue will close automatically when the PR merges." 2>&1 | tee -a "$RUN_LOG"
         done
         { grep -oE "ISSUE_PROGRESS:${ISSUE_PREFIX}-[0-9]+\|[^\"]*" "$RUN_LOG" 2>/dev/null || true; } | sort -u | while IFS='|' read -r marker summary; do
           issue_id=$(echo "$marker" | sed 's/ISSUE_PROGRESS://')

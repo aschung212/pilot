@@ -143,6 +143,18 @@ updated: 2026-05-08
 
 ## Changelog
 
+### 2026-05-08 — Builder no longer closes issues at implementation time
+
+**Problem.** [PR #467](https://github.com/aschung212/Lift/pull/467) (LIFT-436, BroadcastChannel for cross-tab sync) was opened 2026-04-30 with a typecheck failure. CI never went green, the PR sat unreviewed, and the merge state went DIRTY against `main`. But on 2026-05-06 issue [#436](https://github.com/aschung212/Lift/issues/436) closed itself — orphaned: PR open, issue closed, no merge, no human action.
+
+**Root cause.** `scripts/builder.sh:797` ran `tracker.sh update <id> --state "Done"` whenever Claude emitted `ISSUE_DONE:LIFT-N`. That call routes through `gh_update` in `adapters/tracker.sh:203`, which calls `gh issue close --reason completed`. The pipeline was treating "Claude finished implementation" as "issue is done" — but the PR still has to pass CI and merge before the work is real.
+
+**Fix.** `ISSUE_DONE` markers now flip state to `In Progress` (with a "PR opened, will close on merge" comment), not `Done`. Closure is GitHub-driven via `Closes #N` in the commit body. Builder prompt now explicitly requires Claude to include `Closes #N` in at least one commit message so the GitHub merge mechanism is the single source of truth for closure.
+
+**Action needed for Aaron:** None for new runs — the next overnight pipeline picks up the new behavior automatically. For the orphaned issue: I reopened LIFT-436 manually and rebased PR #467 onto `master` (the typecheck error in `crossTabSync.ts` was a non-distributive conditional type — the function parameter resolved to `never` because TS only distributes naked type *parameters*, not type *aliases*; replaced with an explicit `SyncStatus` alias). Issue will auto-close when PR #467 merges.
+
+**Watch for stalls.** Issues that get committed against but whose PRs never merge will now stay in `state:started` indefinitely. The pipeline auditor's existing PR-stall detection still surfaces these — no new responsibility, but the symptom shifts from "closed orphan issue" to "stale In-Progress issue."
+
 ### 2026-05-06 — Auditor unblocked + builder early-exit fix
 
 Three changes triggered by today's auditor P1 findings ([pilot#4](https://github.com/aschung212/pilot/issues/4), [pilot#5](https://github.com/aschung212/pilot/issues/5)):

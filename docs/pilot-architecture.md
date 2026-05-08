@@ -121,7 +121,7 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
 - Creates a PR per issue with structured description: issue links, test results, review status
 - PRs labeled by type (type:a11y, type:test, type:bugfix, type:feature, etc.)
 - Failed PR retry: PRs labeled `ci:failed` from previous nights are auto-retried
-- Updates issue tracker (marks issues Done/In Progress/Blocked)
+- Updates issue tracker (marks issues In Progress/Blocked; closure deferred to PR merge via "Closes #N")
 - Repeats for up to 12 iterations or 500K output tokens
 
 **Controls** (auto-tuned nightly by `lift-tune-budget.sh`):
@@ -334,9 +334,12 @@ discover     ─→ state:triage
 triage       ─→ state:backlog | state:unstarted | (closed canceled)
 architect    ─→ (intended state:unstarted, currently no label — separate bug)
 builder pick ─→ state:started     (deterministic at pre-pick stage)
-builder done ─→ closed            (state:started removed)
+builder done ─→ state:started     (PR opened; closure deferred to PR merge)
+PR merge     ─→ closed            (GitHub auto-closes via "Closes #N")
 stalled      ─→ state:started     (lingers; manual triage)
 ```
+
+Closure is GitHub-driven, not pipeline-driven: the builder requires Claude to include `Closes #N` in at least one commit body, and GitHub auto-closes the issue when the PR merges. The pipeline never calls `gh issue close` for an `ISSUE_DONE` marker — that produced orphaned closures when the PR failed CI (PR #467 / LIFT-436, 2026-04-30: PR stayed open with typecheck errors, but the issue closed on a subsequent night via `cleanup.sh` after the builder's `--state Done` flip).
 
 **Single source of truth per question.**
 
