@@ -303,11 +303,11 @@ You MUST respond with a valid JSON block (and nothing else outside it). The JSON
   "findings": [
     {
       "title": "Short imperative title (under 80 chars)",
-      "motivation": "Why this matters architecturally. 2-4 sentences.",
+      "motivation": "Why this matters architecturally. 2-4 sentences as a single string. NOT an array.",
       "files": ["src/stores/workout.ts", "src/composables/useWorkout.ts"],
-      "proposed_approach": "How to fix or mitigate. Concrete steps. 3-6 bullet points.",
+      "proposed_approach": ["3-6 concrete steps as JSON array of strings", "each item is one short imperative sentence", "this field MUST be an array, never a string with bullets"],
       "priority": 2,
-      "sequencing_notes": "Should be done before/after X because..."
+      "sequencing_notes": "Single string — not an array. Should be done before/after X because..."
     }
   ]
 }
