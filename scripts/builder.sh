@@ -42,7 +42,13 @@ BUILDER_ALLOWED_TOOLS="Read,Edit,Write,Glob,Grep,Bash(git add:*),Bash(git commit
 # num_turns=1 with output_tokens<100, real work hiding in modelUsage (Haiku 5–10K
 # tokens per run). Even though Task wasn't in --allowedTools, Claude was clearly
 # delegating somehow; --disallowedTools makes it explicit.
-BUILDER_DISALLOWED_TOOLS="Task,Agent,WebFetch,WebSearch"
+#
+# Also blocks `gh pr create` so Claude can't create the PR itself and bypass the
+# script's pre-PR dedupe guard. The 2026-05-07 run produced PR #515 and #517 for
+# issue #501 because Claude (despite the prompt saying not to) ran `gh pr create`
+# inside its own session, which beat the script's guard. The script must be the
+# only entity that opens PRs in this pipeline.
+BUILDER_DISALLOWED_TOOLS="Task,Agent,WebFetch,WebSearch,Bash(gh pr create:*)"
 
 REPO="${REPO_PATH:?REPO_PATH not set — run init.sh}"
 DATE=$(date +%Y-%m-%d)
@@ -215,6 +221,29 @@ $detail
   # Gather recently skipped issues so Claude avoids retrying them this session
   SKIPPED_ISSUES=$(grep -rohE "ISSUE_SKIPPED:${ISSUE_PREFIX}-[0-9]+:[^\"]*" "$OUTPUT_DIR"/lift-enhance-$DATE-run*.md 2>/dev/null | sort -u || true)
 
+  # ── Picking-time dedupe: issues that ALREADY have an open PR ─────────────
+  # Query GitHub for every open PR title and extract the issue references
+  # (`#NNN` or `LIFT-NNN`). Inject the deduped list into the prompt so Claude
+  # sees them BEFORE picking — tonight's earlier iterations, previous nights'
+  # still-open PRs, and any manual PRs Aaron made between runs all show up here.
+  # Belt-and-suspenders: the post-work guard at line ~668 still fires if Claude
+  # picks one of these anyway, but this preempts the wasted compute.
+  OPEN_PR_ISSUES=$(cd "$REPO" && gh pr list --state open --json title --limit 100 \
+    -q '.[] | .title' 2>/dev/null \
+    | grep -oE "(${ISSUE_PREFIX}-|#)[0-9]+" \
+    | sed -E "s/^#/${ISSUE_PREFIX}-/" \
+    | sort -u | tr '\n' ' ' || true)
+
+  # Merge open-PR issues into the nightly attempted list. They're functionally
+  # equivalent — both mean "do not pick" — and pre-loading the list this way
+  # also covers run 1 of the night, before NIGHTLY_ATTEMPTED_ISSUES has anything.
+  for _open_ref in $OPEN_PR_ISSUES; do
+    case " $NIGHTLY_ATTEMPTED_ISSUES " in
+      *" $_open_ref "*) ;;
+      *) NIGHTLY_ATTEMPTED_ISSUES+="$_open_ref " ;;
+    esac
+  done
+
   # ── Create a branch for this iteration ───────────────────────────────────
   # Branch name will be updated once we know which issue Claude picks.
   # Start on a temporary branch; rename after we parse the run log.
@@ -283,6 +312,12 @@ $ISSUE_DETAILS
 ## Issues skipped earlier tonight (do NOT retry these)
 
 ${SKIPPED_ISSUES:-None}
+
+## Issues with EXISTING OPEN PRs — DO NOT PICK (would create a duplicate)
+
+These issues already have an open pull request on GitHub right now — from earlier iterations tonight, previous nights, or a manual PR Aaron opened. Picking any of these will create a duplicate PR, the failure mode that produced 5 PRs for #438 on 2026-04-29 and 2 PRs for #501 on 2026-05-07. Pick something else from the backlog — or if everything in the backlog already has an open PR, output "NO_IMPROVEMENTS_REMAINING" and exit.
+
+${OPEN_PR_ISSUES:-None}
 
 ## Issues already ATTEMPTED tonight (do NOT pick any of these — even if they appear in the backlog above)
 
@@ -665,11 +700,23 @@ $summary
         # and the tracker still shows the issue as unstarted, never create
         # a second PR for the same issue. Match against both `#NNN` and
         # `LIFT-NNN` shapes since commit messages and PR titles may use either.
+        # Fallback chain: prefer FIRST_COMMIT_MSG (most reliable signal of what
+        # Claude worked on), then PRIMARY_ISSUE (already inferred above), then
+        # any commit message on the iter branch — handles the case where the
+        # first commit's subject happens to lack a ref.
         ISSUE_NUM_FOR_DEDUPE=$(echo "${FIRST_COMMIT_MSG:-}" | grep -oE "#[0-9]+|${ISSUE_PREFIX}-[0-9]+" | head -1 | grep -oE '[0-9]+' || true)
+        if [ -z "$ISSUE_NUM_FOR_DEDUPE" ] && [ -n "${PRIMARY_ISSUE:-}" ]; then
+          ISSUE_NUM_FOR_DEDUPE=$(echo "$PRIMARY_ISSUE" | grep -oE '[0-9]+' || true)
+        fi
+        if [ -z "$ISSUE_NUM_FOR_DEDUPE" ]; then
+          ISSUE_NUM_FOR_DEDUPE=$(git log --format=%B "${DEFAULT_BRANCH:-master}".."$ITER_BRANCH" 2>/dev/null \
+            | grep -oE "#[0-9]+|${ISSUE_PREFIX}-[0-9]+" | head -1 | grep -oE '[0-9]+' || true)
+        fi
         if [ -n "$ISSUE_NUM_FOR_DEDUPE" ]; then
           EXISTING_PR=$(gh pr list --repo "$GITHUB_REPO" --state open --json number,title --limit 100 \
             -q ".[] | select(.title | test(\"#${ISSUE_NUM_FOR_DEDUPE}\\\\b|${ISSUE_PREFIX}-${ISSUE_NUM_FOR_DEDUPE}\\\\b\")) | .number" \
             2>/dev/null | head -1)
+          echo "  🔍 Pre-PR dedupe check: issue #$ISSUE_NUM_FOR_DEDUPE → existing open PR: ${EXISTING_PR:-none}" | tee -a "$RUN_LOG"
           if [ -n "$EXISTING_PR" ]; then
             DUP_URL="https://github.com/$GITHUB_REPO/pull/$EXISTING_PR"
             echo "♻️ PR #$EXISTING_PR already exists for issue #$ISSUE_NUM_FOR_DEDUPE — skipping duplicate" | tee -a "$RUN_LOG"
@@ -682,6 +729,10 @@ $summary
             echo "$DATE,$RUN,$ITER_START_FMT,$(date +%H:%M:%S),$ITER_DURATION,$NEW_COMMITS,$TESTS_BEFORE,$TESTS_BEFORE,0,0,0,0,0,,duplicate" >> "$METRICS_FILE"
             continue
           fi
+        else
+          # Couldn't extract an issue number — guard can't help. Log loudly so
+          # this shows up in audit reports if a duplicate slips through.
+          echo "  ⚠️ Pre-PR dedupe check: could not extract issue number from FIRST_COMMIT_MSG=\"${FIRST_COMMIT_MSG:-(empty)}\" or PRIMARY_ISSUE=\"${PRIMARY_ISSUE:-(empty)}\" — guard cannot fire. PR will be created without dedupe." | tee -a "$RUN_LOG"
         fi
 
         PR_URL=$(gh pr create --base "${DEFAULT_BRANCH:-master}" --head "$ITER_BRANCH" \

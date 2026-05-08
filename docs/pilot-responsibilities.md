@@ -4,7 +4,7 @@ tags:
   - pilot
   - automation
   - responsibilities
-updated: 2026-04-30
+updated: 2026-05-08
 ---
 
 # Aaron's Pilot Responsibilities
@@ -333,3 +333,10 @@ Repaired `lift-metrics.csv` in place (one-shot script reconstructed 46 split row
 - Source: 2026-04-30 vault audit found only 30% frontmatter compliance; templates were the systemic root cause.
 - Compounding effect: every new periodic note + AI Review from today forward ships compliant.
 - Existing files untouched (handled by separate backfill agent).
+
+### 2026-05-08 — Builder Picking-Time Dedupe + `gh pr create` Lockdown
+- 2026-05-07 overnight produced PRs #515 and #517 for the same issue (#501); two of three "real" runs that night still emitted duplicates after the post-PR guard landed on 2026-05-06. Root cause: Claude was running `gh pr create` itself inside the iteration, opening the dup PR before the script-side guard could fire — and there was no signal at issue-pick time to steer Claude away from issues that already had open PRs.
+- `scripts/builder.sh` now queries `gh pr list --state open` at the start of every iteration, extracts every `#NNN` / `LIFT-NNN` reference from PR titles, and injects the deduped set into the prompt under a new `## Issues with EXISTING OPEN PRs — DO NOT PICK` section (above the existing "ATTEMPTED tonight" list). Same set is also merged into `NIGHTLY_ATTEMPTED_ISSUES` so run 1 of the night isn't blind.
+- `Bash(gh pr create:*)` added to `BUILDER_DISALLOWED_TOOLS`. Claude can still push branches and open issues; only PR creation is reserved to the script. The script's existing post-work dedupe guard at line ~700 stays in place as a second line of defense.
+- Post-work guard hardened: now falls back to `PRIMARY_ISSUE` and then to a full-branch commit-message scan when `FIRST_COMMIT_MSG` lacks a ref. Also logs the issue number it checked and what it found, so silent regressions show up in audit reports.
+- **No change to Aaron's responsibilities** — this is a behavior fix to the overnight pipeline. The new layer should make `♻️ skipped duplicate PR` Slack messages more common and mornings cleaner. The duplicate PRs from 2026-04-29 and 2026-05-07 nights still need manual close (`gh pr close 447 448 450 451 515 …`); not in scope for this change.

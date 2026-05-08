@@ -304,6 +304,22 @@ See [Pilot Responsibilities](pilot-responsibilities.md) for the complete list of
 
 ## Changelog
 
+### 2026-05-08 — Builder picking-time dedupe + `gh pr create` lockdown
+
+**Problem.** The 2026-05-07 overnight produced PRs #515 and #517 for issue #501 — same content, two PRs. Two of the three "real" runs (6 and 11) emitted duplicates despite the post-PR dedupe guard that landed 2026-05-06. Six of twelve runs that night were stalls. Combined waste: ~25 minutes of compute and a duplicate to clean up by hand.
+
+**Why the post-PR guard didn't help.** The guard fires after Claude's session ends, right before the script's own `gh pr create`. But Claude was opening the PR itself inside the iteration (`gh:*` was in the allowlist, so `gh pr create` was reachable despite the prompt saying "do NOT create pull requests"). By the time the guard ran, the dup PR was already on GitHub. There was also no signal at issue-pick time pointing Claude away from issues that already had open PRs from previous nights or earlier iterations.
+
+**Fix in three layers (`scripts/builder.sh`).**
+
+1. **Picking-time dedupe (new).** Before each iteration's prompt is rendered, the script runs `gh pr list --state open --json title --limit 100` and extracts every `#NNN` / `LIFT-NNN` ref from the titles. The deduped list is injected into the prompt under `## Issues with EXISTING OPEN PRs — DO NOT PICK` (above the existing "ATTEMPTED tonight" section). The same set is merged into `NIGHTLY_ATTEMPTED_ISSUES` so run 1 of the night isn't blind to previous nights' open PRs.
+
+2. **`gh pr create` lockdown.** Added `Bash(gh pr create:*)` to `BUILDER_DISALLOWED_TOOLS`. Claude can still push branches, list issues, and read PR state; only PR opening is the script's job. Even if the prompt rules are ignored, the tool simply isn't available.
+
+3. **Post-work guard hardened.** The existing dedupe guard at line ~700 (script-side `gh pr create`) now falls back to `PRIMARY_ISSUE` and then to a full-branch commit-message scan when `FIRST_COMMIT_MSG` lacks an issue ref. Logs the issue number it checked and what it found in the run log, so silent regressions surface in audit reports.
+
+**No model allocation change.** The Builder model (Opus 4.6 1M) is unchanged. The review pipeline (Gemini 3.1 Pro pre-push) is unchanged. The prompt and the tool allowlist are the only behavioral edges.
+
 ### 2026-05-06 — Auditor detector split + builder early-exit prompt fix
 
 **Auditor detectors (`scripts/pipeline-auditor.sh`):** the `num_turns_one_spike` detector was conflating two distinct failure modes. Split into:
