@@ -304,6 +304,27 @@ See [Pilot Responsibilities](pilot-responsibilities.md) for the complete list of
 
 ## Changelog
 
+### 2026-05-08 — Two-stage builder: pre-pick stage flips state BEFORE implementation
+
+**Problem.** The commit-driven In-Progress flip (landed earlier today) only fires after Claude's main session ends. If iteration N stalls without commits — the 2026-05-07 pattern, where Claude exits terse after the pre-push review hook fires — no commits exist, the state never flips, and iteration N+1 within the same nightly run re-picks the same issue.
+
+The script cannot flip state mid-session because it is blocked on the synchronous `claude -p` call. The flip has to happen INSIDE Claude's session, which means either (a) instructing Claude to run `gh issue edit` early in its main call, or (b) splitting the Claude invocation into two stages and flipping between them. Option (a) is fragile — Claude's compliance with prompt instructions has been ~50% in practice (the 2026-04-29 marker losses, the 2026-05-07 stall pattern, the multiple ignored "do not create PRs" rules). Option (b) is deterministic: the script controls when the flip happens, and Claude's mid-session behavior cannot prevent it.
+
+**Fix.** Two-stage Claude invocation per iteration in `scripts/builder.sh`:
+
+- **Stage 1 — pre-pick (~30s, ~$0.05–0.20)**: a tightly-scoped Claude call (`--allowedTools "Read,Glob,Grep" --max-turns 2`) whose only job is to pick the next issue from the unstarted backlog. Stage 1 sees the same do-not-pick lists as the main prompt (`IN_PROGRESS_ISSUES`, `OPEN_PR_ISSUES`, `NIGHTLY_ATTEMPTED_ISSUES`, `SKIPPED_ISSUES`) but no full issue bodies — just titles and priorities. The required output format is a single line: `ISSUE_PICKED:LIFT-<n>` or `NO_IMPROVEMENTS_REMAINING`. The script parses that line and calls `tracker.sh update --state "In Progress"` BEFORE stage 2 starts.
+
+- **Stage 2 — implementation (unchanged cost)**: the existing main builder call, with the prompt enriched by an `## ASSIGNED ISSUE FOR THIS ITERATION` block when stage 1 succeeded. Step 2 of "Your job" becomes "Implement \`LIFT-<n>\`" instead of "Pick exactly ONE issue". Stage 2 is allowed to refuse the assignment via `ISSUE_SKIPPED:<id>:<reason>` plus a label-revert command, but is forbidden from picking a different issue in the same iteration.
+
+**Failure modes and fallbacks.**
+- Stage 1 returns garbage / no marker: script logs a warning and falls through to stage 2 with the original "pick from backlog" instruction. Commit-driven flip still catches anything that gets committed.
+- Stage 1 returns `NO_IMPROVEMENTS_REMAINING`: the nightly loop breaks early, no further iterations.
+- Stage 2 picks a different issue than stage 1 assigned: stage 1's pick stays In Progress with no PR (visible in next night's audit). Stage 2's pick gets caught by commit-driven flip. The mismatch shows up in audit reports for follow-up.
+
+**Cost.** ~$0.60–2.40 per nightly run (12 iterations × stage-1 cost). Trade-off accepted: deterministic state-flip-on-pick beats prompt-instructed compliance.
+
+**Model allocation unchanged.** Stage 1 and stage 2 both use Opus 4.6 1M context. Stage 1's small token budget keeps cost low — it does not warrant a smaller model since the picking quality matters and Opus is already cached.
+
 ### 2026-05-08 — Builder marks issues "In Progress" when commits land
 
 **Problem.** Even with the picking-time dedupe and `gh pr create` lockdown landed earlier the same day, an issue could still be re-picked across nights because the tracker rarely flipped state. State changes were marker-driven (`ISSUE_PROGRESS:` / `ISSUE_DONE:` from Claude's structured response), and the 2026-05-07 stall pattern showed Claude exiting terse without emitting any markers — so the `state:started` label was rare in practice. The pickable backlog (`tracker.sh list unstarted started`) kept surfacing the same issue across runs.

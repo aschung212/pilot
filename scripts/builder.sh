@@ -261,12 +261,119 @@ $detail
     git reset --hard "${DEFAULT_BRANCH:-master}" 2>/dev/null || true
   }
 
-  # ── Run Claude implementation ────────────────────────────────────────────
+  # ── Stage 1: pre-pick the issue, flip state to In Progress ────────────
+  # Why two-stage: the script is blocked while the main `claude -p` runs, so
+  # it cannot flip the issue state mid-session. If iteration N stalls without
+  # commits, iteration N+1 sees the same issue as unstarted and re-picks it
+  # (the 2026-05-07 stall-then-rerun pattern). Stage 1 is a cheap read-only
+  # call (~30s, ~$0.05) that just picks the next issue. The script flips its
+  # state to In Progress immediately, BEFORE the main call starts. Even if
+  # the main call stalls without producing a commit, the label is already
+  # flipped, so the next iteration excludes the issue from its picking pool.
+  PRE_PICK_JSON="$OUTPUT_DIR/lift-enhance-$DATE-run${RUN}-prepick.json"
+  PRE_PICK_RESULT=$(claude --allowedTools "Read,Glob,Grep" --disallowedTools "$BUILDER_DISALLOWED_TOOLS" --output-format json --max-turns 2 -p "$(cat <<PREPICK
+You are the pre-pick stage of the overnight builder pipeline for $PROJECT_NAME. Your only job in this call is to pick exactly ONE issue from the unstarted backlog to work on next. You are NOT implementing anything in this call — that happens in the next stage. Pick the issue and exit immediately.
+
+## Unstarted backlog (pickable)
+
+$BACKLOG_ISSUES
+
+## Issues already IN PROGRESS — do NOT pick
+
+${IN_PROGRESS_ISSUES:-None}
+
+## Issues with EXISTING OPEN PRs — do NOT pick
+
+${OPEN_PR_ISSUES:-None}
+
+## Issues already attempted earlier tonight — do NOT pick
+
+${NIGHTLY_ATTEMPTED_ISSUES:-None}
+
+## Issues skipped earlier tonight — do NOT pick
+
+${SKIPPED_ISSUES:-None}
+
+## How to pick
+
+Pick the highest-priority unstarted issue that is NOT in any of the do-not-pick lists above. Priority labels (priority:1-urgent / 2-high / 3-medium / 4-low) appear in the issue list. If two issues are equal priority, prefer the one that touches code you can verify quickly (testing, accessibility, small bug fixes) over deep architectural changes.
+
+You do NOT need to read the issue bodies or the codebase in this stage — just pick from titles and priorities. The next stage has the full context.
+
+## Output format (REQUIRED)
+
+Output exactly one line — nothing else, no explanation, no preamble:
+
+  ISSUE_PICKED:${ISSUE_PREFIX}-<number>
+
+Example: ISSUE_PICKED:${ISSUE_PREFIX}-501
+
+If absolutely nothing in the unstarted backlog is suitable to work on right now (every option is blocked, ambiguous, or already covered), output exactly:
+
+  NO_IMPROVEMENTS_REMAINING
+
+Do not output any other text. Do not explain your choice. The next stage of the pipeline parses this single line and aborts on anything else.
+PREPICK
+)" 2>&1 || echo "")
+  PRE_PICK_TEXT=$(echo "$PRE_PICK_RESULT" | python3 -c "
+import json, sys
+try:
+    data = json.loads(sys.stdin.read())
+    print(data.get('result', ''))
+except Exception:
+    pass
+" 2>/dev/null || true)
+  PICKED_ISSUE=$(echo "$PRE_PICK_TEXT" | grep -oE "ISSUE_PICKED:${ISSUE_PREFIX}-[0-9]+" | head -1 | sed "s/ISSUE_PICKED://" || true)
+  echo "$PRE_PICK_RESULT" > "$PRE_PICK_JSON" 2>/dev/null || true
+
+  if echo "$PRE_PICK_TEXT" | grep -q "NO_IMPROVEMENTS_REMAINING"; then
+    echo "  🛑 Pre-pick stage returned NO_IMPROVEMENTS_REMAINING — ending nightly run early" | tee -a "$RUN_LOG"
+    thread_send "🛑 *Run $RUN — pre-pick returned NO_IMPROVEMENTS_REMAINING* — backlog exhausted, ending nightly run."
+    git checkout "${DEFAULT_BRANCH:-master}" 2>/dev/null || true
+    git branch -D "$ITER_BRANCH" 2>/dev/null || true
+    break
+  fi
+
+  if [ -n "$PICKED_ISSUE" ]; then
+    echo "  🎯 Pre-pick: $PICKED_ISSUE — flipping state to In Progress before implementation" | tee -a "$RUN_LOG"
+    bash "$TRACKER" update "$PICKED_ISSUE" --state "In Progress" 2>&1 | tee -a "$RUN_LOG" || true
+    # Also add to NIGHTLY_ATTEMPTED so a stall-then-retry within the night skips it.
+    case " $NIGHTLY_ATTEMPTED_ISSUES " in
+      *" $PICKED_ISSUE "*) ;;
+      *) NIGHTLY_ATTEMPTED_ISSUES+="$PICKED_ISSUE " ;;
+    esac
+  else
+    echo "  ⚠️ Pre-pick stage produced no parseable ISSUE_PICKED marker. Stage 2 will still run, but state-flip-on-pick is skipped this iteration. Raw response: $(echo "$PRE_PICK_TEXT" | head -c 300)" | tee -a "$RUN_LOG"
+  fi
+
+  # ── Stage 2: implement the picked issue ──────────────────────────────────
   COMMITS_BEFORE=$(git rev-list --count HEAD)
   CLAUDE_JSON="$OUTPUT_DIR/lift-enhance-$DATE-run${RUN}-output.json"
   # Enable review-router builder mode — Gemini 3.1 Pro review on commit, Codex fallback
   export PILOT_BUILDER=1
   export PILOT_REVIEW_LOG="$OUTPUT_DIR/lift-review-$DATE-run${RUN}.log"
+
+  # Precompute prompt fragments for the assigned-issue path. ${var:-fallback}
+  # returns $var when set, so it cannot be used to inject a fallback string;
+  # easier to build the strings here than fight bash parameter expansion.
+  if [ -n "$PICKED_ISSUE" ]; then
+    PICKED_NUM=$(echo "$PICKED_ISSUE" | sed "s/${ISSUE_PREFIX}-//")
+    ASSIGNED_BLOCK=$(cat <<ASSIGNED
+## ASSIGNED ISSUE FOR THIS ITERATION
+
+Pre-pick stage already chose **${PICKED_ISSUE}** for you and has flipped its tracker state to In Progress. Work on ${PICKED_ISSUE} this iteration. Do NOT pick a different issue. If after reading the codebase you decide ${PICKED_ISSUE} is genuinely unworkable (truly blocked, missing info, out of scope), output \`ISSUE_SKIPPED:${PICKED_ISSUE}:<reason>\` AND run this command to release it back into the backlog:
+
+  gh issue edit ${PICKED_NUM} --repo ${GITHUB_ISSUES_REPO} --remove-label state:started --add-label state:unstarted
+
+Do not pick a replacement in the same iteration — let the next iteration pick fresh.
+ASSIGNED
+)
+    STEP2_TEXT="**Implement \`${PICKED_ISSUE}\`** (already pre-picked and claimed in the tracker — see Assigned Issue above)"
+  else
+    ASSIGNED_BLOCK=""
+    STEP2_TEXT="**Pick exactly ONE issue** from the unstarted backlog to implement fully"
+  fi
+
   if claude --allowedTools "$BUILDER_ALLOWED_TOOLS" --disallowedTools "$BUILDER_DISALLOWED_TOOLS" --output-format json -p "$(cat <<PROMPT
 You are iteration $RUN of the overnight self-improving enhancer for $PROJECT_NAME at $REPO. This is Aaron Chung's portfolio project — he's an ex-AWS SDE2 targeting SWE roles at companies like Notion, Airtable, and Linear.
 
@@ -336,10 +443,12 @@ ${OPEN_PR_ISSUES:-None}
 
 ${NIGHTLY_ATTEMPTED_ISSUES:-None}
 
+$ASSIGNED_BLOCK
+
 ## Your job (this iteration)
 
 1. **Read the repo** — look at what exists NOW (code, tests, config, README, etc.)
-2. **Pick exactly ONE issue** from the Linear backlog to implement fully
+2. $STEP2_TEXT
 3. **Cross-reference** with what previous iterations already did
 4. **Implement it**, committing after each logical change with conventional commit messages
 5. **Verify** tests pass and build succeeds
