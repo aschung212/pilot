@@ -370,3 +370,13 @@ Repaired `lift-metrics.csv` in place (one-shot script reconstructed 46 split row
 - `scripts/builder.sh` stage 1 calls `tracker.sh list pickable` (was `list unstarted`). The end-of-night backpressure signal (line 1039) that asks "should discovery run extra tonight?" still uses `list unstarted` — it specifically measures the discovery → triage pipeline output, not the broader picking pool.
 - Locked-in via test: `tests/tracker.bats` now asserts `list pickable` hits `--state open` and does NOT regress to `--label state:unstarted`.
 - **No change to Aaron's responsibilities.** Tonight's run should see ~9 pickable issues instead of 4, including the architect orphans #502 and #504.
+
+### 2026-05-08 — Architect labeling bug: cleanup, root cause, and prevention
+- Root cause investigation: the "architect labeling bug" was never in `architect.sh` or `tracker.sh`. Both correctly produce `state:unstarted` for new issues — proven by discover-created issues #306, #308, #309, which all have the label. The actual cause was a one-shot Python rescue script (`/tmp/backfill-architect-2026-05-06.py`) that ran 2026-05-06 to file the architect's findings after the architect-side parser had emitted "Findings: 0". The backfill bypassed `tracker.sh` and called `gh issue create` directly with only `--label "architect:"` and `--label "priority:N-X"` — never `state:unstarted`. Result: 6 issues (#500, #501, #503, #505 already closed; #502, #504 still open) stuck without state labels.
+- Cleanup applied:
+  - `gh issue edit 502 --add-label state:unstarted` ✓
+  - `gh issue edit 504 --add-label state:unstarted` ✓
+  - `rm /tmp/backfill-architect-2026-05-06.py` ✓ (so nobody runs it again)
+- Defensive change in `scripts/architect.sh`: now passes `--state "unstarted"` explicitly to `tracker.sh create`. This is the existing default — making it explicit means future readers see the contract at the call site rather than having to inspect `gh_create`'s defaults.
+- Closed PRs from the wrong-state issues (#500, #501, #503, #505) already merged or got closed earlier today — no further action.
+- **No change to Aaron's responsibilities.** Future architect runs will produce correctly-labeled issues. The 5 historical labelless issues (#216 epic, #358 warmup filter, #434 archive exercises) are NOT architect-related and remain as Aaron-judgment items.

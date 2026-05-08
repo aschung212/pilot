@@ -325,9 +325,16 @@ $FINDING_BODY" 2>/dev/null || true
     else
       echo "  📋 Filing: $FINDING_TITLE (P$FINDING_PRIORITY)" | tee -a "$RUN_LOG"
       if [ -z "${_PILOT_TEST_MODE:-}" ]; then
+        # --state unstarted is the default in tracker.sh's gh_create, but pass
+        # it explicitly so the contract is obvious at the call site. The
+        # 2026-05-06 backfill script (now deleted) bypassed tracker.sh entirely
+        # and forgot the state label, leaving #500-505 stuck without
+        # state:unstarted. Architect issues going through this path get the
+        # label correctly — discover-created issues are proof.
         bash "$TRACKER" create \
           "[Architect] $FINDING_TITLE" \
           "$FINDING_PRIORITY" \
+          --state "unstarted" \
           --label "architect:" \
           --description "$FINDING_BODY" \
           2>&1 | tee -a "$RUN_LOG" || true
