@@ -520,9 +520,6 @@ ok "Created: $PLIST_BUILDER"
 PLIST_TUNER=$(generate_plist "tune-budget" "tune-budget.sh" "0" 21 0)
 ok "Created: $PLIST_TUNER"
 
-PLIST_REVIEWS=$(generate_plist "tune-reviews" "tune-reviews.sh" "0" 21 15)
-ok "Created: $PLIST_REVIEWS"
-
 PLIST_HEALTH=$(generate_plist "health" "health-report.sh" "0" 8 0)
 ok "Created: $PLIST_HEALTH"
 
@@ -537,7 +534,7 @@ read -r LOAD_PLISTS
 LOAD_PLISTS="${LOAD_PLISTS:-y}"
 
 if [ "$LOAD_PLISTS" = "y" ]; then
-  for plist in "$PLIST_DISCOVER" "$PLIST_TRIAGE" "$PLIST_BUILDER" "$PLIST_TUNER" "$PLIST_REVIEWS" "$PLIST_HEALTH" "$PLIST_DIGEST"; do
+  for plist in "$PLIST_DISCOVER" "$PLIST_TRIAGE" "$PLIST_BUILDER" "$PLIST_TUNER" "$PLIST_HEALTH" "$PLIST_DIGEST"; do
     launchctl load "$plist" 2>/dev/null && ok "Loaded: $(basename "$plist")" || warn "Failed to load: $(basename "$plist")"
   done
 fi

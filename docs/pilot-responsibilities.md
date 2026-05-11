@@ -143,6 +143,22 @@ updated: 2026-05-08
 
 ## Changelog
 
+### 2026-05-11 — Review tuner decommissioned
+
+**Symptom.** Aaron observed the Sun 21:15 review tuner posting `🎛️ Review Tuner — no new merged PRs to analyze ✅` to #lift-automation, while Lift had merged 10+ PRs in the prior week (#517, #523, #524, #525, #526, #527, #528, #529, #530, …). His hypothesis was that the script confused merged with closed-without-merge PRs.
+
+**Actual cause.** `scripts/tune-reviews.sh` correctly fetched `--state merged` PRs, but filtered out every PR that lacked a `Layer 1: Claude` or `Layer 2: Gemini` issue-comment marker. Those markers stopped being posted on 2026-04-06 when the review pipeline moved to inline pre-push hooks (Gemini 3.1 Pro). All recent merged PRs (#517, #528, #530, ...) have zero issue comments — every PR fell through the filter, and the misleading "no new merged PRs" Slack message fired every Sunday. The script header had a deprecation note: "Safe to delete after 2026-05-06."
+
+**Action.** Fully decommissioned the review tuner:
+- Unloaded and removed `~/Library/LaunchAgents/com.aaron.pilot-tune-reviews.plist`.
+- Deleted `scripts/tune-reviews.sh`, `launchd/com.aaron.pilot-tune-reviews.plist`, `tests/tune-reviews.bats`, and the `~/Documents/Scripts/lift-tune-reviews.sh` symlink.
+- Removed plist generation from `init.sh` (`PLIST_REVIEWS` block + load loop).
+- Removed the `review-tuner` identity from `adapters/notify.sh` and `tests/adapter-contracts.bats`.
+- Cleaned references in `README.md`, `docs/architecture.md`, `docs/pilot-architecture.md`, `docs/tuning.md`, and the builder.sh footer comment.
+- Retained the frozen `data/lift-review-learnings.md` and `data/lift-review-history.json` data files — `adapters/ai-review.sh` still reads the learnings file. (That adapter is itself deprecated but out of scope for this cleanup.)
+
+**Action needed for Aaron:** None. The Sunday 21:15 slot is now empty. No replacement is planned — the inline review system posts to per-iteration Slack threads, not GitHub comments, so any future tuner would have to learn from your manual PR review comments rather than bot comments. Flag if you want that built; otherwise the slot stays empty.
+
 ### 2026-05-11 — Triage no longer caps at 10 issues per run
 
 **Change.** `scripts/triage.sh` previously processed at most 10 untriaged issues per run (`MAX_PER_RUN=10`), deferring the rest to the next Sun/Tue/Thu cycle. Removed the cap — triage now processes every untriaged issue returned by `list triageable` in a single run.

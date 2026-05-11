@@ -1,6 +1,8 @@
 # Self-Tuning
 
-Pilot optimizes itself over time using three mechanisms: a budget tuner, a review tuner, and a weekly health report. Together they form a feedback loop that adjusts the pipeline based on observed outcomes.
+Pilot optimizes itself over time using two mechanisms: a budget tuner and a weekly health report. Together they form a feedback loop that adjusts the pipeline based on observed outcomes.
+
+> The review tuner was removed on 2026-05-11. It was deprecated when the review system moved to inline hooks (no PR comments to learn from); see [pilot-architecture.md](pilot-architecture.md) for the current review pipeline.
 
 ## Budget Tuner
 
@@ -29,24 +31,6 @@ Analyzes the last 7 nights and adjusts `config/budget.conf`:
 The tuner also checks overnight window utilization:
 - If using <25% of available time and hitting iteration cap → suggests raising cap
 - If per-iteration duration trends up >50% → flags possible context bloat
-
-## Review Tuner
-
-**Script:** `scripts/tune-reviews.sh`
-**Schedule:** Sunday 21:15
-
-Analyzes merged PRs to improve future code reviews:
-
-1. Reads PR comments — separates automated review findings from human feedback
-2. Tracks what reviewers flagged vs what you caught
-3. Builds custom rules from your corrections
-4. Writes learnings to `lift-review-learnings.md`, which is injected into future review prompts
-
-### Metrics
-
-- **Clean merge rate** — PRs merged without additional human findings (target: 100%)
-- **False positive rate** — reviewer findings you dismissed
-- **Miss rate** — issues you caught that reviewers didn't
 
 ## Health Report
 

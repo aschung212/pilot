@@ -17,7 +17,7 @@
 #   notify.sh --as builder send <channel> <message>
 #   notify.sh --as triage thread-start <channel> <message>
 #
-# Supported identities: builder, discovery, triage, review-tuner, budget-tuner, health,
+# Supported identities: builder, discovery, triage, budget-tuner, health,
 #                       auditor, roadmap, architect
 # Sets a distinct username and icon_emoji per agent for visual distinction in Slack.
 #
@@ -47,7 +47,6 @@ get_identity() {
     builder)       echo "${PROJECT_NAME:-Pilot} Builder|:robot_face:" ;;
     discovery)     echo "${PROJECT_NAME:-Pilot} Discovery|:globe_with_meridians:" ;;
     triage)        echo "${PROJECT_NAME:-Pilot} Triage|:vertical_traffic_light:" ;;
-    review-tuner)  echo "${PROJECT_NAME:-Pilot} Review Tuner|:control_knobs:" ;;
     budget-tuner)  echo "${PROJECT_NAME:-Pilot} Budget Tuner|:control_knobs:" ;;
     health)        echo "${PROJECT_NAME:-Pilot} Health|:hospital:" ;;
     auditor)       echo "${PROJECT_NAME:-Pilot} Auditor|:mag:" ;;

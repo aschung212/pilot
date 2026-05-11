@@ -1220,8 +1220,8 @@ ${ALL_DONE_LINKS}
 
 echo "✅ Notifications sent."
 
-# Tuners now run independently on their own weekly schedule (Sunday via launchd).
-# See com.aaron.pilot-tune-budget.plist and com.aaron.pilot-tune-reviews.plist.
+# Budget tuner runs independently on its own weekly schedule (Sunday via launchd).
+# See com.aaron.pilot-tune-budget.plist.
 
 # Cleanup: archive completed/canceled issues, deduplicate backlog
 echo ""

@@ -147,10 +147,10 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
 - **Audit trail:** Output logged to `$OUTPUT_DIR/lift-review-$DATE-run${RUN}.log`.
 - **Graceful degradation:** If Gemini is unavailable, review is skipped and build continues.
 
-> **Note:** The review pipeline has been progressively simplified: Gemini  review (Flash → Pro → Sonnet) was replaced with inline hooks on 2026-04-06, then further simplified to Gemini 3.1 Pro only on 2026-04-06 after head-to-head testing showed Flash's 71% false positive rate and Gemini 3.1 Pro matching/exceeding Codex. The old adapter (`adapters/ai-review.sh`) and tuner (`scripts/tune-reviews.sh`) are deprecated.
+> **Note:** The review pipeline has been progressively simplified: Gemini  review (Flash → Pro → Sonnet) was replaced with inline hooks on 2026-04-06, then further simplified to Gemini 3.1 Pro only on 2026-04-06 after head-to-head testing showed Flash's 71% false positive rate and Gemini 3.1 Pro matching/exceeding Codex. The old adapter (`adapters/ai-review.sh`) is deprecated; the review tuner was removed on 2026-05-11.
 
 ### 5. Auto-Tuners
-**Scripts:** `lift-tune-budget.sh` (review tuner deprecated 2026-04-06)
+**Scripts:** `lift-tune-budget.sh`
 **When:** After each overnight session completes
 
 **Budget tuner:**
@@ -160,10 +160,7 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
 - Runtime-aware: if pipeline uses <25% of the overnight window, suggests raising iteration cap
 - Detects context bloat: flags when per-iteration duration trends up >50%
 
-**Review tuner (deprecated 2026-04-06):**
-- Previously analyzed merged PR comments to learn from reviewer misses
-- No longer active — inline hook-based review doesn't post PR comments
-- Learnings file (`lift-review-learnings.md`) frozen with existing patterns
+> **Removed 2026-05-11:** The review tuner (`scripts/tune-reviews.sh`, weekly at Sun 21:15) was deleted. It was deprecated 2026-04-06 when the review system moved to inline hooks (no PR comments to learn from). The frozen `lift-review-learnings.md` data file is retained for the deprecated `adapters/ai-review.sh`.
 
 ### 6. Issue Cleanup
 **Script:** `cleanup.sh`
@@ -210,7 +207,6 @@ Pipeline is fully decomposed — each service has its own launchd plist. No orch
 | 10:30 PM | Triage | Sun/Tue/Thu | `com.aaron.pilot-triage` |
 | 11:00 PM | Builder + Cleanup | Mon-Fri | `com.aaron.pilot-builder` |
 | 9:00 PM Sun | Budget Tuner | Weekly | `com.aaron.pilot-tune-budget` |
-| 9:15 PM Sun | Review Tuner | Weekly | `com.aaron.pilot-tune-reviews` |
 | 8:00 AM Sun | Health Report | Weekly | `com.aaron.pilot-health` |
 | 6:15 AM | Issue Digest | Daily | `com.aaron.linear-digest` |
 
@@ -244,7 +240,6 @@ Pipeline is fully decomposed — each service has its own launchd plist. No orch
 | Builder | Lift Builder | :robot_face: |
 | Discovery | Lift Discovery | :globe_with_meridians: |
 | Triage | Lift Triage | :vertical_traffic_light: |
-| Review Tuner | Lift Review Tuner | :control_knobs: |
 | Budget Tuner | Lift Budget Tuner | :control_knobs: |
 | Health | Lift Health | :hospital: |
 
@@ -498,7 +493,7 @@ The `marker_emission_collapse` finding now points readers to whichever of the tw
   - Claude fixes issues naturally from hook feedback — no separate fix iteration
 - Removed: Gemini  ai-review.sh adapter calls, fix iteration logic, revert-on-failure, PR comment posting, composite verdict computation, deferred issue creation
 - Removed 4 helper functions from builder-utils.sh: `pick_worst_verdict`, `verdict_emoji`, `format_review_findings`, `format_review_crosschecks`
-- Deprecated: `adapters/ai-review.sh`, `scripts/tune-reviews.sh` (retained 30 days for rollback)
+- Deprecated: `adapters/ai-review.sh`, `scripts/tune-reviews.sh` (retained 30 days for rollback; tuner deleted 2026-05-11)
 - Commented out review env vars in project.env (AI_REVIEW_MODEL_L1/L2/L3, etc.)
 - Updated builder prompt with review feedback instructions
 - Fixed 3 Codex-identified bugs in tracker.sh: `create` now routes by TRACKER_ADAPTER, `gh_create` outputs issue ID for callers, `close` works for Linear via state update

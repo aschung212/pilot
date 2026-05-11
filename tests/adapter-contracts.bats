@@ -53,7 +53,7 @@ load test_helper
   NOTIFY="$PILOT_DIR/adapters/notify.sh"
   export SLACK_BOT_TOKEN="xoxb-test"
 
-  for identity in builder discovery triage review-tuner budget-tuner health; do
+  for identity in builder discovery triage budget-tuner health; do
     run bash "$NOTIFY" --as "$identity" send automation "test"
     if [ "$status" -ne 0 ]; then
       echo "notify --as $identity failed with exit $status" >&2

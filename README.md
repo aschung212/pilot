@@ -87,7 +87,6 @@ Each pipeline stage is an independent service with its own schedule, logs, and f
 | Triage | Sun/Tue/Thu 22:30 | Reviews issues, adds implementation plans |
 | Builder | Mon-Fri 23:00 | Implements top issues, creates PRs |
 | Budget Tuner | Sunday 21:00 | Adjusts iteration/token caps |
-| Review Tuner | Sunday 21:15 | Improves review quality from your feedback |
 | Health Report | Sunday 08:00 | Weekly metrics dashboard + log rotation |
 
 The builder uses a **git worktree** so it never touches your working directory — you can work on the same repo simultaneously.
@@ -130,7 +129,6 @@ See [docs/adapters.md](docs/adapters.md) for interface contracts and examples.
 The pipeline optimizes itself weekly:
 
 - **Budget tuner** — raises iteration caps when productive, lowers when stalling
-- **Review tuner** — learns from your PR feedback to reduce false positives
 - **Health report** — surfaces anomalies (empty backlog, high stall rate, token trends)
 - **Backpressure** — builder signals discovery to run more when backlog is low
 
@@ -170,7 +168,6 @@ pilot/
     builder.sh               # Overnight builder
     cleanup.sh               # Issue tracker cleanup
     tune-budget.sh           # Budget auto-tuner
-    tune-reviews.sh          # Review auto-tuner
     health-report.sh         # Weekly health dashboard
     digest.sh                # Morning digest
   adapters/
