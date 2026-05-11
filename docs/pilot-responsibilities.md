@@ -143,6 +143,14 @@ updated: 2026-05-08
 
 ## Changelog
 
+### 2026-05-11 — Triage no longer caps at 10 issues per run
+
+**Change.** `scripts/triage.sh` previously processed at most 10 untriaged issues per run (`MAX_PER_RUN=10`), deferring the rest to the next Sun/Tue/Thu cycle. Removed the cap — triage now processes every untriaged issue returned by `list triageable` in a single run.
+
+**Why.** The cap was a leftover hedge from when triage was slower and ran in the overnight chain ahead of the builder. With Gemini Flash as the primary model and Claude Sonnet as fallback, per-issue latency is low enough that processing the full backlog (typically 10–20 issues) fits comfortably inside the triage window. Capping meant orphan issues surfaced by `list triageable` (e.g. unlabeled manual issues from the 2026-05-08 fix) waited two extra cycles to be reviewed.
+
+**Action needed for Aaron:** None. The next triage run drains whatever backlog has accumulated. If a single run ever does become noticeably slow, the right knob is per-issue concurrency or model selection, not a count cap.
+
 ### 2026-05-08 — Builder no longer closes issues at implementation time
 
 **Problem.** [PR #467](https://github.com/aschung212/Lift/pull/467) (LIFT-436, BroadcastChannel for cross-tab sync) was opened 2026-04-30 with a typecheck failure. CI never went green, the PR sat unreviewed, and the merge state went DIRTY against `main`. But on 2026-05-06 issue [#436](https://github.com/aschung212/Lift/issues/436) closed itself — orphaned: PR open, issue closed, no merge, no human action.

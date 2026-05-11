@@ -78,10 +78,7 @@ if [ -z "$UNTRIAGED_IDS" ]; then
 fi
 
 UNTRIAGED_COUNT=$(echo "$UNTRIAGED_IDS" | wc -w | tr -d ' ')
-MAX_PER_RUN=10
-echo "  Found $UNTRIAGED_COUNT untriaged issues (processing up to $MAX_PER_RUN)." | tee -a "$TRIAGE_LOG"
-# Cap to avoid blocking the builder — remaining issues get triaged next run
-UNTRIAGED_IDS=$(echo "$UNTRIAGED_IDS" | tr ' ' '\n' | head -"$MAX_PER_RUN" | xargs)
+echo "  Found $UNTRIAGED_COUNT untriaged issues — processing all." | tee -a "$TRIAGE_LOG"
 
 cd "$REPO"
 
