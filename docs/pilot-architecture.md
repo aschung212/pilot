@@ -131,6 +131,8 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
 - Stops on 3 consecutive failures or 2 consecutive stalls
 - Runtime tracked per-iteration and per-pipeline — tuner uses utilization % to adjust caps
 
+**Manual override:** `PICKED_ISSUE_OVERRIDE=LIFT-NNN ./scripts/builder.sh 1` forces the first iteration to work on a specific issue, skipping the pre-pick stage. Intended for one-off "fix this issue now" runs; the override is cleared after use so a multi-iteration loop falls back to normal pre-picking for subsequent iterations.
+
 ### 4. Inline Hook-Based Review
 **When:** Automatically during Claude's implementation, via git pre-push hook
 **Model:** Gemini 3.1 Pro (single model, adversarial review of full branch diff)

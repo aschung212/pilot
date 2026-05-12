@@ -27,9 +27,14 @@ if echo "$DIFF" | grep -qiE 'process\.env\b|import\.meta\.env\b' | grep -vqE 'VI
   fi
 fi
 
-# Eval/exec patterns
-if echo "$DIFF" | grep -qiE '\beval\s*\(|\bexec\s*\(|\bFunction\s*\(|child_process|spawn\s*\('; then
+# Eval/exec patterns. Case-sensitive Function check — lowercase `function(` is the
+# JS keyword (IIFEs, callbacks), uppercase `Function(` is the dangerous constructor.
+# Pre-2026-05-12 the whole alternation was `-i` and a single `function ()` IIFE
+# tripped the scan, blocking a clean LIFT-545 PR.
+if echo "$DIFF" | grep -qiE '\beval\s*\(|\bexec\s*\(|child_process|spawn\s*\('; then
   FINDINGS+=("Dynamic code execution (eval/exec/spawn)")
+elif echo "$DIFF" | grep -qE '\bFunction\s*\('; then
+  FINDINGS+=("Dynamic code execution (Function constructor)")
 fi
 
 # Obfuscation patterns

@@ -7,6 +7,10 @@
 #   ./builder.sh 06:00    # runs until 6:00 AM
 #   ./builder.sh 1        # runs exactly 1 iteration
 #
+# Env overrides:
+#   PICKED_ISSUE_OVERRIDE=LIFT-NNN   # force a specific issue, skip the pre-pick stage
+#                                    # (intended for one-off manual runs; ignored when empty)
+#
 # Logs: pilot/data/lift-enhance-<date>-run<N>.md
 
 set -uo pipefail
@@ -34,7 +38,7 @@ slack_send() {
 # Blocks arbitrary shell, curl, env var exfil, and network access beyond git/gh.
 # This is the primary defense against indirect prompt injection from web research.
 # Note: git push is allowed but the security scan runs before any push in the loop.
-BUILDER_ALLOWED_TOOLS="Read,Edit,Write,Glob,Grep,Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(git checkout:*),Bash(git branch:*),Bash(git log:*),Bash(git diff:*),Bash(git status:*),Bash(git fetch:*),Bash(git merge:*),Bash(git stash:*),Bash(git show:*),Bash(git rev-parse:*),Bash(git config user:*),Bash(gh:*),Bash(npm run build:*),Bash(npm run lint:*),Bash(npm test:*),Bash(npx vitest:*),Bash(npm run dev:*),Bash(npm ci:*),Bash(npm install:*),Bash(ls:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(mkdir:*),Bash(cp:*),Bash(mv:*)"
+BUILDER_ALLOWED_TOOLS="Read,Edit,Write,Glob,Grep,Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(git checkout:*),Bash(git branch:*),Bash(git log:*),Bash(git diff:*),Bash(git status:*),Bash(git fetch:*),Bash(git merge:*),Bash(git stash:*),Bash(git show:*),Bash(git rev-parse:*),Bash(git config user:*),Bash(gh:*),Bash(npm run build:*),Bash(npm run lint:*),Bash(npm run typecheck:*),Bash(npm test:*),Bash(npx vitest:*),Bash(npm run dev:*),Bash(npm ci:*),Bash(npm install:*),Bash(ls:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(mkdir:*),Bash(cp:*),Bash(mv:*)"
 
 # Builder DISALLOWED tools — explicitly deny subagent invocation so Claude does
 # the work in its own session and emits ISSUE_DONE markers in its final message.
@@ -275,6 +279,22 @@ $detail
   # state to In Progress immediately, BEFORE the main call starts. Even if
   # the main call stalls without producing a commit, the label is already
   # flipped, so the next iteration excludes the issue from its picking pool.
+  #
+  # PICKED_ISSUE_OVERRIDE env var bypass: when set (e.g. for a manual one-off
+  # "fix this specific issue" run), skip the pre-pick stage entirely and use
+  # the override value. Cleared after use so it only applies to the first
+  # iteration — subsequent iterations in the same loop fall back to pre-pick.
+  PICKED_ISSUE=""
+  if [ -n "${PICKED_ISSUE_OVERRIDE:-}" ]; then
+    PICKED_ISSUE="$PICKED_ISSUE_OVERRIDE"
+    echo "  🎯 PICKED_ISSUE_OVERRIDE=$PICKED_ISSUE — bypassing pre-pick stage" | tee -a "$RUN_LOG"
+    bash "$TRACKER" update "$PICKED_ISSUE" --state "In Progress" 2>&1 | tee -a "$RUN_LOG" || true
+    case " $NIGHTLY_ATTEMPTED_ISSUES " in
+      *" $PICKED_ISSUE "*) ;;
+      *) NIGHTLY_ATTEMPTED_ISSUES+="$PICKED_ISSUE " ;;
+    esac
+    PICKED_ISSUE_OVERRIDE=""
+  else
   PRE_PICK_JSON="$OUTPUT_DIR/lift-enhance-$DATE-run${RUN}-prepick.json"
   PRE_PICK_RESULT=$(claude --allowedTools "Read,Glob,Grep" --disallowedTools "$BUILDER_DISALLOWED_TOOLS" --output-format json --max-turns 2 -p "$(cat <<PREPICK
 You are the pre-pick stage of the overnight builder pipeline for $PROJECT_NAME. Your only job in this call is to pick exactly ONE issue from the unstarted backlog to work on next. You are NOT implementing anything in this call — that happens in the next stage. Pick the issue and exit immediately.
@@ -350,6 +370,7 @@ except Exception:
   else
     echo "  ⚠️ Pre-pick stage produced no parseable ISSUE_PICKED marker. Stage 2 will still run, but state-flip-on-pick is skipped this iteration. Raw response: $(echo "$PRE_PICK_TEXT" | head -c 300)" | tee -a "$RUN_LOG"
   fi
+  fi  # end PICKED_ISSUE_OVERRIDE bypass
 
   # ── Stage 2: implement the picked issue ──────────────────────────────────
   COMMITS_BEFORE=$(git rev-list --count HEAD)
