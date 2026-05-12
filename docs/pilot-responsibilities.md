@@ -4,7 +4,7 @@ tags:
   - pilot
   - automation
   - responsibilities
-updated: 2026-05-08
+updated: 2026-05-12
 ---
 
 # Aaron's Pilot Responsibilities
@@ -142,6 +142,34 @@ updated: 2026-05-08
 ---
 
 ## Changelog
+
+### 2026-05-12 — Builder PR-creation failure: empty branches, malformed markers, fake Slack URLs
+
+**Symptom.** The 2026-05-11 overnight build's Slack thread reported 12 "PRs" but only 3 (#554, #555, #556) actually existed on GitHub. The other 9 Slack entries linked to `https://github.com/aschung212/Lift/pull/new/<branch>` — GitHub's *"compare & create PR"* URL, not a real PR. The a11y work for LIFT-547 and LIFT-551 was stranded on side branches (`a11y/547-focus-indicators`, `a11y/551-skip-to-content`, `fix/547-focus-indicators`, `enhance/LIFT-547-focus-indicators`, `enhance/LIFT-547-2026-05-12`, `enhance/LIFT-551-2026-05-12`) without any PR. Run 10 alone spent **4 hours** re-doing LIFT-547.
+
+**Three stacking root causes.**
+
+1. **Claude (the builder agent) created its own branches** in runs 1, 4–7, 9–12, despite the prompt's "Do NOT create branches" rule. It would `git checkout -b a11y/547-focus-indicators`, commit and push there, then exit reporting "PR creation blocked by permissions". The assigned `$ITER_BRANCH` (e.g. `enhance/run4-2026-05-11`) stayed empty.
+2. **Claude wrote malformed `ISSUE_DONE` markers.** The prompt at `scripts/builder.sh:527` specifies `ISSUE_DONE:LIFT-XXX|summary`, but every single run on 2026-05-11 deviated: `ISSUE_DONE:547`, `ISSUE_DONE:547:summary` (wrong separator), `ISSUE_DONE:551:a11y:...` (compound colons), `ISSUE_DONE:LIFT-548` (no separator). The downstream regex `ISSUE_DONE:LIFT-[0-9]+\|` matched only some of these, so `PRIMARY_ISSUE` extraction failed, the branch never got renamed to `enhance/LIFT-NNN-DATE`, and the empty `enhance/runN-DATE` is what `gh pr create` ran against.
+3. **The PR-creation fallback fabricated URLs.** When `gh pr create` failed on the empty branch, `builder.sh:927` returned `https://github.com/$GITHUB_REPO/pull/new/$ITER_BRANCH` — the *create-PR-from-this-branch* page, which we then posted to Slack as if it were a real PR.
+
+**Fixes applied to `scripts/builder.sh`.**
+- Normalize `ISSUE_*` markers right after Claude's session writes to the run log. `sed` rewrites `ISSUE_DONE:547`, `ISSUE_DONE:#547:x`, `ISSUE_DONE:547:x`, and `ISSUE_DONE:LIFT-547:x` all to the canonical `ISSUE_DONE:LIFT-547|x`. Verified against all 8 broken-format cases from last night's logs. `ISSUE_CREATE` / `ISSUE_DISCOVER` (which use a leading priority integer, not an issue ID) are deliberately excluded.
+- After Claude's session, check `git branch --show-current`. If it diverged from `$ITER_BRANCH` and has commits ahead of master, force-update `$ITER_BRANCH` to those commits and delete the stray local branch. Stray remote branches are left for cleanup so concurrent operators aren't surprised.
+- Change `COMMITS_AFTER` to count commits on `$ITER_BRANCH` specifically, not `HEAD`. Previously a detached HEAD on a sibling branch could report fake "8 new commits".
+- Before `gh pr create`, refuse to PR a branch with 0 commits ahead of master. Log loudly, post to Slack, delete the empty branch, and continue. No more fake `pull/new/...` URLs.
+- Capture `gh pr create`'s output to the run log (was silently swallowed). The success-URL regex is now anchored (`/pull/[0-9]+`) so "already exists" messages and other non-URL output don't match. If `gh pr create` fails AND `gh pr view` finds no existing PR, the iteration is logged as `pr-create-failed` in metrics and Slack — the branch is preserved so a human can investigate.
+- Prompt hardening: the "Do NOT create branches" line now names the failure mode and cites 2026-05-11 explicitly. The `## Issue updates` section spells out that `ISSUE_DONE` / `ISSUE_PROGRESS` use `|` while `ISSUE_SKIPPED` uses `:` (an inconsistency Claude consistently scrambled).
+
+**Recovery actions taken.**
+- Opened [#557](https://github.com/aschung212/Lift/pull/557) for `enhance/LIFT-547-2026-05-11` and [#558](https://github.com/aschung212/Lift/pull/558) for `enhance/LIFT-551-2026-05-11` — the two stranded a11y branches with no PR. CI will fail on both until one of #554/#555/#556 (the classifyWarmupSets test fix) merges to master.
+- **Not done — Aaron's call.** Six other stranded branches still exist with the SAME a11y work but slightly different scope: `a11y/547-focus-indicators`, `fix/547-focus-indicators`, `enhance/LIFT-547-focus-indicators`, `enhance/LIFT-547-2026-05-12` (all variants of #547) and `enhance/LIFT-551-2026-05-12` (variant of #551). Some of these include `AuthScreen.vue` changes that #557 lacks. Aaron should compare and choose which version to merge, then I can clean up the rest.
+- The empty `enhance/run*-2026-05-11` branches (run1, run4, run5, run6, run7, run9, run10, run11, run12 — 8 total) are safe to delete; they have 0 commits ahead of master and exist only because the old fallback pushed them.
+
+**Action needed for Aaron:**
+1. Compare PR #557 vs. the more-complete variant branches for LIFT-547 (`fix/547-focus-indicators` has the broadest scope). Pick one to merge, then ping me to clean up the rest.
+2. Same for LIFT-551 (#558 vs. `enhance/LIFT-551-2026-05-12`).
+3. Once one of #554/#555/#556 merges, the others (and #557/#558) should rebase / re-run CI.
 
 ### 2026-05-11 — Review tuner decommissioned
 

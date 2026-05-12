@@ -506,8 +506,8 @@ After your final push completes, you MUST emit the full structured response belo
 - Include \`Closes #N\` (where N is the issue number, no LIFT- prefix) in at least one commit body so GitHub auto-closes the issue when the PR merges. The pipeline depends on this — it no longer closes issues at implementation time because that orphaned issues whose PRs failed CI (see PR #467 / LIFT-436, 2026-04-30).
 - If a test is failing when you start, you may try to fix it ONCE. If it still fails after one attempt, skip it and move on to new work. Do not spend more than 10 turns on any single fix.
 - IMPORTANT: Focus on SHIPPING, not perfecting. Commit working improvements and move on.
-- Do NOT create branches — you are already on the correct branch. Just commit to the current branch.
-- Do NOT create pull requests — the pipeline handles PR creation after your work is done.
+- Do NOT create branches — you are already on the correct branch (\`$ITER_BRANCH\`). Just commit to the current branch with \`git add\` + \`git commit\`. Never run \`git checkout -b\` or \`git switch -c\`. If you create a side branch, your work gets stranded — the pipeline only ever pushes/PRs \`$ITER_BRANCH\`, so anything you committed elsewhere is invisible to it. This is the 2026-05-11 failure that produced 9 fake PR links in Slack and stranded 5 a11y branches.
+- Do NOT create pull requests — the pipeline handles PR creation after your work is done. Do not run \`gh pr create\` even if you see it in tool-allowlists; it is explicitly disallowed for this session and your call will fail. "PR creation blocked by permissions" is expected — your job is to commit + push, not to PR.
 - You MUST push to remote when your implementation is complete: git push -u origin HEAD. A Gemini 3.1 Pro review runs automatically via the pre-push hook. After addressing any findings, push again.
 - CRITICAL — DO NOT DELEGATE: do this work yourself in this session. Do not invoke Task, Agent, or any sub-agent. The pipeline parses your final assistant message for the structured \`## Issue updates\` markers below; if you delegate, those markers end up inside a sub-agent's response that the pipeline cannot read, and the iteration gets re-run on the same issue tomorrow night. The 2026-04-29 builder run produced 12 duplicate PRs because the parent kept exiting after one turn while the real work was happening in a sub-agent. Stay in your own session, emit the markers, finish the iteration.
 - CRITICAL — DO NOT BACKGROUND GIT OPERATIONS: run \`git commit\`, \`git push\`, and pre-push hooks in the FOREGROUND. Do not pass run_in_background:true for any git command. When the push completes as a background task, you receive the completion result and the natural temptation is to exit with a one-liner like "background task completed, pipeline will handle the rest" — never doing so. That pattern caused the 2026-05-06 P1 audit finding (33/55 runs missing ISSUE_DONE markers). Foreground git, then generate the structured response, then exit.
@@ -523,10 +523,18 @@ What you did (bullet points)
 ## Issue updates
 CRITICAL: You MUST output issue status lines for the issue you worked on. Output each on its own line with NO leading whitespace.
 
+Format is strict. Get these wrong and the pipeline silently drops your work — 2026-05-11 lost 9 PRs because Claude wrote \`ISSUE_DONE:547\` instead of \`ISSUE_DONE:LIFT-547|...\` and \`ISSUE_DONE:551:summary\` instead of \`ISSUE_DONE:LIFT-551|summary\`. Recent harness changes will auto-correct some of these, but match the format exactly anyway.
+
+Notice the separators differ by marker type:
+- ISSUE_DONE and ISSUE_PROGRESS use \`|\` (pipe) between ID and summary
+- ISSUE_SKIPPED uses \`:\` (colon) between ID and reason
+
 For the issue you implemented:
-ISSUE_DONE:LIFT-XXX|Brief summary of implementation and any notable decisions
-ISSUE_PROGRESS:LIFT-XXX|What was completed so far and what remains
-ISSUE_SKIPPED:LIFT-XXX:reason (if you attempted but could not complete it)
+ISSUE_DONE:${ISSUE_PREFIX}-XXX|Brief summary of implementation and any notable decisions
+ISSUE_PROGRESS:${ISSUE_PREFIX}-XXX|What was completed so far and what remains
+ISSUE_SKIPPED:${ISSUE_PREFIX}-XXX:reason (if you attempted but could not complete it)
+
+The ID must include the \`${ISSUE_PREFIX}-\` prefix and use the literal \`${ISSUE_PREFIX}\` (not \`#\`, not bare number).
 
 If you did work that has no matching issue, create one:
 ISSUE_CREATE:priority:title
@@ -595,6 +603,29 @@ $CLAUDE_RESULT"
       echo "$CLAUDE_RESULT" >> "$RUN_LOG"
     fi
 
+    # ── Normalize Claude's malformed ISSUE_* markers ───────────────────────
+    # Claude routinely deviates from the prompt's canonical format:
+    #   - omits the LIFT- prefix → "ISSUE_DONE:547|summary" (seen 2026-05-11 runs 1, 4)
+    #   - uses # instead of LIFT- → "ISSUE_DONE:#547|summary"
+    #   - uses : instead of | as the field separator → "ISSUE_DONE:547:summary"
+    #     (seen 2026-05-11 run 6 — the ISSUE_SKIPPED format leaks across)
+    # All grep -oE patterns downstream require "ISSUE_DONE:LIFT-NNN|", so any
+    # of the above silently parses as empty. That cascades into:
+    # no PRIMARY_ISSUE → no branch rename → empty enhance/runN branch pushed
+    # → gh pr create fails → fallback "pull/new/..." URL posted to Slack as
+    # if it were a real PR. Fix it once here, at ingestion time.
+    # ISSUE_CREATE / ISSUE_DISCOVER use a leading priority integer (1-4), not an
+    # issue ID, so they are deliberately excluded — rewriting them would turn
+    # "ISSUE_CREATE:2:Add feature" into "ISSUE_CREATE:LIFT-2:Add feature".
+    if [ -f "$RUN_LOG" ]; then
+      NORMALIZE_TMP="$RUN_LOG.normalize.tmp"
+      sed -E \
+        -e "s/^(ISSUE_(DONE|PROGRESS)):(#|${ISSUE_PREFIX}-)?([0-9]+)[|:]/\1:${ISSUE_PREFIX}-\4|/" \
+        -e "s/^(ISSUE_(DONE|PROGRESS)):(#|${ISSUE_PREFIX}-)?([0-9]+)\$/\1:${ISSUE_PREFIX}-\4/" \
+        -e "s/^(ISSUE_SKIPPED):(#|${ISSUE_PREFIX}-)?([0-9]+):/\1:${ISSUE_PREFIX}-\3:/" \
+        "$RUN_LOG" > "$NORMALIZE_TMP" && mv "$NORMALIZE_TMP" "$RUN_LOG"
+    fi
+
     # Track token usage
     USAGE_DATA=$(parse_usage "$CLAUDE_JSON")
     ITER_OUTPUT=$(echo "$USAGE_DATA" | cut -d',' -f2)
@@ -614,8 +645,32 @@ $CLAUDE_RESULT"
       git checkout "${DEFAULT_BRANCH:-master}" 2>/dev/null || true
       git branch -D "$ITER_BRANCH" 2>/dev/null || true
     else
-      # Check if any new commits were actually produced
-      COMMITS_AFTER=$(git rev-list --count HEAD)
+      # ── Recover commits Claude landed on a different branch ──────────────
+      # Despite the prompt's "Do NOT create branches" rule, Claude sometimes
+      # checks out a side branch (e.g. a11y/547-focus-indicators) and commits
+      # there. If we proceed without recovering, $ITER_BRANCH has 0 commits,
+      # gh pr create fails silently, and the actual work is stranded on a
+      # branch the pipeline has no record of. Seen 2026-05-11 runs 1, 4-7, 9-12.
+      CURRENT_HEAD_BRANCH=$(git branch --show-current 2>/dev/null || echo "")
+      if [ -n "$CURRENT_HEAD_BRANCH" ] && [ "$CURRENT_HEAD_BRANCH" != "$ITER_BRANCH" ]; then
+        STRANDED_COMMITS=$(git rev-list --count "${DEFAULT_BRANCH:-master}"..HEAD 2>/dev/null || echo "0")
+        if [ "$STRANDED_COMMITS" -gt 0 ] 2>/dev/null; then
+          echo "  ⚠️ Claude committed to '$CURRENT_HEAD_BRANCH' instead of assigned '$ITER_BRANCH' ($STRANDED_COMMITS commits). Moving them onto $ITER_BRANCH." | tee -a "$RUN_LOG"
+          # Force-update ITER_BRANCH to point at Claude's commits, then delete
+          # the stray local branch. The stray may also exist on remote (Claude
+          # pushed it) — leave that for the cleanup script; force-pushing here
+          # could clobber work in flight from a concurrent operator.
+          git branch -f "$ITER_BRANCH" "$CURRENT_HEAD_BRANCH" 2>/dev/null || true
+          git checkout "$ITER_BRANCH" 2>/dev/null || true
+          git branch -D "$CURRENT_HEAD_BRANCH" 2>/dev/null || true
+        fi
+      fi
+
+      # Count commits on $ITER_BRANCH specifically — not HEAD — so that if
+      # Claude did somehow land work elsewhere and we couldn't recover it
+      # above (e.g. detached HEAD), we fall into the stall path instead of
+      # reporting fake "8 new commits" from a sibling branch's history.
+      COMMITS_AFTER=$(git rev-list --count "$ITER_BRANCH" 2>/dev/null || echo "$COMMITS_BEFORE")
       NEW_COMMITS=$((COMMITS_AFTER - COMMITS_BEFORE))
       if [ "$NEW_COMMITS" -eq 0 ]; then
         STALLS=$((STALLS + 1))
@@ -895,7 +950,29 @@ This issue will close automatically when the PR merges." 2>&1 | tee -a "$RUN_LOG
           echo "  ⚠️ Pre-PR dedupe check: could not extract issue number from FIRST_COMMIT_MSG=\"${FIRST_COMMIT_MSG:-(empty)}\" or PRIMARY_ISSUE=\"${PRIMARY_ISSUE:-(empty)}\" — guard cannot fire. PR will be created without dedupe." | tee -a "$RUN_LOG"
         fi
 
-        PR_URL=$(gh pr create --base "${DEFAULT_BRANCH:-master}" --head "$ITER_BRANCH" \
+        # ── Refuse to PR an empty branch ──────────────────────────────────
+        # The branch must have at least one commit ahead of master. Without
+        # this guard, gh pr create silently fails ("No commits between..."),
+        # and the previous fallback constructed a fake "pull/new/<branch>"
+        # URL that we posted to Slack as if it were a real PR. Seen
+        # 2026-05-11 runs 1, 4-7, 9-12.
+        PR_BRANCH_COMMITS=$(git rev-list --count "${DEFAULT_BRANCH:-master}".."$ITER_BRANCH" 2>/dev/null || echo "0")
+        if [ "$PR_BRANCH_COMMITS" -eq 0 ] 2>/dev/null; then
+          echo "❌ Run $RUN: $ITER_BRANCH has 0 commits ahead of ${DEFAULT_BRANCH:-master} — refusing to open empty PR. Work may be stranded on a side branch Claude created." | tee -a "$RUN_LOG"
+          thread_send "❌ *Run $RUN — no PR opened* — \`$ITER_BRANCH\` is empty. Claude may have committed to a side branch; check the run log."
+          git checkout "${DEFAULT_BRANCH:-master}" 2>/dev/null || true
+          git push origin --delete "$ITER_BRANCH" 2>/dev/null || true
+          git branch -D "$ITER_BRANCH" 2>/dev/null || true
+          ITER_END=$(date +%s)
+          ITER_DURATION=$((ITER_END - ITER_START))
+          echo "$DATE,$RUN,$ITER_START_FMT,$(date +%H:%M:%S),$ITER_DURATION,0,$TESTS_BEFORE,$TESTS_BEFORE,0,0,0,0,0,,empty-branch" >> "$METRICS_FILE"
+          continue
+        fi
+
+        # Capture gh pr create's output to the run log so failures are
+        # debuggable. Previously the output went into PR_URL and got
+        # discarded by the github.com-vs-fallback branch below.
+        PR_CREATE_OUTPUT=$(gh pr create --base "${DEFAULT_BRANCH:-master}" --head "$ITER_BRANCH" \
           --title "$PR_TITLE" \
           $PR_LABEL_ARGS \
           --body "$(cat <<PRBODY
@@ -919,12 +996,25 @@ $PR_COMMIT_LIST
 ---
 _Automated by overnight pipeline — $(date)_
 PRBODY
-)" 2>&1 || echo "")
+)" 2>&1 || true)
+        echo "  gh pr create output: $PR_CREATE_OUTPUT" | tee -a "$RUN_LOG"
 
-        if echo "$PR_URL" | grep -q "github.com"; then
-          PR_URL=$(echo "$PR_URL" | grep -oE 'https://github.com/[^ ]+' | head -1)
-        else
-          PR_URL=$(cd "$REPO" && gh pr view "$ITER_BRANCH" --json url -q .url 2>/dev/null || echo "https://github.com/$GITHUB_REPO/pull/new/$ITER_BRANCH")
+        # A successful gh pr create prints exactly "https://github.com/<repo>/pull/<N>".
+        # Anything else (errors, "already exists" messages with extra text) doesn't
+        # match this anchored shape — fall through to gh pr view, then bail out
+        # rather than fabricate a /pull/new/ URL.
+        PR_URL=$(echo "$PR_CREATE_OUTPUT" | grep -oE 'https://github\.com/[^ ]+/pull/[0-9]+' | head -1)
+        if [ -z "$PR_URL" ]; then
+          PR_URL=$(cd "$REPO" && gh pr view "$ITER_BRANCH" --json url -q .url 2>/dev/null || echo "")
+        fi
+        if [ -z "$PR_URL" ]; then
+          echo "❌ Run $RUN: gh pr create did not return a PR URL and no existing PR was found for $ITER_BRANCH." | tee -a "$RUN_LOG"
+          thread_send "❌ *Run $RUN — PR creation failed* on \`$ITER_BRANCH\`. gh output: \`$(echo "$PR_CREATE_OUTPUT" | head -c 200)\`"
+          # Leave the branch in place so a human can investigate and open the PR manually.
+          ITER_END=$(date +%s)
+          ITER_DURATION=$((ITER_END - ITER_START))
+          echo "$DATE,$RUN,$ITER_START_FMT,$(date +%H:%M:%S),$ITER_DURATION,$NEW_COMMITS,$TESTS_BEFORE,$TESTS_BEFORE,0,0,0,0,0,,pr-create-failed" >> "$METRICS_FILE"
+          continue
         fi
 
         NIGHTLY_PRS+="$PR_URL "
