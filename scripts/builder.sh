@@ -842,7 +842,6 @@ This issue will close automatically when the PR merges." 2>&1 | tee -a "$RUN_LOG
 
         FIRST_COMMIT_MSG=$(git log --format=%s -1 "${DEFAULT_BRANCH:-master}".."$ITER_BRANCH" 2>/dev/null || echo "")
         PR_TITLE="${FIRST_COMMIT_MSG:-$ISSUE_CATEGORY($PRIMARY_ISSUE): $ISSUE_TITLE}"
-        PR_TITLE=$(echo "$PR_TITLE" | head -c 70)
 
         PR_LABEL_ARGS=""
         case "$ISSUE_CATEGORY" in

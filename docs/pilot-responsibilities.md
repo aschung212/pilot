@@ -143,6 +143,16 @@ updated: 2026-05-08
 
 ## Changelog
 
+### 2026-05-12 — Builder PR titles no longer truncated mid-word
+
+**Symptom.** PR titles created by the builder were getting cut off mid-word. Example: [PR #554](https://github.com/aschung212/Lift/pull/554) shipped with title `fix(#549): export classifyWarmupSets convenience wrapper and fix thres` — chopped at "thres" instead of "threshold comparison".
+
+**Cause.** `scripts/builder.sh:845` hard-truncated `PR_TITLE` with `head -c 70` before passing it to `gh pr create`. The 70-byte cap was arbitrary (GitHub allows 256 chars) and ignored word boundaries.
+
+**Action.** Removed the `head -c 70` truncation. The PR title now uses the first commit subject as-is, which is already conventionally short and bounded by commit-message hygiene rather than an arbitrary script cap.
+
+**Action needed for Aaron:** None.
+
 ### 2026-05-11 — Review tuner decommissioned
 
 **Symptom.** Aaron observed the Sun 21:15 review tuner posting `🎛️ Review Tuner — no new merged PRs to analyze ✅` to #lift-automation, while Lift had merged 10+ PRs in the prior week (#517, #523, #524, #525, #526, #527, #528, #529, #530, …). His hypothesis was that the script confused merged with closed-without-merge PRs.
