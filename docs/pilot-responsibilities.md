@@ -159,6 +159,31 @@ updated: 2026-05-08
 
 **Action needed for Aaron:** None. The Sunday 21:15 slot is now empty. No replacement is planned — the inline review system posts to per-iteration Slack threads, not GitHub comments, so any future tuner would have to learn from your manual PR review comments rather than bot comments. Flag if you want that built; otherwise the slot stays empty.
 
+### 2026-05-12 — Triage FLAGs park issues on `state:needs-input` (now respected by builder)
+
+**Problem.** The 2026-05-10 triage run flagged issue [#550](https://github.com/aschung212/Lift/issues/550) as 🚩 NEEDS INPUT — a color-only delta indicator has multiple reasonable a11y fixes (icon+color, monochrome treatment, ARIA-only) and the right call needs Aaron's product judgment. The 2026-05-11 overnight builder picked the same issue and shipped [PR #556](https://github.com/aschung212/Lift/pull/556) anyway. Two bugs combined:
+
+1. **FLAG didn't change state.** Triage's FLAG branch only added a comment. The issue stayed on `state:unstarted`, and `list pickable` (exclusion of `{triage, backlog, started, blocked, canceled}`) had no signal for "human decision required." Eight currently-open issues had the same pattern (#306, #308, #309, #533, #546, #547, #550, #551) — every FLAG since the GitHub migration was a no-op against the picking pool.
+2. **The NEEDS INPUT comment was blank.** Triage's FLAG prompt asked for a 1-2 sentence reason; the Sonnet fallback returned no `REASON:` line at all on #550, so the parser produced an empty comment body. Even when populated, a single sentence is not enough for Aaron to decide in 30 seconds.
+
+**Fix.** Two changes, both small:
+
+- `adapters/tracker.sh`: `pickable` and `triageable` jq predicates now also exclude `state:needs-input`. Builder skips it; triage doesn't re-process it (so the existing options analysis isn't overwritten each cycle).
+- `scripts/triage.sh`: FLAG branch now calls `tracker.sh update --state needs-input` after commenting. The triage prompt was rewritten to require, on FLAG, a `FLAG_QUESTION` line, 2–4 `OPTION_N` blocks (each with `TITLE`, `PROS`, `CONS`), and a `RECOMMENDATION`. Pros/cons are pipe-separated in the model output and rendered as bulleted lists in the comment. Guidance also clarifies that FLAG is for *product* decisions — implementation fuzziness goes to ENHANCE with a documented assumption. Fallback path logs a warning if the model omits structured fields and surfaces the raw REASON so the comment is never blank.
+- `state:needs-input` label created in `aschung212/Lift` (color F9D0C4, "Triage flagged — waiting on human decision") — required because `gh issue edit --add-label` does not auto-create labels.
+
+**Locked in via tests.** Both `tests/tracker.bats` and `tests/triage.bats` got new assertions: `pickable`/`triageable` must exclude `state:needs-input`, and FLAG output parsing must extract `FLAG_QUESTION`, `RECOMMENDATION`, and N options correctly.
+
+**New responsibility for Aaron.** Issues parked on `state:needs-input` are waiting on you. The workflow:
+1. Open the issue, read **Question / Options / Recommendation** in the latest "Triaged by …" comment.
+2. Decide. Either accept the recommendation (just react with 👍 in the comment for your own audit trail) or pick a different option / add a constraint.
+3. Edit the issue body or add a comment with the chosen direction so the builder has context.
+4. Flip the label: remove `state:needs-input`, add `state:unstarted` (or use the GitHub UI's labels picker). The next builder iteration picks it up.
+
+If you ignore a `state:needs-input` issue, it just sits there indefinitely — that's the point. No silent re-picking.
+
+**Backfill action (one-shot).** The 8 already-FLAGged issues listed above need their state flipped from `state:unstarted` to `state:needs-input` so the next builder run doesn't pick them up. They were FLAGged under the old prompt so their existing comments are blank — re-running triage on them once their state is correct will regenerate the options analysis. (Triage's idempotency check skips issues that already have a "Triaged by" comment, so to re-triage you'd need to delete the existing comment first.)
+
 ### 2026-05-11 — Triage no longer caps at 10 issues per run
 
 **Change.** `scripts/triage.sh` previously processed at most 10 untriaged issues per run (`MAX_PER_RUN=10`), deferring the rest to the next Sun/Tue/Thu cycle. Removed the cap — triage now processes every untriaged issue returned by `list triageable` in a single run.

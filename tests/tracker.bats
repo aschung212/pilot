@@ -36,6 +36,20 @@ TRACKER="$PILOT_DIR/adapters/tracker.sh"
 }
 
 # bats test_tags=fast
+@test "tracker: list pickable excludes state:needs-input in its jq filter" {
+  # Triage parks FLAGged issues on state:needs-input. The picking pool must
+  # exclude that label, otherwise the builder picks up issues that are
+  # explicitly waiting on Aaron's decision (regression of #550 → PR #556).
+  # Assert on the actual jq predicate, not just the absence of --label.
+  export TRACKER_ADAPTER="github"
+  export GITHUB_ISSUES_REPO="test/repo"
+  export ISSUE_PREFIX="LIFT"
+  run bash "$TRACKER" list pickable
+  [ "$status" -eq 0 ]
+  grep -q -- 'state:needs-input' "$TEST_TMPDIR/mock_calls/gh"
+}
+
+# bats test_tags=fast
 @test "tracker: list triageable runs an open-state exclusion query" {
   # Parallel to "pickable" but the triage scope: every open issue that is not
   # already in flight (state:started), blocked, or canceled. Includes
@@ -53,6 +67,10 @@ TRACKER="$PILOT_DIR/adapters/tracker.sh"
   ! grep -q -- "--label state:backlog" "$TEST_TMPDIR/mock_calls/gh"
   ! grep -q -- "--label state:unstarted" "$TEST_TMPDIR/mock_calls/gh"
   ! grep -q -- "--label state:triageable" "$TEST_TMPDIR/mock_calls/gh"
+  # Re-triaging an issue that already has a "Triaged by … NEEDS INPUT" comment
+  # would overwrite the existing options/recommendation analysis on every run.
+  # state:needs-input must also be excluded from the triage scope.
+  grep -q -- 'state:needs-input' "$TEST_TMPDIR/mock_calls/gh"
 }
 
 # bats test_tags=fast

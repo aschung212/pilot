@@ -68,16 +68,21 @@ gh_list() {
   for state in "$@"; do
     case "$state" in
       pickable)
+        # state:needs-input is excluded so issues the triage agent FLAGged for
+        # human decision do not get auto-picked. The label is set by triage.sh
+        # whenever it emits a FLAG verdict; Aaron clears it (via /unblock or
+        # by flipping back to state:unstarted) once he answers the question.
         gh issue list --repo "$GITHUB_ISSUES_REPO" --limit 200 --state open \
           --json number,title,labels \
           --jq '.[]
             | select(
                 (.labels | map(.name)) as $l
-                | ($l | index("state:triage")   | not)
-                  and ($l | index("state:backlog")  | not)
-                  and ($l | index("state:started")  | not)
-                  and ($l | index("state:blocked")  | not)
-                  and ($l | index("state:canceled") | not)
+                | ($l | index("state:triage")       | not)
+                  and ($l | index("state:backlog")     | not)
+                  and ($l | index("state:started")     | not)
+                  and ($l | index("state:blocked")     | not)
+                  and ($l | index("state:needs-input") | not)
+                  and ($l | index("state:canceled")    | not)
               )
             | "'"${ISSUE_PREFIX}"'-\(.number) \(.title)"' 2>/dev/null || true
         ;;
@@ -92,14 +97,21 @@ gh_list() {
         # active work or revive intentionally-blocked issues.
         # The triage agent further filters out issues that already have a
         # "Triaged by" comment (its own idempotency check).
+        # state:needs-input is excluded — those issues already went through triage
+        # and are parked on a human decision. Re-triaging them every cycle would
+        # waste Gemini/Sonnet calls and overwrite the existing options analysis.
+        # Aaron unblocks by flipping back to state:unstarted, which puts the
+        # issue back in scope for both triage (idempotency: skipped via "Triaged
+        # by" comment match) and the builder picking pool.
         gh issue list --repo "$GITHUB_ISSUES_REPO" --limit 200 --state open \
           --json number,title,labels \
           --jq '.[]
             | select(
                 (.labels | map(.name)) as $l
-                | ($l | index("state:started")  | not)
-                  and ($l | index("state:blocked")  | not)
-                  and ($l | index("state:canceled") | not)
+                | ($l | index("state:started")      | not)
+                  and ($l | index("state:blocked")     | not)
+                  and ($l | index("state:needs-input") | not)
+                  and ($l | index("state:canceled")    | not)
               )
             | "'"${ISSUE_PREFIX}"'-\(.number) \(.title)"' 2>/dev/null || true
         ;;

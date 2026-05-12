@@ -143,6 +143,63 @@ SUGGESTED_PRIORITY: 2"
   [ "$complexity" = "medium" ]
 }
 
+# ── FLAG verdict structured-output parsing ───────────────────────────────────
+# These mirror the parsing logic in the FLAG case of triage.sh. A blank
+# "NEEDS INPUT" comment with no options/recommendation is the regression we
+# saw on #550 → PR #556: pin the parsing here so any future refactor that
+# drops these fields fails loudly.
+
+# bats test_tags=fast
+@test "triage: FLAG_QUESTION and RECOMMENDATION extracted from FLAG output" {
+  result="VERDICT: FLAG
+CONFIDENCE: 6
+REASON: Color-only delta indicator has multiple reasonable fixes
+FLAG_QUESTION: Should the negative-delta arrow keep red, or pair color with an icon for color-blind users?
+OPTION_1_TITLE: Add a directional icon next to the value
+OPTION_1_PROS: works without color | matches WCAG 1.4.1
+OPTION_1_CONS: extra DOM | slightly noisier UI
+OPTION_2_TITLE: Switch to a neutral monochrome treatment
+OPTION_2_PROS: lowest visual noise
+OPTION_2_CONS: loses scannable signal | regression for sighted users
+RECOMMENDATION: Option 1 — icon + color is the standard a11y pattern and keeps existing scannability."
+  flag_q=$(echo "$result" | grep -oE 'FLAG_QUESTION: .*' | head -1 | sed 's/FLAG_QUESTION: //')
+  rec=$(echo "$result" | grep -oE 'RECOMMENDATION: .*' | head -1 | sed 's/RECOMMENDATION: //')
+  [[ "$flag_q" == "Should the negative-delta arrow keep red"* ]]
+  [[ "$rec" == "Option 1 —"* ]]
+}
+
+# bats test_tags=fast
+@test "triage: OPTION_N fields counted across the parsing loop" {
+  result="OPTION_1_TITLE: A
+OPTION_1_PROS: pro a
+OPTION_1_CONS: con a
+OPTION_2_TITLE: B
+OPTION_2_PROS: pro b1 | pro b2
+OPTION_2_CONS: con b
+OPTION_3_TITLE: C
+OPTION_3_PROS: pro c
+OPTION_3_CONS: con c"
+  count=0
+  for i in 1 2 3 4; do
+    t=$(echo "$result" | grep -oE "OPTION_${i}_TITLE: .*" | head -1 | sed "s/OPTION_${i}_TITLE: //")
+    [ -z "$t" ] && continue
+    count=$((count + 1))
+  done
+  [ "$count" -eq 3 ]
+}
+
+# bats test_tags=fast
+@test "triage: pros pipe-split into bullets when rendering FLAG comment" {
+  # Single-pipe-separated pros list should split into 3 lines, each prefixed
+  # with "  - ". This matches the FLAG case's bullet rendering.
+  pros="works without color | matches WCAG 1.4.1 | reuses existing icon set"
+  bullets=$(echo "$pros" | tr '|' '\n' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//; /^$/d; s/^/  - /')
+  [ "$(echo "$bullets" | wc -l | tr -d ' ')" -eq 3 ]
+  echo "$bullets" | grep -q "^  - works without color$"
+  echo "$bullets" | grep -q "^  - matches WCAG 1.4.1$"
+  echo "$bullets" | grep -q "^  - reuses existing icon set$"
+}
+
 # ── Dry run integration test ─────────────────────────────────────────────────
 
 # bats test_tags=fast

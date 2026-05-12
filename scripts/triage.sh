@@ -124,6 +124,8 @@ $RESCOPE_GUIDANCE
 
 The builder agent (Claude Opus) is highly capable — it handles complex, multi-file changes across the codebase in a single iteration. Do NOT rescope an issue just because it is large or touches many files. Only RESCOPE when an issue bundles genuinely unrelated deliverables that have no dependency on each other (e.g. 'redesign the settings page AND add export functionality' — those are two separate features).
 
+FLAG only when the issue has a genuine product/UX decision that requires Aaron's judgment — competing reasonable approaches with different tradeoffs, an unclear product intent, a missing requirement only Aaron can supply. Do NOT FLAG just because implementation details are fuzzy: if you can pick a sensible default, use ENHANCE instead and document the assumption. A blank \"NEEDS INPUT\" comment with no analysis is useless — every FLAG must include 2-4 concrete options with pros, cons, and your recommendation so Aaron can decide in 30 seconds.
+
 Output EXACTLY this format:
 VERDICT: APPROVE or ENHANCE or SKIP or FLAG or RESCOPE
 CONFIDENCE: 1-10
@@ -131,6 +133,17 @@ REASON: 1-2 sentences
 IMPLEMENTATION_PLAN: (if APPROVE/ENHANCE) 3 bullet points with specific files and changes
 COMPLEXITY: small/medium/large
 SUGGESTED_PRIORITY: 1-4
+
+If FLAG, also output (mandatory — do not emit FLAG without these fields):
+FLAG_QUESTION: 1-2 sentences naming the specific decision needed. Be concrete (e.g. \"Should the negative-delta indicator stay red, or use a neutral icon+color combo so it works without color?\"), not generic (\"unclear scope\").
+OPTION_1_TITLE: short label for the option
+OPTION_1_PROS: 1-3 pros separated by \" | \"
+OPTION_1_CONS: 1-3 cons separated by \" | \"
+OPTION_2_TITLE: short label
+OPTION_2_PROS: pros separated by \" | \"
+OPTION_2_CONS: cons separated by \" | \"
+(repeat OPTION_3 / OPTION_4 if useful — provide AT LEAST 2 options, no more than 4)
+RECOMMENDATION: name the recommended option and 1-2 sentences justifying the call
 
 If RESCOPE, also output (2-4 sub-issues, no more):
 SUB_ISSUE_1_TITLE: concise title
@@ -219,13 +232,53 @@ _Automated triage — can be overridden by moving to Unstarted._" || true
     FLAG)
       FLAGGED=$((FLAGGED + 1))
       REASON=$(echo "$TRIAGE_RESULT" | grep -oE 'REASON: .*' | head -1 | sed 's/REASON: //')
+      FLAG_QUESTION=$(echo "$TRIAGE_RESULT" | grep -oE 'FLAG_QUESTION: .*' | head -1 | sed 's/FLAG_QUESTION: //')
+      RECOMMENDATION=$(echo "$TRIAGE_RESULT" | grep -oE 'RECOMMENDATION: .*' | head -1 | sed 's/RECOMMENDATION: //')
+
+      # Build options section from OPTION_1..OPTION_4 fields. Each option must
+      # have a title; pros/cons are split on " | " into a bulleted list. If the
+      # model omits the structured fields (older prompts, model regression),
+      # fall back to a plain REASON line so the comment is still informative.
+      OPTIONS_BLOCK=""
+      OPTION_COUNT=0
+      for i in 1 2 3 4; do
+        O_TITLE=$(echo "$TRIAGE_RESULT" | grep -oE "OPTION_${i}_TITLE: .*" | head -1 | sed "s/OPTION_${i}_TITLE: //")
+        [ -z "$O_TITLE" ] && continue
+        OPTION_COUNT=$((OPTION_COUNT + 1))
+        O_PROS=$(echo "$TRIAGE_RESULT" | grep -oE "OPTION_${i}_PROS: .*" | head -1 | sed "s/OPTION_${i}_PROS: //")
+        O_CONS=$(echo "$TRIAGE_RESULT" | grep -oE "OPTION_${i}_CONS: .*" | head -1 | sed "s/OPTION_${i}_CONS: //")
+        PROS_BULLETS=$(echo "$O_PROS" | tr '|' '\n' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//; /^$/d; s/^/  - /')
+        CONS_BULLETS=$(echo "$O_CONS" | tr '|' '\n' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//; /^$/d; s/^/  - /')
+        [ -z "$PROS_BULLETS" ] && PROS_BULLETS="  - (none provided)"
+        [ -z "$CONS_BULLETS" ] && CONS_BULLETS="  - (none provided)"
+        OPTIONS_BLOCK+="**Option ${i}: ${O_TITLE}**
+Pros:
+${PROS_BULLETS}
+Cons:
+${CONS_BULLETS}
+
+"
+      done
+
+      if [ "$OPTION_COUNT" -eq 0 ]; then
+        # Model didn't emit structured options — surface the bare reason so
+        # Aaron at least sees something, and log the regression so we notice.
+        echo "    ⚠️  FLAG verdict but no OPTION_N fields parsed — falling back to bare REASON." | tee -a "$TRIAGE_LOG"
+        OPTIONS_BLOCK="_Triage did not emit structured options. Raw reason: ${REASON:-(empty)}_"
+      fi
+
       bash "$TRACKER" comment-add "$issue_id" "**Triaged by $TRIAGE_MODEL** ($DATE) — 🚩 NEEDS INPUT
 
-$REASON
+**Question:** ${FLAG_QUESTION:-${REASON:-No question summary provided.}}
+
+${OPTIONS_BLOCK}**Recommendation:** ${RECOMMENDATION:-No recommendation provided.}
 
 ---
-_Automated triage — this issue needs a human decision before the builder can proceed._" || true
-      RESULTS+="  • 🚩 <${ISSUE_URL}|${issue_id}>: ${ISSUE_TITLE} — _${REASON:-needs human decision}_\n"
+_Automated triage — this issue needs a human decision before the builder can proceed. Resolve by editing the issue with your answer, then flip \`state:needs-input\` → \`state:unstarted\` to release it into the picking pool._" || true
+      # Park the issue on state:needs-input so list pickable / list triageable
+      # both skip it. Aaron flips it back to state:unstarted once he answers.
+      bash "$TRACKER" update "$issue_id" --state needs-input || true
+      RESULTS+="  • 🚩 <${ISSUE_URL}|${issue_id}>: ${ISSUE_TITLE} — _${FLAG_QUESTION:-${REASON:-needs human decision}}_\n"
       ;;
     RESCOPE)
       RESCOPED=$((RESCOPED + 1))
