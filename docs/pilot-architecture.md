@@ -299,6 +299,63 @@ See [Pilot Responsibilities](pilot-responsibilities.md) for the complete list of
 
 ## Changelog
 
+### 2026-05-12 — Triage FLAG parks issues on `state:needs-input`; pickable + triageable exclude it
+
+**Problem.** The 2026-05-11 overnight builder picked up issue #550 and shipped PR #556 — but triage had already FLAGged #550 as NEEDS INPUT on 2026-05-10. The FLAG verdict only added a comment; it did not change state. #550 stayed on `state:unstarted`, which is exactly the bucket `list pickable` includes. Eight currently-open issues had the same pattern (#306, #308, #309, #533, #546, #547, #550, #551) — every triage FLAG since the GitHub migration was a no-op against the picking pool. The 2026-05-08 `list pickable` exclusion fix excluded `{triage, backlog, started, blocked, canceled}` but had no signal for "triage said wait."
+
+Second problem on the same FLAG verdict: the comment Aaron saw on #550 was effectively blank — `**Triaged by claude-sonnet** — 🚩 NEEDS INPUT` followed by an empty REASON. The triage prompt asked the model for a 1-2 sentence reason and nothing else; Sonnet returned no `REASON:` line and the parser silently fell through. Even when the parse worked, a single sentence is not enough for Aaron to make a decision in 30 seconds — he needs options, tradeoffs, and a recommendation.
+
+**Fix (`adapters/tracker.sh`).** Both `pickable` and `triageable` jq predicates now also `not` against `state:needs-input`:
+
+```jq
+(.labels | map(.name)) as $l
+  | ($l | index("state:triage")       | not)
+    and ($l | index("state:backlog")     | not)
+    and ($l | index("state:started")     | not)
+    and ($l | index("state:blocked")     | not)
+    and ($l | index("state:needs-input") | not)
+    and ($l | index("state:canceled")    | not)
+```
+
+`triageable` also excludes `state:needs-input` so that already-FLAGged issues do not get re-triaged each cycle, which would overwrite the existing options analysis. The agent's own `"Triaged by"` idempotency check is independent — this is a second defense.
+
+**Fix (`scripts/triage.sh`).** The FLAG case now (a) flips the issue to `state:needs-input` via `tracker.sh update`, and (b) renders a structured comment with `**Question:**`, `**Option N:**` blocks (each with pros/cons bulleted lists), and `**Recommendation:**`. The triage prompt was rewritten to require those fields on every FLAG, with explicit guidance: FLAG is for product decisions, not implementation fuzziness — fuzzy implementation goes to ENHANCE. Pros/cons are pipe-separated in the model output and split into bullets at render time. If the model regresses and omits the structured fields, the fallback path logs a warning and surfaces the raw REASON so the comment is never blank.
+
+**Repo prerequisite.** Added the `state:needs-input` GitHub label to `aschung212/Lift` (color F9D0C4, "Triage flagged — waiting on human decision"). The `tracker.sh update --state needs-input` call needs an existing label — `gh issue edit --add-label` does not auto-create.
+
+**Aaron's resolution flow.** When triage parks an issue on `state:needs-input`:
+1. Aaron reads the options + recommendation in the issue comment.
+2. Aaron edits the issue body (or replies in a comment) with the chosen direction.
+3. Aaron flips `state:needs-input` → `state:unstarted`, which puts the issue back in the picking pool. The builder picks it up next iteration with Aaron's answer baked into the body.
+
+**Issue lifecycle (updated).**
+
+```
+discover     ─→ state:triage
+triage APPROVE/ENHANCE ─→ state:unstarted
+triage FLAG  ─→ state:needs-input   ← NEW (was: no state change, comment only)
+triage RESCOPE ─→ state:canceled + N new state:unstarted children
+triage SKIP  ─→ priority:4-low (state unchanged)
+architect    ─→ (intended state:unstarted; orphan-tolerant via list pickable)
+builder pick ─→ state:started        (deterministic at pre-pick stage)
+builder done ─→ state:started        (PR opened; closure deferred to PR merge)
+PR merge     ─→ closed               (GitHub auto-closes via "Closes #N")
+human unblock ─→ state:unstarted    ← Aaron clears state:needs-input by hand
+stalled      ─→ state:started        (lingers; manual triage)
+```
+
+**Locked in via tests.** `tests/tracker.bats` adds a new test asserting the `pickable` jq output contains `state:needs-input` (i.e. it's in the exclusion chain). The `triageable` test grew the same assertion. `tests/triage.bats` adds three FLAG-output parsing tests: FLAG_QUESTION + RECOMMENDATION extraction, OPTION_N counting across the loop, and the pipe-to-bullet pros rendering.
+
+**Single source of truth per question (updated).**
+
+| Question | Answer |
+|---|---|
+| What can builder pick next? | `tracker.sh list pickable` (now excludes `state:needs-input`) |
+| What's waiting on Aaron? | `gh issue list --label state:needs-input` |
+| Who is working on this? | `state:started` label |
+| Is there a PR for this? | `gh pr list` (OPEN_PR_ISSUES filter) |
+| What did builder attempt this run? | `NIGHTLY_ATTEMPTED_ISSUES` |
+
 ### 2026-05-08 — Single source of truth for "pickable": exclusion-based query in tracker.sh
 
 **Why this is its own entry.** The two-stage pre-pick fix earlier today narrowed the picking pool to whatever `tracker.sh list unstarted` returned (4 issues). That accidentally cut off the side channel that was rescuing architect-created issues — they lack `state:unstarted` due to a separate labeling bug, but Claude's main builder call had `Bash(gh:*)` and was finding them via direct `gh issue list` queries. Locking stage 1 to `Read,Glob,Grep` made the picking deterministic but also made the builder blind to those orphans. A 9-issue pool effectively shrank to 4.
