@@ -124,7 +124,9 @@ $RESCOPE_GUIDANCE
 
 The builder agent (Claude Opus) is highly capable — it handles complex, multi-file changes across the codebase in a single iteration. Do NOT rescope an issue just because it is large or touches many files. Only RESCOPE when an issue bundles genuinely unrelated deliverables that have no dependency on each other (e.g. 'redesign the settings page AND add export functionality' — those are two separate features).
 
-FLAG only when the issue has a genuine product/UX decision that requires Aaron's judgment — competing reasonable approaches with different tradeoffs, an unclear product intent, a missing requirement only Aaron can supply. Do NOT FLAG just because implementation details are fuzzy: if you can pick a sensible default, use ENHANCE instead and document the assumption. A blank \"NEEDS INPUT\" comment with no analysis is useless — every FLAG must include 2-4 concrete options with pros, cons, and your recommendation so Aaron can decide in 30 seconds.
+FLAG only when the issue has a genuine product/UX decision that requires Aaron's judgment — competing reasonable approaches with different tradeoffs, an unclear product intent, a missing requirement only Aaron can supply. Do NOT FLAG just because implementation details are fuzzy: if you can pick a sensible default, use ENHANCE instead and document the assumption.
+
+**FLAG is only valid if you can enumerate at least 2 concrete options with pros and cons.** If you cannot, the verdict must be ENHANCE (pick a sensible default + document the assumption) or SKIP, NEVER FLAG. A blank \"NEEDS INPUT\" comment with no analysis wastes Aaron's time — better to ship an enhanced scope he can override than to punt with no signal.
 
 Output EXACTLY this format:
 VERDICT: APPROVE or ENHANCE or SKIP or FLAG or RESCOPE
@@ -134,7 +136,7 @@ IMPLEMENTATION_PLAN: (if APPROVE/ENHANCE) 3 bullet points with specific files an
 COMPLEXITY: small/medium/large
 SUGGESTED_PRIORITY: 1-4
 
-If FLAG, also output (mandatory — do not emit FLAG without these fields):
+If FLAG, you MUST emit every field below. If you cannot fill in OPTION_1 and OPTION_2 with concrete content, change the verdict to ENHANCE instead of FLAG.
 FLAG_QUESTION: 1-2 sentences naming the specific decision needed. Be concrete (e.g. \"Should the negative-delta indicator stay red, or use a neutral icon+color combo so it works without color?\"), not generic (\"unclear scope\").
 OPTION_1_TITLE: short label for the option
 OPTION_1_PROS: 1-3 pros separated by \" | \"
@@ -144,6 +146,22 @@ OPTION_2_PROS: pros separated by \" | \"
 OPTION_2_CONS: cons separated by \" | \"
 (repeat OPTION_3 / OPTION_4 if useful — provide AT LEAST 2 options, no more than 4)
 RECOMMENDATION: name the recommended option and 1-2 sentences justifying the call
+
+Example FLAG output (follow this shape exactly when you choose FLAG):
+
+VERDICT: FLAG
+CONFIDENCE: 7
+REASON: Color-only delta indicator has multiple valid a11y fixes with different UX tradeoffs.
+COMPLEXITY: small
+SUGGESTED_PRIORITY: 3
+FLAG_QUESTION: Should the negative bodyweight delta keep red color alone, pair red with a directional icon, or switch to a monochrome treatment to satisfy WCAG 1.4.1 without losing scannability?
+OPTION_1_TITLE: Icon + color (e.g. ↑/↓ next to value)
+OPTION_1_PROS: works without color | matches WCAG 1.4.1 | reuses existing icon set
+OPTION_1_CONS: extra DOM node | slightly noisier UI
+OPTION_2_TITLE: Monochrome with subtle weight change
+OPTION_2_PROS: lowest visual noise | no new asset required
+OPTION_2_CONS: loses scannable signal | mild regression for sighted users
+RECOMMENDATION: Option 1 — icon+color is the standard a11y pattern and Tailwind already has the chevron asset wired in.
 
 If RESCOPE, also output (2-4 sub-issues, no more):
 SUB_ISSUE_1_TITLE: concise title
@@ -164,7 +182,12 @@ SUB_ISSUE_2_DESCRIPTION: ...
     TRIAGE_MODEL="claude-sonnet"
     # Triage only needs read access — no writes, no shell beyond git log
     TRIAGE_ALLOWED_TOOLS="Read,Glob,Grep,Bash(git log:*),Bash(git diff:*),Bash(ls:*),Bash(cat:*)"
-    TRIAGE_RESULT=$(claude --allowedTools "$TRIAGE_ALLOWED_TOOLS" --model sonnet -p "$TRIAGE_PROMPT" --max-turns 3 2>&1 || true)
+    # max-turns 6: the FLAG verdict requires emitting FLAG_QUESTION + 2–4
+    # OPTION_N blocks + RECOMMENDATION after any tool use. At max-turns 3,
+    # Sonnet was spending all turns on Read/Glob/Grep and getting cut off
+    # before the structured output landed — produced empty NEEDS INPUT
+    # comments on LIFT-550/546/531 during the 2026-05-12 backfill rerun.
+    TRIAGE_RESULT=$(claude --allowedTools "$TRIAGE_ALLOWED_TOOLS" --model sonnet -p "$TRIAGE_PROMPT" --max-turns 6 2>&1 || true)
   fi
 
   # Parse verdict

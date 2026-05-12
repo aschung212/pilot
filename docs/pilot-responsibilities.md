@@ -182,7 +182,18 @@ updated: 2026-05-08
 
 If you ignore a `state:needs-input` issue, it just sits there indefinitely — that's the point. No silent re-picking.
 
-**Backfill action (one-shot).** The 8 already-FLAGged issues listed above need their state flipped from `state:unstarted` to `state:needs-input` so the next builder run doesn't pick them up. They were FLAGged under the old prompt so their existing comments are blank — re-running triage on them once their state is correct will regenerate the options analysis. (Triage's idempotency check skips issues that already have a "Triaged by" comment, so to re-triage you'd need to delete the existing comment first.)
+**Backfill action (completed 2026-05-12).** The 8 already-FLAGged issues (#306 #308 #309 #533 #546 #547 #550 #551) plus 2 untriaged extras (#531 #532) were re-triaged under the new prompt. Outcome:
+
+- **5 cleared back into the picking pool** — under the new prompt with `--max-turns 6`, Sonnet found sensible defaults instead of FLAGing: #533 #547 #550 #551 (APPROVE), #531 (APPROVE), #532 #546 (ENHANCE). Original FLAGs were premature punts.
+- **1 skipped** — #306 (custom app icon, blocked by Capacitor wrapper).
+- **2 genuine NEEDS INPUT** — #308 (premium theme packs) and #309 (Stripe Checkout). Both got rich `FLAG_QUESTION` / `OPTION_N` / `RECOMMENDATION` comments and are parked on `state:needs-input` until Aaron decides.
+
+**Two follow-up fixes landed in the same backfill session:**
+
+1. **Prompt strengthening.** Added an explicit FLAG output example to the triage prompt and rewrote the FLAG gating: "If you cannot fill in OPTION_1 and OPTION_2 with concrete content, change the verdict to ENHANCE instead of FLAG." Sonnet was emitting bare `VERDICT: FLAG` lines without the structured fields on first attempt; the new wording + example trains the format.
+2. **Sonnet `--max-turns` bumped 3 → 6.** Root cause of the empty FLAG outputs on the first re-triage pass: Sonnet was hitting `Error: Reached max turns (3)` after Read/Glob/Grep tool calls and getting cut off before emitting `OPTION_N` / `RECOMMENDATION`. With max-turns 6, Sonnet has headroom to investigate the code AND produce the structured output. Side effect: turned 4 of the 5 "FLAG" verdicts in the 2026-05-12 backfill into APPROVE/ENHANCE — the model picked sensible defaults once it had time to look at the codebase.
+
+**Lesson for future tuning.** Triage's quality is bounded by Sonnet's turn budget when Gemini Flash falls back. If we see a wave of FLAG verdicts with empty options, check the Sonnet logs for `Error: Reached max turns` before assuming the prompt is wrong.
 
 ### 2026-05-11 — Triage no longer caps at 10 issues per run
 
