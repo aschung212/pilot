@@ -143,6 +143,27 @@ updated: 2026-05-08
 
 ## Changelog
 
+### 2026-05-13 — Builder early-exit prompt strengthened (audit P2)
+
+**Symptom.** [Pilot audit 2026-05-13](../data/pilot-audit-2026-05-13.md) flagged that 25/60 builder runs (41.7%) in the 2026-05-06..2026-05-13 window exited without ISSUE_DONE/ISSUE_PROGRESS markers. Pattern: `num_turns=1`, opus output ≥500 tokens (parent did the real work), but final assistant message was a chatty one-liner ending in "background task completed" or "PR is live at …" — no structured response, so the pipeline drops the issue and re-attempts it the next night.
+
+**Cause.** The prompt already forbade backgrounding git operations and required the structured response, but both rules sat in the `## Rules` block AFTER `### Step 2: Push for review`. The model read the push instruction and acted on it before reaching the prohibition.
+
+**Action.** Updated `scripts/builder.sh`:
+- Inlined the no-background rule into Step 2 itself (rename: "Step 2: Push for review (FOREGROUND ONLY)"), with explicit "wait 2-5 minutes synchronously for the Gemini pre-push hook" rationale and 2026-05-13 audit reference.
+- Added a literal pre-exit self-check to Step 4 enumerating the seven required strings (`## Plan`, `## Changes`, `## Issue updates`, `ISSUE_DONE:` or `ISSUE_PROGRESS:` line, `## Verification`, `## Screenshots`, `## Summary`) and a sentence explicitly stating that a background-task completion notification is not permission to exit early.
+- Slimmed the Rules-block duplicate to point at Step 2 instead of repeating the rationale.
+
+**Action needed for Aaron:** None. Watch next week's audit for `early_exit_pct` — if it stays above 25%, the model is treating the prompt as advisory and we'll need a structural fix (e.g. wrap the parent in a follow-up turn that the pipeline injects to force the structured response).
+
+### 2026-05-13 — Time-to-merge audit finding (P2): no code change
+
+**Symptom.** Same audit flagged median time-to-merge of 25.9h (vs prior window 31.0h). Slowest 3 merged PRs were #418 (283.3h), #423 (281.0h), #424 (280.9h).
+
+**Action.** Spot-checked all 3 — every one merged with **0 failed CI checks**. This is not a CI-retry-loop issue; it's an Aaron-attention bottleneck on old PRs (PRs created ~12 days before merge, sitting in review queue). Median actually improved 31.0h → 25.9h, so trend is healthy. No code change; auditor will continue flagging per its standing remediation.
+
+**Action needed for Aaron:** None right now, but if median climbs back above 30h, that's a signal to triage your review queue more aggressively in the morning.
+
 ### 2026-05-12 — Builder PR titles no longer truncated mid-word
 
 **Symptom.** PR titles created by the builder were getting cut off mid-word. Example: [PR #554](https://github.com/aschung212/Lift/pull/554) shipped with title `fix(#549): export classifyWarmupSets convenience wrapper and fix thres` — chopped at "thres" instead of "threshold comparison".

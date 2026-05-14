@@ -499,10 +499,10 @@ A Gemini 3.1 Pro review runs automatically via a Husky pre-push git hook. It rev
 ### Step 1: Implement and commit
 Write code, run tests, commit with conventional prefixes. No review runs on commit — focus on shipping.
 
-### Step 2: Push for review
-When your implementation is complete, push to remote:
+### Step 2: Push for review (FOREGROUND ONLY)
+When your implementation is complete, push to remote IN THE FOREGROUND:
   git push -u origin HEAD
-The pre-push hook sends the FULL branch diff to Gemini 3.1 Pro for adversarial review. The review output appears in your terminal.
+DO NOT pass run_in_background:true on this or any \`git commit\` / \`git push\` / pre-push-hook call. The pre-push hook sends the FULL branch diff to Gemini 3.1 Pro for adversarial review and can take 2-5 minutes — wait for it synchronously. Backgrounding triggers the early-exit failure mode where you receive a "background task completed" notification and reply with a chatty one-liner instead of the structured response. That pattern caused the 2026-05-13 P2 audit finding (25/60 runs missing ISSUE_DONE markers — full iteration of compute wasted on each).
 
 ### Step 3: Address findings
 Read the review output carefully. If Pro identifies real issues (P1/P2):
@@ -513,7 +513,9 @@ Read the review output carefully. If Pro identifies real issues (P1/P2):
 If findings are false positives (e.g. concerns about persistence that's already handled by a watcher), ignore them and move on.
 
 ### Step 4: Output structured response, THEN exit
-After your final push completes, you MUST emit the full structured response below (Plan / Changes / Issue updates / Verification / Screenshots / Summary) **as your final assistant message in this session**. The pipeline parses ISSUE_DONE / ISSUE_PROGRESS markers from this response — if you exit without them, the issue is dropped from tomorrow's tracking and gets re-attempted next night, wasting a full iteration of compute. "The pipeline handles PR creation" does NOT mean you can skip the response format. Specifically: do NOT exit with a chatty one-liner like "background task completed, pipeline will handle the rest" — that is the failure mode that caused the 2026-05-06 P1 audit finding. Generate the full response.
+After your final push completes, you MUST emit the full structured response below (Plan / Changes / Issue updates / Verification / Screenshots / Summary) **as your final assistant message in this session**. The pipeline parses ISSUE_DONE / ISSUE_PROGRESS markers from this response — if you exit without them, the issue is dropped from tomorrow's tracking and gets re-attempted next night, wasting a full iteration of compute. "The pipeline handles PR creation" does NOT mean you can skip the response format. Specifically: do NOT exit with a chatty one-liner like "background task completed, pipeline will handle the rest" — that is the failure mode that caused the 2026-05-06 P1 and 2026-05-13 P2 audit findings.
+
+**Pre-exit self-check (do this before emitting your final message):** your final assistant message must contain ALL of these literal strings, in order: \`## Plan\`, \`## Changes\`, \`## Issue updates\`, an \`ISSUE_DONE:${ISSUE_PREFIX}-\` or \`ISSUE_PROGRESS:${ISSUE_PREFIX}-\` line, \`## Verification\`, \`## Screenshots\`, \`## Summary\`. If any are missing, the iteration is dropped. The receipt of a background-task completion notification is NOT permission to exit early — even if the work is done and the PR is live, you must still emit the full structured response before the session ends.
 
 ## Rules
 
@@ -531,7 +533,7 @@ After your final push completes, you MUST emit the full structured response belo
 - Do NOT create pull requests — the pipeline handles PR creation after your work is done.
 - You MUST push to remote when your implementation is complete: git push -u origin HEAD. A Gemini 3.1 Pro review runs automatically via the pre-push hook. After addressing any findings, push again.
 - CRITICAL — DO NOT DELEGATE: do this work yourself in this session. Do not invoke Task, Agent, or any sub-agent. The pipeline parses your final assistant message for the structured \`## Issue updates\` markers below; if you delegate, those markers end up inside a sub-agent's response that the pipeline cannot read, and the iteration gets re-run on the same issue tomorrow night. The 2026-04-29 builder run produced 12 duplicate PRs because the parent kept exiting after one turn while the real work was happening in a sub-agent. Stay in your own session, emit the markers, finish the iteration.
-- CRITICAL — DO NOT BACKGROUND GIT OPERATIONS: run \`git commit\`, \`git push\`, and pre-push hooks in the FOREGROUND. Do not pass run_in_background:true for any git command. When the push completes as a background task, you receive the completion result and the natural temptation is to exit with a one-liner like "background task completed, pipeline will handle the rest" — never doing so. That pattern caused the 2026-05-06 P1 audit finding (33/55 runs missing ISSUE_DONE markers). Foreground git, then generate the structured response, then exit.
+- CRITICAL — DO NOT BACKGROUND GIT OPERATIONS: run \`git commit\`, \`git push\`, and pre-push hooks in the FOREGROUND (see Step 2 above for the full rationale). Do not pass run_in_background:true for any git command. That pattern caused the 2026-05-06 P1 (33/55 runs) and the 2026-05-13 P2 (25/60 runs) audit findings. Foreground git, run the Step 4 self-check, then exit.
 
 ## Output format
 
