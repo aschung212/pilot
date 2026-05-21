@@ -301,6 +301,41 @@ See [Pilot Responsibilities](pilot-responsibilities.md) for the complete list of
 
 ## Changelog
 
+### 2026-05-21 — Builder: deterministic backlog filter + Stage 2 NO_IMPROVEMENTS gate
+
+**Problem.** The 2026-05-20 night ran only 2 iterations and produced nothing. The 2026-05-20 pre-pick parsing fix (below) made Stage 1 functional again — and that immediately surfaced a latent bug: the pre-pick stage does not reliably honor its "do not pick" lists. Both runs pre-picked **LIFT-591**, which already had open PR #596. Stage 2 correctly skipped the duplicate both times (no commits → stalls), and run 2's Stage 2 emitted `NO_IMPROVEMENTS_REMAINING` — which the script interpreted as backlog exhaustion and ended the night.
+
+Two distinct failures:
+1. **Pre-pick ignores exclusion lists.** The pre-pick is a cheap, fast call (`--max-turns 2`, no issue bodies) asked to mentally diff a ~26-item backlog against a ~13-item open-PR list. It picked an excluded issue on two consecutive runs. The exclusion lists (`OPEN_PR_ISSUES`, `NIGHTLY_ATTEMPTED_ISSUES`, etc.) were passed correctly — the model just didn't apply them.
+2. **Stage 2's `NO_IMPROVEMENTS_REMAINING` ended the night.** The night-end check greps the run log for that token. When Stage 2 has an *assigned* issue it only assessed that one issue — its verdict says nothing about the backlog — but the script treated it as global exhaustion.
+
+**Fix (`scripts/builder.sh`).**
+- **Deterministic backlog filter.** Before the pre-pick prompt is built, the script now strips every excluded issue (open-PR, attempted/skipped tonight, in-progress) out of `BACKLOG_ISSUES` itself. The pre-pick physically cannot pick a dup because it is no longer in the list. Same philosophy as the 2026-05-08 deterministic state-flip: don't trust the model to do set arithmetic the script can do exactly.
+- **Pre-pick validation guard.** After parsing `ISSUE_PICKED:`, if the chosen issue is not a line in the filtered `BACKLOG_ISSUES`, the pick is discarded (`PICKED_ISSUE=""`) and Stage 2 free-picks instead of burning the iteration.
+- **NO_IMPROVEMENTS gate.** The night-end check now fires only when `PICKED_ISSUE` is empty (Stage 2 was free-picking and genuinely surveyed the backlog). Genuine exhaustion is detected by the pre-pick stage, which sees the whole (filtered) backlog.
+
+**Verified.** Against tonight's live data the filter takes the pickable pool 26 → 22, removing LIFT-591 and 17 other open-PR / in-progress issues; `bash -n` clean; filter logic unit-tested under bash 3.2.
+
+### 2026-05-20 — Builder PR-pipeline fix: pre-pick parsing, branch-scoped commit detection, stray-branch reconcile
+
+**Problem.** The 2026-05-19 overnight run started 12 iterations, 11 produced commits, but only ONE (`enhance/run3` → PR #604) became a real PR. The other 10 `enhance/runN` branches were pushed to the remote as empty refs identical to `master`. Three compounding bugs:
+
+1. **Pre-pick parsing broken by a Bun stderr warning.** Stage 1's result is captured with `2>&1`; on this machine Bun prepends a `warn: CPU lacks AVX support` line to stdout. The parser fed the whole stream to `json.loads()`, which threw, and the `except: pass` silently dropped the result. All 12 pre-pick stages on 2026-05-19 (and the 2026-05-14 runs) logged "no parseable ISSUE_PICKED marker" even though Stage 1 had correctly returned `ISSUE_PICKED:LIFT-591`. With no parsed pick, Stage 2 ran in free-pick mode with no issue steering.
+
+2. **No cross-run dedupe.** `NIGHTLY_ATTEMPTED_ISSUES` is populated from the pre-pick result and from `git log master..ITER_BRANCH`. Bug #1 killed the first source; bug #3 killed the second (commits were on stray branches, so `ITER_BRANCH` showed nothing). The list stayed empty all night → the builder redid LIFT-589 four times and LIFT-520 three times.
+
+3. **`HEAD`-based commit detection masked stray branches.** The builder Claude sometimes runs `git checkout -b <its-own-name>` and commits there instead of on `ITER_BRANCH`. `COMMITS_AFTER` was measured with `git rev-list --count HEAD`, which counted whatever branch HEAD wandered to — so a run that left `ITER_BRANCH` empty was still scored a success. The pipeline then pushed the empty `ITER_BRANCH` and `gh pr create` produced nothing.
+
+**Fix (`scripts/builder.sh`).**
+- **Pre-pick parsing** scans for the JSON line (skips Bun's warning) instead of parsing the whole stream, with a raw-`grep` fallback for `ISSUE_PICKED:` / `NO_IMPROVEMENTS_REMAINING`.
+- **Commit detection** measures `git rev-list --count $DEFAULT_BRANCH..$ITER_BRANCH` (both `COMMITS_BEFORE` and `COMMITS_AFTER`) — branch-scoped, not `HEAD`.
+- **Stray-branch reconcile**: after Stage 2, if `HEAD` is off `ITER_BRANCH` with more commits ahead of `master` than `ITER_BRANCH` has, the script `git branch -f`'s `ITER_BRANCH` onto that work and checks it back out — so the push + PR pipeline sees the real commits. A run that strayed and cannot be reconciled is now correctly scored as a stall instead of a false success.
+- **Stage 2 prompt** now names the exact branch (`$ITER_BRANCH`), hard-prohibits `git checkout`/`switch`/`branch`, and pushes by branch name instead of `HEAD`.
+
+**Note — bash 3.2 landmine.** The Stage 2 prompt is a `$(cat <<PROMPT …)` heredoc. macOS system bash (3.2.57) mis-parses an odd apostrophe count inside such a heredoc; an added `iteration's` broke `bash -n`. Keep apostrophes out of that heredoc's prose.
+
+**Failure mode this updates.** The 2026-05-08 two-stage entry below lists "Stage 1 returns garbage / no marker → fall through to Stage 2." That fallthrough is now rare (parsing is robust) and, when it does happen, the reconcile + branch-scoped counting keep the run honest.
+
 ### 2026-05-12 — Triage FLAG parks issues on `state:needs-input`; pickable + triageable exclude it
 
 **Problem.** The 2026-05-11 overnight builder picked up issue #550 and shipped PR #556 — but triage had already FLAGged #550 as NEEDS INPUT on 2026-05-10. The FLAG verdict only added a comment; it did not change state. #550 stayed on `state:unstarted`, which is exactly the bucket `list pickable` includes. Eight currently-open issues had the same pattern (#306, #308, #309, #533, #546, #547, #550, #551) — every triage FLAG since the GitHub migration was a no-op against the picking pool. The 2026-05-08 `list pickable` exclusion fix excluded `{triage, backlog, started, blocked, canceled}` but had no signal for "triage said wait."

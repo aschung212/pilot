@@ -260,6 +260,30 @@ $detail
     esac
   done
 
+  # ── Deterministic backlog filter ────────────────────────────────────────
+  # The pre-pick stage is a cheap call that does NOT reliably honor the
+  # "do not pick" lists by eye — on 2026-05-20 it picked LIFT-591 (which had
+  # open PR #596) on two consecutive runs, stalling the whole night. Strip
+  # every already-excluded issue out of BACKLOG_ISSUES here so the pre-pick
+  # physically cannot pick one. The prompt's do-not-pick sections stay as
+  # belt-and-suspenders. Covers: open-PR issues, issues attempted/skipped
+  # earlier tonight, and issues already In Progress.
+  EXCLUDED_IDS=$(
+    { echo "$NIGHTLY_ATTEMPTED_ISSUES" | tr ' ' '\n'
+      echo "$OPEN_PR_ISSUES" | tr ' ' '\n'
+      echo "$IN_PROGRESS_ISSUES" | grep -oE "${ISSUE_PREFIX}-[0-9]+"
+      echo "$SKIPPED_ISSUES" | grep -oE "${ISSUE_PREFIX}-[0-9]+"
+    } 2>/dev/null | grep -oE "${ISSUE_PREFIX}-[0-9]+" | sort -u || true)
+  if [ -n "$EXCLUDED_IDS" ]; then
+    _backlog_before=$(echo "$BACKLOG_ISSUES" | grep -cE "${ISSUE_PREFIX}-[0-9]+" | tr -d ' \n')
+    while IFS= read -r _ex; do
+      [ -z "$_ex" ] && continue
+      BACKLOG_ISSUES=$(echo "$BACKLOG_ISSUES" | grep -v "^${_ex} " || true)
+    done <<< "$EXCLUDED_IDS"
+    _backlog_after=$(echo "$BACKLOG_ISSUES" | grep -cE "${ISSUE_PREFIX}-[0-9]+" | tr -d ' \n')
+    echo "  🧹 Backlog filter: ${_backlog_before} pickable → ${_backlog_after} after removing already-claimed/attempted issues" | tee -a "$RUN_LOG"
+  fi
+
   # ── Create a branch for this iteration ───────────────────────────────────
   # Branch name will be updated once we know which issue Claude picks.
   # Start on a temporary branch; rename after we parse the run log.
@@ -340,16 +364,39 @@ If absolutely nothing in the unstarted backlog is suitable to work on right now 
 Do not output any other text. Do not explain your choice. The next stage of the pipeline parses this single line and aborts on anything else.
 PREPICK
 )" 2>&1 || echo "")
+  # claude --output-format json prints one JSON object, but the run captures
+  # stdout+stderr together (2>&1) and Bun prepends a "warn: CPU lacks AVX
+  # support" line on this machine. Feeding the whole stream to json.loads()
+  # then throws and the result is silently dropped — that bug made all 12
+  # pre-pick stages unparseable on 2026-05-19. Scan for the JSON line instead.
   PRE_PICK_TEXT=$(echo "$PRE_PICK_RESULT" | python3 -c "
 import json, sys
-try:
-    data = json.loads(sys.stdin.read())
-    print(data.get('result', ''))
-except Exception:
-    pass
+for line in sys.stdin:
+    line = line.strip()
+    if line.startswith('{'):
+        try:
+            print(json.loads(line).get('result', ''))
+            break
+        except Exception:
+            pass
 " 2>/dev/null || true)
+  # Fallback: if JSON parsing yielded nothing (format drift, truncation),
+  # grep the marker straight out of the raw result — ISSUE_PICKED and
+  # NO_IMPROVEMENTS_REMAINING contain no JSON-special characters.
+  if [ -z "$PRE_PICK_TEXT" ]; then
+    PRE_PICK_TEXT=$(echo "$PRE_PICK_RESULT" | grep -oE "ISSUE_PICKED:${ISSUE_PREFIX}-[0-9]+|NO_IMPROVEMENTS_REMAINING" | head -1 || true)
+  fi
   PICKED_ISSUE=$(echo "$PRE_PICK_TEXT" | grep -oE "ISSUE_PICKED:${ISSUE_PREFIX}-[0-9]+" | head -1 | sed "s/ISSUE_PICKED://" || true)
   echo "$PRE_PICK_RESULT" > "$PRE_PICK_JSON" 2>/dev/null || true
+
+  # Guard: the pre-pick must choose from the (already-filtered) pickable
+  # backlog. If it named something not in BACKLOG_ISSUES — a hallucinated ID
+  # or an excluded issue it picked despite the do-not-pick lists — discard the
+  # pick so Stage 2 free-picks instead of burning the iteration on a dead issue.
+  if [ -n "$PICKED_ISSUE" ] && ! echo "$BACKLOG_ISSUES" | grep -q "^${PICKED_ISSUE} "; then
+    echo "  ⚠️ Pre-pick chose $PICKED_ISSUE, which is not in the pickable backlog — discarding pick; Stage 2 will free-pick." | tee -a "$RUN_LOG"
+    PICKED_ISSUE=""
+  fi
 
   if echo "$PRE_PICK_TEXT" | grep -q "NO_IMPROVEMENTS_REMAINING"; then
     echo "  🛑 Pre-pick stage returned NO_IMPROVEMENTS_REMAINING — ending nightly run early" | tee -a "$RUN_LOG"
@@ -373,7 +420,10 @@ except Exception:
   fi  # end PICKED_ISSUE_OVERRIDE bypass
 
   # ── Stage 2: implement the picked issue ──────────────────────────────────
-  COMMITS_BEFORE=$(git rev-list --count HEAD)
+  # Baseline measured on $ITER_BRANCH specifically — NOT `git rev-list HEAD`.
+  # The builder Claude sometimes checks out its own branch and commits there;
+  # counting HEAD would score that as success while $ITER_BRANCH stays empty.
+  COMMITS_BEFORE=$(git rev-list --count "${DEFAULT_BRANCH:-master}".."$ITER_BRANCH" 2>/dev/null || echo 0)
   CLAUDE_JSON="$OUTPUT_DIR/lift-enhance-$DATE-run${RUN}-output.json"
   # Enable review-router builder mode — Gemini 3.1 Pro review on commit, Codex fallback
   export PILOT_BUILDER=1
@@ -407,9 +457,12 @@ You are running in a loop. Previous iterations tonight and from recent days have
 
 ## IMPORTANT: Branch-per-issue mode
 
-You are working on a FRESH branch off ${DEFAULT_BRANCH:-master}. Each iteration produces its own PR for exactly ONE issue.
+You are ALREADY checked out on the branch for this iteration: \`$ITER_BRANCH\` (freshly created off ${DEFAULT_BRANCH:-master}). Each iteration produces its own PR for exactly ONE issue.
 - Pick ONE high-impact issue from the backlog below
-- Implement it fully, commit with conventional commit messages
+- Implement it fully, committing with conventional commit messages **directly on \`$ITER_BRANCH\`**
+- Do NOT run \`git checkout\`, \`git switch\`, \`git branch\`, or \`git checkout -b\` — do not create, rename, or switch branches. Stay on \`$ITER_BRANCH\` for the entire iteration.
+- Creating your own branch (e.g. \`test/...\`, \`refactor/...\`) STRANDS the work: the pipeline pushes \`$ITER_BRANCH\` and opens the PR from it, so commits on any other branch are invisible and produce no PR. This is exactly what wasted 10 of 12 runs on 2026-05-19.
+- When you push, push this branch by name: \`git push -u origin $ITER_BRANCH\` (naming it explicitly guards against an accidental stray checkout).
 - Focus on quality — this PR will be independently reviewed
 
 ${RETRY_ISSUES:+## Retry priority
@@ -501,7 +554,7 @@ Write code, run tests, commit with conventional prefixes. No review runs on comm
 
 ### Step 2: Push for review (FOREGROUND ONLY)
 When your implementation is complete, push to remote IN THE FOREGROUND:
-  git push -u origin HEAD
+  git push -u origin $ITER_BRANCH
 DO NOT pass run_in_background:true on this or any \`git commit\` / \`git push\` / pre-push-hook call. The pre-push hook sends the FULL branch diff to Gemini 3.1 Pro for adversarial review and can take 2-5 minutes — wait for it synchronously. Backgrounding triggers the early-exit failure mode where you receive a "background task completed" notification and reply with a chatty one-liner instead of the structured response. That pattern caused the 2026-05-13 P2 audit finding (25/60 runs missing ISSUE_DONE markers — full iteration of compute wasted on each).
 
 ### Step 3: Address findings
@@ -529,9 +582,9 @@ After your final push completes, you MUST emit the full structured response belo
 - Include \`Closes #N\` (where N is the issue number, no LIFT- prefix) in at least one commit body so GitHub auto-closes the issue when the PR merges. The pipeline depends on this — it no longer closes issues at implementation time because that orphaned issues whose PRs failed CI (see PR #467 / LIFT-436, 2026-04-30).
 - If a test is failing when you start, you may try to fix it ONCE. If it still fails after one attempt, skip it and move on to new work. Do not spend more than 10 turns on any single fix.
 - IMPORTANT: Focus on SHIPPING, not perfecting. Commit working improvements and move on.
-- Do NOT create branches — you are already on the correct branch. Just commit to the current branch.
+- Do NOT create, switch, or rename branches — no \`git checkout\`, \`git switch\`, \`git branch\`, or \`git checkout -b\`. You are already on \`$ITER_BRANCH\`; commit directly to it. Work committed to any other branch is invisible to the pipeline and produces no PR (see "Branch-per-issue mode" above).
 - Do NOT create pull requests — the pipeline handles PR creation after your work is done.
-- You MUST push to remote when your implementation is complete: git push -u origin HEAD. A Gemini 3.1 Pro review runs automatically via the pre-push hook. After addressing any findings, push again.
+- You MUST push to remote when your implementation is complete: git push -u origin $ITER_BRANCH. A Gemini 3.1 Pro review runs automatically via the pre-push hook. After addressing any findings, push again.
 - CRITICAL — DO NOT DELEGATE: do this work yourself in this session. Do not invoke Task, Agent, or any sub-agent. The pipeline parses your final assistant message for the structured \`## Issue updates\` markers below; if you delegate, those markers end up inside a sub-agent's response that the pipeline cannot read, and the iteration gets re-run on the same issue tomorrow night. The 2026-04-29 builder run produced 12 duplicate PRs because the parent kept exiting after one turn while the real work was happening in a sub-agent. Stay in your own session, emit the markers, finish the iteration.
 - CRITICAL — DO NOT BACKGROUND GIT OPERATIONS: run \`git commit\`, \`git push\`, and pre-push hooks in the FOREGROUND (see Step 2 above for the full rationale). Do not pass run_in_background:true for any git command. That pattern caused the 2026-05-06 P1 (33/55 runs) and the 2026-05-13 P2 (25/60 runs) audit findings. Foreground git, run the Step 4 self-check, then exit.
 
@@ -629,16 +682,45 @@ $CLAUDE_RESULT"
 
     FAILURES=0
 
-    # Check if Claude signaled nothing left to do
-    if grep -q "NO_IMPROVEMENTS_REMAINING" "$RUN_LOG" 2>/dev/null; then
+    # Check if Claude signaled nothing left to do.
+    # Only honor NO_IMPROVEMENTS_REMAINING from Stage 2 when it was free-picking
+    # (no pre-picked issue). When an issue was assigned, Stage 2 only assessed
+    # that ONE issue — its NO_IMPROVEMENTS verdict says nothing about the rest
+    # of the backlog and must not end the night (2026-05-20: a dup-skip on the
+    # assigned LIFT-591 emitted NO_IMPROVEMENTS and killed the run after 2
+    # iterations). Genuine backlog exhaustion is detected by the pre-pick stage.
+    if [ -z "$PICKED_ISSUE" ] && grep -q "NO_IMPROVEMENTS_REMAINING" "$RUN_LOG" 2>/dev/null; then
       echo "🏁 Claude says nothing left to improve." | tee -a "$RUN_LOG"
       STALLS=$MAX_STALLS  # force stop
       # Clean up empty branch
       git checkout "${DEFAULT_BRANCH:-master}" 2>/dev/null || true
       git branch -D "$ITER_BRANCH" 2>/dev/null || true
     else
-      # Check if any new commits were actually produced
-      COMMITS_AFTER=$(git rev-list --count HEAD)
+      # ── Reconcile stray branches ─────────────────────────────────────
+      # The builder Claude is told to commit directly to $ITER_BRANCH, but
+      # it sometimes runs `git checkout -b <its-own-name>` and commits there
+      # instead (the 2026-05-19 pattern: 10/12 runs left enhance/runN empty
+      # while the real work sat on test/* and refactor/* branches, so the
+      # pipeline pushed empty branches and opened no PRs). If HEAD ended up
+      # off $ITER_BRANCH with more commits than $ITER_BRANCH has, move
+      # $ITER_BRANCH onto that work so the push + PR pipeline sees it.
+      CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "")
+      if [ "$CURRENT_BRANCH" != "$ITER_BRANCH" ]; then
+        STRAY_AHEAD=$(git rev-list --count "${DEFAULT_BRANCH:-master}"..HEAD 2>/dev/null || echo 0)
+        ITER_AHEAD=$(git rev-list --count "${DEFAULT_BRANCH:-master}".."$ITER_BRANCH" 2>/dev/null || echo 0)
+        echo "  ⚠️ Builder strayed off $ITER_BRANCH — HEAD on '${CURRENT_BRANCH:-detached}' ($STRAY_AHEAD commit(s) ahead); $ITER_BRANCH has $ITER_AHEAD" | tee -a "$RUN_LOG"
+        if [ "$STRAY_AHEAD" -gt "$ITER_AHEAD" ]; then
+          if git branch -f "$ITER_BRANCH" HEAD 2>/dev/null; then
+            echo "  🔧 Reconciled: moved $ITER_BRANCH onto the off-branch work ($STRAY_AHEAD commit(s))" | tee -a "$RUN_LOG"
+          fi
+        fi
+        git checkout "$ITER_BRANCH" 2>/dev/null || true
+      fi
+
+      # Check if any new commits were actually produced — measured on
+      # $ITER_BRANCH (post-reconcile), not HEAD, so a run that strayed and
+      # could not be reconciled is correctly scored as a stall.
+      COMMITS_AFTER=$(git rev-list --count "${DEFAULT_BRANCH:-master}".."$ITER_BRANCH" 2>/dev/null || echo 0)
       NEW_COMMITS=$((COMMITS_AFTER - COMMITS_BEFORE))
       if [ "$NEW_COMMITS" -eq 0 ]; then
         STALLS=$((STALLS + 1))
