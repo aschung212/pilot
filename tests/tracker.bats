@@ -123,6 +123,20 @@ TRACKER="$PILOT_DIR/adapters/tracker.sh"
   [[ "$output" == *"github.com/test/repo/issues"* ]]
 }
 
+# bats test_tags=fast
+@test "tracker: state routes LIFT ID to gh CLI and queries the state field" {
+  # cleanup.sh calls `tracker.sh state` to skip issues already closed on GitHub
+  # before firing a redundant `close` write. Lock the contract: it must route to
+  # gh CLI and request the `state` JSON field.
+  export TRACKER_ADAPTER="github"
+  export GITHUB_ISSUES_REPO="test/repo"
+  export ISSUE_PREFIX="LIFT"
+  run bash "$TRACKER" state LIFT-100
+  [ "$status" -eq 0 ]
+  grep -q "issue view" "$TEST_TMPDIR/mock_calls/gh"
+  grep -q -- "--json state" "$TEST_TMPDIR/mock_calls/gh"
+}
+
 # ── Linear backend (non-LIFT prefix) ──────────────────────────────────────
 
 # bats test_tags=fast

@@ -169,9 +169,10 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
 **When:** After each overnight session (final stage of pipeline)
 
 **What it does:**
-- Closes all completed and canceled issues via tracker adapter
+- Closes completed/canceled issues that are still open on GitHub via the tracker adapter — issues already closed in a prior session are skipped (checked via `tracker.sh state`), so no redundant `gh issue close` writes are fired
 - Detects duplicate issues by title (keeps oldest, cancels+archives newer copies)
 - Keeps issue list clean — closes resolved/duplicate issues
+- Reports `N closed` (real open→closed transitions only) and `K already closed, skipped`
 
 ---
 

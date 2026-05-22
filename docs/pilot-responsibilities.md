@@ -143,6 +143,19 @@ updated: 2026-05-08
 
 ## Changelog
 
+### 2026-05-21 — cleanup.sh stops re-closing already-closed issues
+
+**Symptom.** The 2026-05-21 builder run logged `Cleanup: 101 closed, 0 deduped`, but all 101 issues had been closed on GitHub weeks earlier (e.g. LIFT-310 closed 2026-05-05, LIFT-438 closed 2026-04-29). The "closed" count counted re-processed issues, not new closures.
+
+**Cause.** `cleanup.sh` step 1 iterates every issue in tracker-state `completed`/`canceled` and calls `tracker.sh close` on each, every run. Those tracker-states map directly onto GitHub's closed state, so the loop fired ~101 redundant `gh issue close` API writes per run and incremented `CLOSED` for every one.
+
+**Action.**
+- `adapters/tracker.sh`: new `state <id>` subcommand — returns `OPEN`/`CLOSED` for GitHub issues (empty for the decommissioned Linear backend). Locked in via `tests/tracker.bats` and the `tests/adapter-contracts.bats` command set.
+- `scripts/cleanup.sh`: step 1 now checks `tracker.sh state` first and skips issues already closed on GitHub. `CLOSED` counts only real open→closed transitions; a new `ALREADY_CLOSED` count is surfaced in the log line and console output. The `--dry-run` preview no longer lists already-closed issues as "would close".
+- Verified with `cleanup.sh --dry-run`: reported `101 already closed, skipped` (0 redundant writes on the next real run).
+
+**Action needed for Aaron:** None. Expect the nightly `Cleanup: N closed` line to drop to near-zero — that is correct, not a regression.
+
 ### 2026-05-13 — Builder early-exit prompt strengthened (audit P2)
 
 **Symptom.** [Pilot audit 2026-05-13](../data/pilot-audit-2026-05-13.md) flagged that 25/60 builder runs (41.7%) in the 2026-05-06..2026-05-13 window exited without ISSUE_DONE/ISSUE_PROGRESS markers. Pattern: `num_turns=1`, opus output ≥500 tokens (parent did the real work), but final assistant message was a chatty one-liner ending in "background task completed" or "PR is live at …" — no structured response, so the pipeline drops the issue and re-attempts it the next night.

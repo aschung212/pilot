@@ -9,7 +9,7 @@ load test_helper
 # bats test_tags=fast
 @test "contract: tracker supports all required commands" {
   TRACKER="$PILOT_DIR/adapters/tracker.sh"
-  for cmd in list view create update comment-list comment-add issue-url board-url; do
+  for cmd in list view create update comment-list comment-add issue-url board-url state; do
     case "$cmd" in
       list)        run bash "$TRACKER" list backlog ;;
       view)        run bash "$TRACKER" view TEST-1 ;;
@@ -19,6 +19,7 @@ load test_helper
       comment-add) run bash "$TRACKER" comment-add TEST-1 "body" ;;
       issue-url)   run bash "$TRACKER" issue-url TEST-1 ;;
       board-url)   run bash "$TRACKER" board-url ;;
+      state)       run bash "$TRACKER" state TEST-1 ;;
     esac
     if [ "$status" -ne 0 ]; then
       echo "tracker.$cmd failed with exit $status" >&2

@@ -28,14 +28,24 @@ OUTPUT_DIR="${OUTPUT_DIR:-$PILOT_DIR/data}"
 
 CLOSED=0
 DEDUPED=0
+ALREADY_CLOSED=0
 CLOSED_LIST=""
 
 # ── Step 1: Close completed and canceled issues ──────────────────────────
+# tracker-state completed/canceled maps directly onto GitHub's closed state, so
+# almost every issue listed here was already closed in a prior session. Check
+# the live GitHub state and skip the ones already closed — otherwise this fires
+# ~100 redundant `gh issue close` writes per run and inflates the reported count
+# with re-processed issues instead of real open→closed transitions.
 for state in completed canceled; do
   RAW_OUTPUT=$(bash "$TRACKER" list "$state" || true)
   IDS=$(echo "$RAW_OUTPUT" | grep -oE "${ISSUE_PREFIX}-[0-9]+" || true)
 
   for issue_id in $IDS; do
+    if [ "$(bash "$TRACKER" state "$issue_id" 2>/dev/null || true)" = "CLOSED" ]; then
+      ALREADY_CLOSED=$((ALREADY_CLOSED + 1))
+      continue
+    fi
     TITLE=$(bash "$TRACKER" view "$issue_id" 2>/dev/null | head -1 | sed "s/^# *${issue_id}: *//" | sed 's/[[:space:]]*$//')
     [ -z "$TITLE" ] && TITLE="(unknown)"
     if [ "$DRY_RUN" = "--dry-run" ]; then
@@ -97,12 +107,12 @@ fi
 
 if [ "$DRY_RUN" != "--dry-run" ]; then
   echo "$DATE,$CLOSED,$DEDUPED" >> "$CLEANUP_METRICS_CSV"
-  log_info "Cleanup: $CLOSED closed, $DEDUPED deduped"
-  echo "  ✅ Cleanup: $CLOSED closed, $DEDUPED deduped"
+  log_info "Cleanup: $CLOSED closed, $DEDUPED deduped ($ALREADY_CLOSED already closed, skipped)"
+  echo "  ✅ Cleanup: $CLOSED closed, $DEDUPED deduped ($ALREADY_CLOSED already closed, skipped)"
   if [ -n "$CLOSED_LIST" ]; then
     echo "  Closed issues:"
     echo -e "$CLOSED_LIST"
   fi
 else
-  echo "  [dry-run] Cleanup preview complete."
+  echo "  [dry-run] Cleanup preview complete ($ALREADY_CLOSED already closed, skipped)."
 fi
