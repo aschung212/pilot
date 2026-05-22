@@ -143,6 +143,40 @@ updated: 2026-05-12
 
 ## Changelog
 
+### 2026-05-21 — cleanup.sh stops re-closing already-closed issues
+
+**Symptom.** The 2026-05-21 builder run logged `Cleanup: 101 closed, 0 deduped`, but all 101 issues had been closed on GitHub weeks earlier (e.g. LIFT-310 closed 2026-05-05, LIFT-438 closed 2026-04-29). The "closed" count counted re-processed issues, not new closures.
+
+**Cause.** `cleanup.sh` step 1 iterates every issue in tracker-state `completed`/`canceled` and calls `tracker.sh close` on each, every run. Those tracker-states map directly onto GitHub's closed state, so the loop fired ~101 redundant `gh issue close` API writes per run and incremented `CLOSED` for every one.
+
+**Action.**
+- `adapters/tracker.sh`: new `state <id>` subcommand — returns `OPEN`/`CLOSED` for GitHub issues (empty for the decommissioned Linear backend). Locked in via `tests/tracker.bats` and the `tests/adapter-contracts.bats` command set.
+- `scripts/cleanup.sh`: step 1 now checks `tracker.sh state` first and skips issues already closed on GitHub. `CLOSED` counts only real open→closed transitions; a new `ALREADY_CLOSED` count is surfaced in the log line and console output. The `--dry-run` preview no longer lists already-closed issues as "would close".
+- Verified with `cleanup.sh --dry-run`: reported `101 already closed, skipped` (0 redundant writes on the next real run).
+
+**Action needed for Aaron:** None. Expect the nightly `Cleanup: N closed` line to drop to near-zero — that is correct, not a regression.
+
+### 2026-05-13 — Builder early-exit prompt strengthened (audit P2)
+
+**Symptom.** [Pilot audit 2026-05-13](../data/pilot-audit-2026-05-13.md) flagged that 25/60 builder runs (41.7%) in the 2026-05-06..2026-05-13 window exited without ISSUE_DONE/ISSUE_PROGRESS markers. Pattern: `num_turns=1`, opus output ≥500 tokens (parent did the real work), but final assistant message was a chatty one-liner ending in "background task completed" or "PR is live at …" — no structured response, so the pipeline drops the issue and re-attempts it the next night.
+
+**Cause.** The prompt already forbade backgrounding git operations and required the structured response, but both rules sat in the `## Rules` block AFTER `### Step 2: Push for review`. The model read the push instruction and acted on it before reaching the prohibition.
+
+**Action.** Updated `scripts/builder.sh`:
+- Inlined the no-background rule into Step 2 itself (rename: "Step 2: Push for review (FOREGROUND ONLY)"), with explicit "wait 2-5 minutes synchronously for the Gemini pre-push hook" rationale and 2026-05-13 audit reference.
+- Added a literal pre-exit self-check to Step 4 enumerating the seven required strings (`## Plan`, `## Changes`, `## Issue updates`, `ISSUE_DONE:` or `ISSUE_PROGRESS:` line, `## Verification`, `## Screenshots`, `## Summary`) and a sentence explicitly stating that a background-task completion notification is not permission to exit early.
+- Slimmed the Rules-block duplicate to point at Step 2 instead of repeating the rationale.
+
+**Action needed for Aaron:** None. Watch next week's audit for `early_exit_pct` — if it stays above 25%, the model is treating the prompt as advisory and we'll need a structural fix (e.g. wrap the parent in a follow-up turn that the pipeline injects to force the structured response).
+
+### 2026-05-13 — Time-to-merge audit finding (P2): no code change
+
+**Symptom.** Same audit flagged median time-to-merge of 25.9h (vs prior window 31.0h). Slowest 3 merged PRs were #418 (283.3h), #423 (281.0h), #424 (280.9h).
+
+**Action.** Spot-checked all 3 — every one merged with **0 failed CI checks**. This is not a CI-retry-loop issue; it's an Aaron-attention bottleneck on old PRs (PRs created ~12 days before merge, sitting in review queue). Median actually improved 31.0h → 25.9h, so trend is healthy. No code change; auditor will continue flagging per its standing remediation.
+
+**Action needed for Aaron:** None right now, but if median climbs back above 30h, that's a signal to triage your review queue more aggressively in the morning.
+
 ### 2026-05-12 — Builder PR-creation failure: empty branches, malformed markers, fake Slack URLs
 
 **Symptom.** The 2026-05-11 overnight build's Slack thread reported 12 "PRs" but only 3 (#554, #555, #556) actually existed on GitHub. The other 9 Slack entries linked to `https://github.com/aschung212/Lift/pull/new/<branch>` — GitHub's *"compare & create PR"* URL, not a real PR. The a11y work for LIFT-547 and LIFT-551 was stranded on side branches (`a11y/547-focus-indicators`, `a11y/551-skip-to-content`, `fix/547-focus-indicators`, `enhance/LIFT-547-focus-indicators`, `enhance/LIFT-547-2026-05-12`, `enhance/LIFT-551-2026-05-12`) without any PR. Run 10 alone spent **4 hours** re-doing LIFT-547.
@@ -170,6 +204,16 @@ updated: 2026-05-12
 1. Compare PR #557 vs. the more-complete variant branches for LIFT-547 (`fix/547-focus-indicators` has the broadest scope). Pick one to merge, then ping me to clean up the rest.
 2. Same for LIFT-551 (#558 vs. `enhance/LIFT-551-2026-05-12`).
 3. Once one of #554/#555/#556 merges, the others (and #557/#558) should rebase / re-run CI.
+
+### 2026-05-12 — Builder PR titles no longer truncated mid-word
+
+**Symptom.** PR titles created by the builder were getting cut off mid-word. Example: [PR #554](https://github.com/aschung212/Lift/pull/554) shipped with title `fix(#549): export classifyWarmupSets convenience wrapper and fix thres` — chopped at "thres" instead of "threshold comparison".
+
+**Cause.** `scripts/builder.sh:845` hard-truncated `PR_TITLE` with `head -c 70` before passing it to `gh pr create`. The 70-byte cap was arbitrary (GitHub allows 256 chars) and ignored word boundaries.
+
+**Action.** Removed the `head -c 70` truncation. The PR title now uses the first commit subject as-is, which is already conventionally short and bounded by commit-message hygiene rather than an arbitrary script cap.
+
+**Action needed for Aaron:** None.
 
 ### 2026-05-11 — Review tuner decommissioned
 
@@ -496,3 +540,32 @@ Repaired `lift-metrics.csv` in place (one-shot script reconstructed 46 split row
 - Live count: 17 triageable issues (was 8 under the old query). The 9 newly-visible issues are #216 (epic), #358, #434, plus a mix of `state:backlog` items that hadn't been re-triaged. Triage's `MAX_PER_RUN=10` cap means the first run after this fix processes 10; the rest are picked up in the next run.
 - **What Aaron will see:** the next triage run (Sun/Tue/Thu 22:30) processes the orphans. Each one gets a "Triaged by..." comment, a verdict (APPROVE / ENHANCE / SKIP / FLAG / RESCOPE), and the appropriate state label. After triage runs once, #216 will likely be FLAGGED or RESCOPED (it's an epic), #358 likely APPROVED/ENHANCED, #434 likely FLAGGED (the title is barely coherent — needs human input).
 - **No change to Aaron's responsibilities.** Manually-created issues now flow through the pipeline automatically.
+
+### 2026-05-12 — Builder: PICKED_ISSUE_OVERRIDE env var + security-scan false-positive fix
+- **PICKED_ISSUE_OVERRIDE hook (`scripts/builder.sh`):** when the env var is set, the builder skips its pre-pick Claude call and uses the override as the issue ID. Flips tracker state to `In Progress` and runs the implementation stage exactly as if pre-pick had returned that issue. The override is cleared after use, so a multi-iteration loop falls back to normal pre-picking from iteration 2 onward.
+  - **Why:** Aaron's normal flow is "let the builder pick" — but sometimes a specific Lift bug needs the builder's attention right now and the priority/recency sort wouldn't surface it next. Previous workaround was temporarily editing priority labels, which left side-effects.
+  - **Usage:** `PICKED_ISSUE_OVERRIDE=LIFT-545 ./scripts/builder.sh 1` from inside `pilot/`.
+- **Security-scan regex fix (`lib/security-scan.sh`):** the "Dynamic code execution" check used `grep -iE '\bFunction\s*\('` — case-insensitive matched lowercase `function (` (the JS keyword) as well as the uppercase `Function()` constructor. First inaugural run of the override hook on LIFT-545 was blocked from auto-PR because the agent's `(function () { ... })()` IIFE in the report toolbar handler tripped the check. Fix: split the Function-constructor check into its own case-sensitive grep; left the lowercase-noise patterns (`eval`, `exec`, `spawn`, `child_process`) on `-i`.
+  - Re-ran the scan against the LIFT-545 branch after the fix → exits 0. Opened PR [#559](https://github.com/aschung212/Lift/pull/559) manually to recover the run.
+- **No change to Aaron's daily responsibilities.**
+
+### 2026-05-20 — Builder PR-pipeline fix: only 1 PR from a 12-run night
+- **Symptom.** The 2026-05-19 overnight run started 12 iterations and 11 produced commits, but only one (`enhance/run3` → PR #604) became a real PR. The other 10 `enhance/runN-2026-05-19` branches were pushed to the Lift remote as empty refs identical to `master`, and the builder redid LIFT-589 four times and LIFT-520 three times. (Separately, the 2026-05-14 night's last 3 runs failed outright — that was the Claude rate limit resetting at 2:10am, a different issue, not addressed here.)
+- **Root cause — three compounding bugs in `scripts/builder.sh`:**
+  1. **Pre-pick parsing.** Stage 1's output is captured with `2>&1`; Bun prepends a `warn: CPU lacks AVX support` line, which made `json.loads()` throw and an `except: pass` silently drop the result. Every pre-pick stage logged "no parseable ISSUE_PICKED marker" even though Stage 1 had correctly picked an issue. Stage 2 then ran with no issue assignment and no dedupe list.
+  2. **No cross-run dedupe.** With the pre-pick result lost and stray commits invisible to `git log master..ITER_BRANCH`, `NIGHTLY_ATTEMPTED_ISSUES` stayed empty all night, so every iteration re-picked from scratch.
+  3. **`HEAD`-based commit detection.** The builder Claude sometimes `git checkout -b`'s its own branch (`test/*`, `refactor/*`) and commits there. The script counted commits via `git rev-list --count HEAD`, so it scored those runs a success while `ITER_BRANCH` stayed empty — and pushed the empty branch, producing no PR.
+- **Fix.** (a) Pre-pick parsing scans for the JSON line + raw-grep fallback; (b) commit counts are now branch-scoped (`master..$ITER_BRANCH`); (c) new stray-branch reconcile moves `$ITER_BRANCH` onto off-branch work after Stage 2; (d) the Stage 2 prompt names the branch and hard-prohibits branch switching. Verified: pre-pick parsing replays correctly against all 12 corrupted 2026-05-19 capture files; reconcile + counting verified in throwaway-repo tests; `bash -n` clean.
+- **Cleanup.** Deleted the 10 empty `enhance/runN-2026-05-19` branches + 9 duplicate/stale orphan branches. Salvaged the two stranded pieces of work into PRs: [#606](https://github.com/aschung212/Lift/pull/606) (LIFT-520 useModal composable) and [#607](https://github.com/aschung212/Lift/pull/607) (LIFT-504 useTheme SSR guard). LIFT-589/592 were already covered by PRs #604/#605.
+- **Flag for Aaron — not fixed here:** the Lift repo's Husky `pre-push` hook throws `error: could not apply …` on branch-delete pushes. Harmless for deletes (used the GitHub API to bypass it) but worth a look — it may be interfering with the builder's normal pushes too.
+- **No change to Aaron's daily responsibilities.** Tonight's scheduled run (23:00) is the live end-to-end test; expect distinct PRs per committing iteration and no repeated issues.
+
+### 2026-05-21 — Builder ran only 2 iterations, produced nothing
+- **Symptom.** The 2026-05-20 night ran just 2 of 12 iterations and made zero commits. Both iterations pre-picked LIFT-591 — an issue that already had open PR #596 — Stage 2 correctly skipped the duplicate both times, and the night ended.
+- **Root cause.** Yesterday's pre-pick parsing fix made Stage 1 functional again, which surfaced a latent bug: the cheap pre-pick call does not reliably honor its "do not pick" lists. It was handed LIFT-591 in the exclusion lists and picked it anyway, twice. Then run 2's Stage 2 emitted `NO_IMPROVEMENTS_REMAINING` (meaning "this assigned issue is a dup"), and the script misread that as "whole backlog exhausted" and stopped the night.
+- **Fix (`scripts/builder.sh`), three changes:**
+  1. **Deterministic backlog filter** — the script now removes every excluded issue (open-PR, attempted/skipped tonight, in-progress) from the pickable list *before* the pre-pick sees it. The pre-pick can no longer pick a duplicate because it is not in the list.
+  2. **Pre-pick validation guard** — if the pre-pick names an issue that is not in the filtered backlog, the pick is discarded and Stage 2 free-picks instead of wasting the iteration.
+  3. **NO_IMPROVEMENTS gate** — Stage 2's `NO_IMPROVEMENTS_REMAINING` now ends the night only when Stage 2 was free-picking (no assigned issue). Genuine backlog exhaustion is the pre-pick stage's call.
+- **Verified.** Against tonight's live data the filter takes the pickable pool 26 → 22 (removes LIFT-591 + 17 other open-PR/in-progress issues); `bash -n` clean; filter unit-tested under bash 3.2.
+- **No change to Aaron's daily responsibilities.** Two consecutive thin nights (05-19 dup-storm, 05-20 dead-stop) are now both addressed. Tonight's 23:00 run is the live test.

@@ -13,6 +13,7 @@
 #   tracker.sh issue-url <id>
 #   tracker.sh board-url
 #   tracker.sh close <id> [--reason <completed|not_planned>]
+#   tracker.sh state <id>                 # OPEN | CLOSED (GitHub backend)
 
 set -uo pipefail
 
@@ -303,6 +304,14 @@ gh_close() {
   echo "✓ Closed ${ISSUE_PREFIX}-${num}"
 }
 
+gh_state() {
+  # Echoes "OPEN" or "CLOSED" (gh's state enum), or empty string on lookup
+  # failure. Lets callers skip redundant close writes on already-closed issues.
+  local num
+  num=$(gh_number "$1")
+  gh issue view "$num" --repo "$GITHUB_ISSUES_REPO" --json state -q '.state' 2>/dev/null || true
+}
+
 # ── Linear Backend (unchanged) ───────────────────────────────────────────
 
 linear_list() {
@@ -445,6 +454,16 @@ case "$cmd" in
     gh_board_url
     ;;
 
+  state)
+    # Reports the open/closed state of an issue. GitHub backend returns
+    # "OPEN" or "CLOSED". The Linear backend (decommissioned) has no state
+    # query — empty output means callers treat the issue as still open.
+    backend=$(route_by_id "$1")
+    if [ "$backend" = "github" ]; then
+      gh_state "$1"
+    fi
+    ;;
+
   close)
     backend=$(route_by_id "$1")
     if [ "$backend" = "github" ]; then
@@ -459,7 +478,7 @@ case "$cmd" in
 
   *)
     echo "Unknown tracker command: $cmd" >&2
-    echo "Usage: tracker.sh {list|view|create|update|comment-list|comment-add|issue-url|board-url|close}" >&2
+    echo "Usage: tracker.sh {list|view|create|update|comment-list|comment-add|issue-url|board-url|close|state}" >&2
     exit 1
     ;;
 esac
