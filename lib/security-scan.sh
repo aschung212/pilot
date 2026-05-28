@@ -31,7 +31,11 @@ fi
 # JS keyword (IIFEs, callbacks), uppercase `Function(` is the dangerous constructor.
 # Pre-2026-05-12 the whole alternation was `-i` and a single `function ()` IIFE
 # tripped the scan, blocking a clean LIFT-545 PR.
-if echo "$DIFF" | grep -qiE '\beval\s*\(|\bexec\s*\(|child_process|spawn\s*\('; then
+# The exec arm excludes method calls (`.exec(`): `RegExp.prototype.exec()` is a
+# benign, ubiquitous idiom. Pre-2026-05-27 `\bexec\(` matched `re.exec(src)` and
+# blocked the clean LIFT-653 test-consolidation PR. Real `child_process.exec` is
+# still caught by the `child_process` token in the same alternation.
+if echo "$DIFF" | grep -qiE '\beval\s*\(|(^|[^.[:alnum:]_])exec\s*\(|child_process|spawn\s*\('; then
   FINDINGS+=("Dynamic code execution (eval/exec/spawn)")
 elif echo "$DIFF" | grep -qE '\bFunction\s*\('; then
   FINDINGS+=("Dynamic code execution (Function constructor)")

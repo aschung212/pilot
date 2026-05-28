@@ -149,6 +149,8 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
 - **Audit trail:** Output logged to `$OUTPUT_DIR/lift-review-$DATE-run${RUN}.log`.
 - **Graceful degradation:** If Gemini is unavailable, review is skipped and build continues.
 
+**Secondary mechanism — builder-side pattern scan (`lib/security-scan.sh`):** Before the builder pushes an iteration branch (`scripts/builder.sh`, after commit detection), it greps the full `master...HEAD` diff for prompt-injection / exfiltration signatures: network calls, non-public env access, dynamic code execution (`eval`/`exec`/`spawn`/`Function`), base64/charcode obfuscation, crypto-mining strings, and image-beacon exfiltration. A hit blocks the push for that iteration (`continue`) and posts to Slack. This is a regex heuristic, so it carries false-positive risk and the patterns are tuned narrowly: the `Function` arm is case-sensitive (lowercase `function ()` IIFEs are fine — LIFT-545, 2026-05-12) and the `exec` arm excludes method calls so `RegExp.prototype.exec()` is not flagged (LIFT-653, 2026-05-27). Regression-tested by `tests/security-scan.bats`.
+
 > **Note:** The review pipeline has been progressively simplified: Gemini  review (Flash → Pro → Sonnet) was replaced with inline hooks on 2026-04-06, then further simplified to Gemini 3.1 Pro only on 2026-04-06 after head-to-head testing showed Flash's 71% false positive rate and Gemini 3.1 Pro matching/exceeding Codex. The old adapter (`adapters/ai-review.sh`) is deprecated; the review tuner was removed on 2026-05-11.
 
 ### 5. Auto-Tuners
@@ -178,16 +180,16 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
 
 ## Testing Infrastructure
 
-The pipeline has a bats-core test suite with **113 tests across 16 test files** in `~/development/pilot/tests/`. Tests use two-tier execution to balance speed with thoroughness:
+The pipeline has a bats-core test suite with **199 tests across 22 test files** in `~/development/pilot/tests/`. Tests use two-tier execution to balance speed with thoroughness:
 
-**Fast tier (109 tests) — pre-commit hook:**
+**Fast tier (196 tests) — pre-commit hook:**
 - Runs before every commit via `.githooks/pre-commit`
 - Covers: unit tests, adapter contract tests, argument parsing, error handling, log formatting
 - Builder tests source real functions from `lib/builder-utils.sh` (not copies of logic)
 - Parallel execution via GNU parallel (`bats -j 8`)
 - Blocks commit if any test fails
 
-**Full tier (113 tests) — GitHub Actions CI:**
+**Full tier (199 tests) — GitHub Actions CI:**
 - Runs on every push via `.github/workflows/test.yml`
 - Includes everything in the fast tier plus integration-level tests (CSV analysis, full script invocations)
 - Test paths resolve dynamically (no hardcoded local paths) for CI runner compatibility
@@ -288,7 +290,7 @@ Feedback loop → Aaron's corrections improve future reviews + discovery
 | `~/development/pilot/adapters/` | Swappable tool adapters (tracker, notify, ai-code, ai-research, ai-review) |
 | `~/development/pilot/lib/log.sh` | Shared structured logging library |
 | `~/development/pilot/config/budget.conf` | Budget config (auto-tuned) |
-| `~/development/pilot/tests/` | bats-core test suite (105 tests, 16 files, two-tier execution) |
+| `~/development/pilot/tests/` | bats-core test suite (199 tests, 22 files, two-tier execution) |
 | `~/development/pilot/.github/workflows/test.yml` | GitHub Actions CI — full test suite on push |
 | `~/development/pilot/.githooks/pre-commit` | Pre-commit hook — fast test tier on every commit |
 | `~/development/pilot/project.env` | Lift-specific configuration (git-ignored) |
