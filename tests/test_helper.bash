@@ -34,7 +34,17 @@ setup() {
   export SLACK_CHANNEL_CHANGELOG="C_TEST_LOG"
   # PILOT_DIR already set at top of file via dynamic resolution
 
-  # Clear Slack tokens/webhooks so nothing leaks
+  # ── Test hermeticity ──────────────────────────────────────────────────
+  # bats inherits the parent shell's environment, and ~/.zshenv exports real
+  # Slack webhooks and API tokens. _PILOT_TEST_MODE only stops scripts from
+  # *re-sourcing* project.env / ~/.zshenv — it does NOT clear values already
+  # inherited from the interactive shell. So scrub every secret the pipeline
+  # might read, otherwise the "absent token/webhook" branches are never
+  # exercised and a test could post to a real channel.
+  for _leaked in ${!SLACK_WEBHOOK_@}; do unset "$_leaked"; done
+  unset LINEAR_API_KEY LINEAR_API_TOKEN 2>/dev/null || true
+  # The four below are read via ${VAR:-} in scripts; export them empty so the
+  # behavior is identical whether or not the parent shell had them set.
   export SLACK_BOT_TOKEN=""
   export SLACK_WEBHOOK_URL=""
   export SLACK_WEBHOOK_DAILY_REVIEW=""

@@ -64,14 +64,14 @@ for title, ids in by_title.items():
 }
 
 # bats test_tags=fast
-@test "cleanup: exits gracefully without Linear token" {
-  # No credentials file
-  export HOME="$TEST_TMPDIR/home"
-  mkdir -p "$HOME/.config/linear"
-  # Empty credentials
-
+@test "cleanup: exits gracefully when the board has no actionable issues" {
+  # Lift's tracker migrated from Linear to GitHub Issues (commit 2732bce), which
+  # removed the old "No Linear API token" credential gate — cleanup now runs
+  # against gh (mocked here). With no matching issues to close or dedup, it must
+  # still run end-to-end and exit 0 with a summary rather than erroring out.
   CLEANUP="$PILOT_DIR/scripts/cleanup.sh"
   run bash "$CLEANUP"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"No Linear API token"* ]]
+  [[ "$output" == *"Cleanup:"* ]]
+  [[ "$output" == *"0 closed, 0 deduped"* ]]
 }

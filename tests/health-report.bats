@@ -25,12 +25,18 @@ METRICS_HEADER='date,run,start_time,end_time,duration_sec,commits,tests_before,t
 
 # bats test_tags=fast
 @test "health-report: nights_run derived from distinct dates in metrics CSV" {
-  # Two distinct nights, multiple iterations each.
+  # Two distinct nights, multiple iterations each. Dates are generated relative
+  # to today so the fixture always lands inside health-report.sh's rolling
+  # 7-day window — hardcoded dates silently aged out of that window and made
+  # this test rot (all rows filtered → nights=0).
+  local d1 d2
+  d1=$(python3 -c 'import datetime; print(datetime.date.today() - datetime.timedelta(days=1))')
+  d2=$(python3 -c 'import datetime; print(datetime.date.today() - datetime.timedelta(days=2))')
   cat > "$OUTPUT_DIR/lift-metrics.csv" <<CSV
 $METRICS_HEADER
-2026-04-23,1,23:00:00,23:10:00,600,2,100,102,2,1,0,0,0,1500.0,true
-2026-04-23,2,23:11:00,23:21:00,600,1,102,103,1,1,0,0,0,1501.0,true
-2026-04-22,1,23:00:00,23:15:00,900,3,98,101,3,1,0,0,0,1499.0,true
+$d1,1,23:00:00,23:10:00,600,2,100,102,2,1,0,0,0,1500.0,true
+$d1,2,23:11:00,23:21:00,600,1,102,103,1,1,0,0,0,1501.0,true
+$d2,1,23:00:00,23:15:00,900,3,98,101,3,1,0,0,0,1499.0,true
 CSV
   nights=$(OUTPUT_DIR="$OUTPUT_DIR" python3 -c '
 import csv, os
@@ -45,11 +51,16 @@ print(len({r["date"] for r in rows if r.get("date")}))
 
 # bats test_tags=fast
 @test "health-report: avg_builder_min derived from duration_sec sum / nights" {
+  # Dates generated relative to today (see the nights_run test) so the rows stay
+  # inside the rolling 7-day window.
+  local d1 d2
+  d1=$(python3 -c 'import datetime; print(datetime.date.today() - datetime.timedelta(days=1))')
+  d2=$(python3 -c 'import datetime; print(datetime.date.today() - datetime.timedelta(days=2))')
   cat > "$OUTPUT_DIR/lift-metrics.csv" <<CSV
 $METRICS_HEADER
-2026-04-23,1,23:00:00,23:10:00,600,2,100,102,2,1,0,0,0,1500.0,true
-2026-04-23,2,23:11:00,23:21:00,600,1,102,103,1,1,0,0,0,1501.0,true
-2026-04-22,1,23:00:00,23:30:00,1800,3,98,101,3,1,0,0,0,1499.0,true
+$d1,1,23:00:00,23:10:00,600,2,100,102,2,1,0,0,0,1500.0,true
+$d1,2,23:11:00,23:21:00,600,1,102,103,1,1,0,0,0,1501.0,true
+$d2,1,23:00:00,23:30:00,1800,3,98,101,3,1,0,0,0,1499.0,true
 CSV
   # Total = 600+600+1800 = 3000s, 2 nights → avg 25.0m
   avg=$(OUTPUT_DIR="$OUTPUT_DIR" python3 -c '

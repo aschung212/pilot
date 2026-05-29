@@ -6,7 +6,10 @@
 #   ./linear-digest.sh              # post to Slack
 #   ./linear-digest.sh --dry-run    # print to stdout only
 
-set -euo pipefail
+# Not `-e`: this script is full of pipelines that "fail" by design — `grep` with
+# no match (empty boards) and `head -N` closing a pipe early (SIGPIPE, exit 141)
+# would otherwise abort the run mid-digest. See CLAUDE.md "grep -c with pipes".
+set -uo pipefail
 
 # Source env vars when run by launchd (no login shell)
 [ -z "${_PILOT_TEST_MODE:-}" ] && [ -f "$HOME/.zshenv" ] && source "$HOME/.zshenv" 2>/dev/null || true
