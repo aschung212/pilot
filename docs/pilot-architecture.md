@@ -108,7 +108,7 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
 **Script:** `~/development/pilot/scripts/builder.sh`
 **Shared lib:** `~/development/pilot/lib/builder-utils.sh` (budget guards, verdict logic, review formatting)
 **Schedule:** Nightly after triage (third stage, runs until 7 AM)
-**Model:** Claude Opus 4.6
+**Model:** Claude Opus 4.8 (1M context, max effort) — pinned via `AI_CODE_MODEL`/`AI_CODE_EFFORT` in `project.env`
 
 **What it does:**
 - Picks the highest-priority triaged issue from the backlog
@@ -222,9 +222,9 @@ Pipeline is fully decomposed — each service has its own launchd plist. No orch
 | Agent | Model | Rationale |
 |---|---|---|
 | Discovery (research) | Gemini 2.5 Flash | Native Google Search, saves Claude tokens |
-| Discovery (analysis) | Claude Opus 4.6 | Best at codebase reasoning + issue creation |
+| Discovery (analysis) | Claude Opus 4.8 (1M, max effort) | Best at codebase reasoning + issue creation |
 | Triage | Gemini 2.5 Flash (Claude Sonnet fallback) | Good at planning, uses Google AI Plus (free) |
-| Builder | Claude Opus 4.6 | Best coding model, complex multi-file changes |
+| Builder | Claude Opus 4.8 (1M, max effort) | Best coding model, complex multi-file changes |
 | Review (push) | Gemini 3.1 Pro | Inline via pre-push hook — adversarial review of full branch diff. Single model, single pass. Paid via Google AI Pro ($20/mo). |
 | Cover letter review | Gemini 2.5 Flash | Second opinion, zero extra cost |
 
@@ -303,6 +303,28 @@ See [Pilot Responsibilities](pilot-responsibilities.md) for the complete list of
 ---
 
 ## Changelog
+
+### 2026-05-28 — Centralized agent-tuning knobs in project.env
+
+Extended the centralized-config pattern beyond models. Hardcoded per-agent tunables are now `project.env` vars (with safe `${VAR:-default}` fallbacks at every call site, so test mode and partial configs still work):
+
+- **Turn caps (cost/performance):** `BUILDER_MAX_TURNS` (100), `BUILDER_FIX_MAX_TURNS` (30), `BUILDER_PREPICK_MAX_TURNS` (2), `DISCOVER_MAX_TURNS` (30), `ARCHITECT_MAX_TURNS` (40), `TRIAGE_MAX_TURNS` (6), `ROADMAP_MAX_TURNS` (3).
+- **Builder resilience (behavior):** `MAX_CONSECUTIVE_FAILURES` (3), `MAX_STALLS` (2), `MAX_FIX_ATTEMPTS` (1) — previously hardcoded at the top of `builder.sh`.
+- **Creativity/quality:** new `AI_TRIAGE_EFFORT` / `AI_ROADMAP_EFFORT` (default `high`) add `--effort` to the Sonnet planning agents. (Opus effort remains `AI_CODE_EFFORT`.)
+- Nightly cost/rate knobs continue to live in `config/budget.conf` (auto-tuned by `tune-budget.sh`); they're now also documented in `project.env.example` for discoverability.
+- No CLI exposes temperature/top_p, so `--effort` is the only creativity lever.
+
+### 2026-05-28 — Opus-tier calls pinned to Claude Opus 4.8 (1M context) at max effort
+
+All Opus-tier agents now run **`claude-opus-4-8[1m]`** with **`--effort max`**, replacing the bare `opus` alias (which had been resolving to 4.6/4.7 and could not request the 1M-context variant). Centralized via two `project.env` vars consumed everywhere: `AI_CODE_MODEL="claude-opus-4-8[1m]"` and `AI_CODE_EFFORT="max"`.
+
+- **Builder** (`scripts/builder.sh`): main build, merge-conflict fix, and CI-fix calls all get `--model`+`--effort`. The pre-pick stage gets the model pin but **not** max effort — picking one issue from titles is trivial and max effort would only add cost/latency per iteration.
+- **Discovery** (`scripts/discover.sh`) and **Architect** (`scripts/architect.sh`): analysis calls get `--model`+`--effort` (architect's hardcoded `--model opus` removed).
+- **Adapter** (`adapters/ai-code.sh`): default model bumped, new `--effort` passthrough + `AI_CODE_EFFORT` default.
+- All call sites use `${AI_CODE_MODEL:-claude-opus-4-8[1m]}` / `${AI_CODE_EFFORT:-max}` fallbacks so they stay valid even when `project.env` is not sourced (e.g. test mode).
+- Model string verified against the live CLI (`contextWindow: 1000000`) — not assumed.
+- **Cost note:** a max-effort 1M call carries higher per-iteration cost (cache-creation heavy). Watch `data/lift-usage-tracking.csv`; dial `AI_CODE_EFFORT` down to `high` if nightly spend climbs.
+- Commit-trailer attribution in Lift PRs (`Co-Authored-By: Claude Opus 4.x`) is self-reported by the builder and will now read 4.8.
 
 ### 2026-05-21 — Builder: deterministic backlog filter + Stage 2 NO_IMPROVEMENTS gate
 

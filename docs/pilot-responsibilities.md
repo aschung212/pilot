@@ -143,6 +143,23 @@ updated: 2026-05-08
 
 ## Changelog
 
+### 2026-05-28 — Centralized agent-tuning knobs in project.env
+
+Followed the model-config change by surfacing the rest of the system's hardcoded tunables into `project.env`, so cost/performance/behavior can be tuned in one place instead of editing scripts.
+
+- **New knobs:** per-agent turn caps (`BUILDER_MAX_TURNS`, `BUILDER_FIX_MAX_TURNS`, `BUILDER_PREPICK_MAX_TURNS`, `DISCOVER_MAX_TURNS`, `ARCHITECT_MAX_TURNS`, `TRIAGE_MAX_TURNS`, `ROADMAP_MAX_TURNS`); builder resilience (`MAX_CONSECUTIVE_FAILURES`, `MAX_STALLS`, `MAX_FIX_ATTEMPTS`); Sonnet planning effort (`AI_TRIAGE_EFFORT`, `AI_ROADMAP_EFFORT`, default `high`).
+- **New responsibility for Aaron:** to change how hard/long any agent works, edit `project.env` — not the scripts. Every value has a safe fallback, so unsetting one just reverts to the built-in default.
+- Nightly budget/rate caps still live in `config/budget.conf` (auto-tuned); now mirrored into `project.env.example` for discoverability.
+- All call sites keep `${VAR:-default}` fallbacks; the bats suite passes after the change.
+
+### 2026-05-28 — Opus calls upgraded to Claude Opus 4.8 (1M context) at max effort
+
+The builder, discovery, and architect agents previously ran the bare `opus` alias, which resolved to whatever Opus the CLI shipped (4.6, then 4.7) and could not request the 1M-context variant — that's why Lift PR commit trailers read "Opus 4.6 / 4.7". All Opus-tier calls are now pinned to `claude-opus-4-8[1m]` with `--effort max`, driven by two new `project.env` vars: `AI_CODE_MODEL` and `AI_CODE_EFFORT`.
+
+- Touched: `project.env`(+`.example`), `scripts/builder.sh` (4 call sites; pre-pick keeps default effort), `scripts/discover.sh`, `scripts/architect.sh`, `adapters/ai-code.sh`, `init.sh`.
+- **New responsibility for Aaron:** the model/effort is now centralized in `project.env`. To change the Opus model or effort later, edit `AI_CODE_MODEL` / `AI_CODE_EFFORT` there (one place) — don't hand-edit individual scripts. When a newer Opus ships, bump `AI_CODE_MODEL` to the new full version string (keep the `[1m]` suffix for 1M context).
+- **Cost watch:** max-effort + 1M context is more expensive per iteration. Keep an eye on `data/lift-usage-tracking.csv`; drop `AI_CODE_EFFORT` to `high` if nightly spend climbs.
+
 ### 2026-05-21 — cleanup.sh stops re-closing already-closed issues
 
 **Symptom.** The 2026-05-21 builder run logged `Cleanup: 101 closed, 0 deduped`, but all 101 issues had been closed on GitHub weeks earlier (e.g. LIFT-310 closed 2026-05-05, LIFT-438 closed 2026-04-29). The "closed" count counted re-processed issues, not new closures.

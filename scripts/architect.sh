@@ -88,8 +88,9 @@ if [ -n "${MOCK_CLAUDE_OUTPUT:-}" ]; then
 elif ! claude \
     --allowedTools "$ARCHITECT_ALLOWED_TOOLS" \
     --output-format json \
-    --model opus \
-    --max-turns 40 \
+    --model "${AI_CODE_MODEL:-claude-opus-4-8[1m]}" \
+    --effort "${AI_CODE_EFFORT:-max}" \
+    --max-turns "${ARCHITECT_MAX_TURNS:-40}" \
     -p "$(cat "$PROMPT_FILE")" \
     > "$ARCHITECT_JSON" 2>>"$RUN_LOG"; then
   CLAUDE_EXIT=$?

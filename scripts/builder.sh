@@ -59,11 +59,11 @@ DATE=$(date +%Y-%m-%d)
 OUTPUT_DIR="${OUTPUT_DIR:-$PILOT_DIR/data}"
 STOP_AT="${1:-07:00}"
 RUN=0
-MAX_CONSECUTIVE_FAILURES=3
+MAX_CONSECUTIVE_FAILURES="${MAX_CONSECUTIVE_FAILURES:-3}"
 FAILURES=0
-MAX_STALLS=2
+MAX_STALLS="${MAX_STALLS:-2}"
 STALLS=0
-MAX_FIX_ATTEMPTS=1
+MAX_FIX_ATTEMPTS="${MAX_FIX_ATTEMPTS:-1}"
 
 mkdir -p "$OUTPUT_DIR"
 
@@ -75,6 +75,11 @@ MAX_OUTPUT_TOKENS_PER_NIGHT="${MAX_OUTPUT_TOKENS_PER_NIGHT:-500000}"
 ITERATION_COOLDOWN="${ITERATION_COOLDOWN:-30}"
 ALERT_THRESHOLD_PCT="${ALERT_THRESHOLD_PCT:-80}"
 DEFAULT_STOP_TIME="${DEFAULT_STOP_TIME:-07:00}"
+
+# Per-agent turn caps (from project.env; safe fallbacks if unset)
+BUILDER_MAX_TURNS="${BUILDER_MAX_TURNS:-100}"
+BUILDER_FIX_MAX_TURNS="${BUILDER_FIX_MAX_TURNS:-30}"
+BUILDER_PREPICK_MAX_TURNS="${BUILDER_PREPICK_MAX_TURNS:-2}"
 
 USAGE_CSV="$OUTPUT_DIR/lift-usage-tracking.csv"
 if [ ! -f "$USAGE_CSV" ]; then
@@ -320,7 +325,9 @@ $detail
     PICKED_ISSUE_OVERRIDE=""
   else
   PRE_PICK_JSON="$OUTPUT_DIR/lift-enhance-$DATE-run${RUN}-prepick.json"
-  PRE_PICK_RESULT=$(claude --allowedTools "Read,Glob,Grep" --disallowedTools "$BUILDER_DISALLOWED_TOOLS" --output-format json --max-turns 2 -p "$(cat <<PREPICK
+  # Pin the Opus-tier model for picking quality, but deliberately NOT max effort:
+  # choosing one issue from titles is trivial, so max effort would only add cost/latency.
+  PRE_PICK_RESULT=$(claude --allowedTools "Read,Glob,Grep" --disallowedTools "$BUILDER_DISALLOWED_TOOLS" --model "${AI_CODE_MODEL:-claude-opus-4-8[1m]}" --output-format json --max-turns "$BUILDER_PREPICK_MAX_TURNS" -p "$(cat <<PREPICK
 You are the pre-pick stage of the overnight builder pipeline for $PROJECT_NAME. Your only job in this call is to pick exactly ONE issue from the unstarted backlog to work on next. You are NOT implementing anything in this call — that happens in the next stage. Pick the issue and exit immediately.
 
 ## Unstarted backlog (pickable)
@@ -450,7 +457,7 @@ ASSIGNED
     STEP2_TEXT="**Pick exactly ONE issue** from the unstarted backlog to implement fully"
   fi
 
-  if claude --allowedTools "$BUILDER_ALLOWED_TOOLS" --disallowedTools "$BUILDER_DISALLOWED_TOOLS" --output-format json -p "$(cat <<PROMPT
+  if claude --allowedTools "$BUILDER_ALLOWED_TOOLS" --disallowedTools "$BUILDER_DISALLOWED_TOOLS" --model "${AI_CODE_MODEL:-claude-opus-4-8[1m]}" --effort "${AI_CODE_EFFORT:-max}" --output-format json -p "$(cat <<PROMPT
 You are iteration $RUN of the overnight self-improving enhancer for $PROJECT_NAME at $REPO. This is Aaron Chung's portfolio project — he's an ex-AWS SDE2 targeting SWE roles at companies like Notion, Airtable, and Linear.
 
 You are running in a loop. Previous iterations tonight and from recent days have already made improvements. Your job is to find the NEXT most impactful thing to do that hasn't been done yet.
@@ -648,7 +655,7 @@ SCREENSHOT_ROUTE:NONE
 - Build: pass/fail
 - Category: feat|fix|a11y|test|perf|style|refactor|chore
 PROMPT
-)" --max-turns 100 2>&1 > "$CLAUDE_JSON"; then
+)" --max-turns "$BUILDER_MAX_TURNS" 2>&1 > "$CLAUDE_JSON"; then
     # Extract text result and append to run log
     CLAUDE_RESULT=$(python3 -c "
 import json, sys
@@ -849,10 +856,10 @@ $PRIMARY_ISSUE"
               # Merge conflict — ask Claude to resolve
               CONFLICT_FILES=$(git diff --name-only --diff-filter=U 2>/dev/null || true)
               if [ -n "$CONFLICT_FILES" ]; then
-                claude --allowedTools "$BUILDER_ALLOWED_TOOLS" --disallowedTools "$BUILDER_DISALLOWED_TOOLS" -p "You are in the $REPO repo on branch $ITER_BRANCH. There are merge conflicts with master in these files:
+                claude --allowedTools "$BUILDER_ALLOWED_TOOLS" --disallowedTools "$BUILDER_DISALLOWED_TOOLS" --model "${AI_CODE_MODEL:-claude-opus-4-8[1m]}" --effort "${AI_CODE_EFFORT:-max}" -p "You are in the $REPO repo on branch $ITER_BRANCH. There are merge conflicts with master in these files:
 $CONFLICT_FILES
 
-Resolve all merge conflicts, keeping the intent of both sides. Then run npm test and npm run build to verify. Commit the resolution with message 'fix: resolve merge conflicts with master'." --max-turns 30 2>&1 | tee -a "$RUN_LOG" || true
+Resolve all merge conflicts, keeping the intent of both sides. Then run npm test and npm run build to verify. Commit the resolution with message 'fix: resolve merge conflicts with master'." --max-turns "$BUILDER_FIX_MAX_TURNS" 2>&1 | tee -a "$RUN_LOG" || true
               fi
             fi
 
@@ -864,7 +871,7 @@ Resolve all merge conflicts, keeping the intent of both sides. Then run npm test
             if [ "$CI_PASS" = "false" ]; then
               FAIL_SNIPPET=$(echo "$BUILD_OUT" | tail -30)
               TEST_SNIPPET=$(echo "$TEST_OUT" | tail -30)
-              claude --allowedTools "$BUILDER_ALLOWED_TOOLS" --disallowedTools "$BUILDER_DISALLOWED_TOOLS" -p "You are in the $REPO repo on branch $ITER_BRANCH. The CI build or tests are failing. Fix the issues and commit the fix.
+              claude --allowedTools "$BUILDER_ALLOWED_TOOLS" --disallowedTools "$BUILDER_DISALLOWED_TOOLS" --model "${AI_CODE_MODEL:-claude-opus-4-8[1m]}" --effort "${AI_CODE_EFFORT:-max}" -p "You are in the $REPO repo on branch $ITER_BRANCH. The CI build or tests are failing. Fix the issues and commit the fix.
 
 Build output (last 30 lines):
 $FAIL_SNIPPET
@@ -872,7 +879,7 @@ $FAIL_SNIPPET
 Test output (last 30 lines):
 $TEST_SNIPPET
 
-Fix the failing build/tests. Do NOT revert the feature — fix the actual issue. Commit with conventional commit prefix. Run npm test and npm run build to verify your fix works." --max-turns 30 2>&1 | tee -a "$RUN_LOG" || true
+Fix the failing build/tests. Do NOT revert the feature — fix the actual issue. Commit with conventional commit prefix. Run npm test and npm run build to verify your fix works." --max-turns "$BUILDER_FIX_MAX_TURNS" 2>&1 | tee -a "$RUN_LOG" || true
 
               # Re-check
               CI_PASS=true

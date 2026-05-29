@@ -187,7 +187,7 @@ SUB_ISSUE_2_DESCRIPTION: ...
     # Sonnet was spending all turns on Read/Glob/Grep and getting cut off
     # before the structured output landed — produced empty NEEDS INPUT
     # comments on LIFT-550/546/531 during the 2026-05-12 backfill rerun.
-    TRIAGE_RESULT=$(claude --allowedTools "$TRIAGE_ALLOWED_TOOLS" --model sonnet -p "$TRIAGE_PROMPT" --max-turns 6 2>&1 || true)
+    TRIAGE_RESULT=$(claude --allowedTools "$TRIAGE_ALLOWED_TOOLS" --model sonnet --effort "${AI_TRIAGE_EFFORT:-high}" -p "$TRIAGE_PROMPT" --max-turns "${TRIAGE_MAX_TURNS:-6}" 2>&1 || true)
   fi
 
   # Parse verdict

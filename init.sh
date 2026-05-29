@@ -210,9 +210,13 @@ else
   fail "Claude CLI not found. Install: https://docs.anthropic.com/en/docs/claude-code"
 fi
 
-ask "Code generation model [opus]: "
+ask "Code generation model [claude-opus-4-8[1m]]: "
 read -r AI_CODE_MODEL
-AI_CODE_MODEL="${AI_CODE_MODEL:-opus}"
+AI_CODE_MODEL="${AI_CODE_MODEL:-claude-opus-4-8[1m]}"
+
+ask "Code reasoning effort — low/medium/high/max [max]: "
+read -r AI_CODE_EFFORT
+AI_CODE_EFFORT="${AI_CODE_EFFORT:-max}"
 
 if command -v gemini &>/dev/null; then
   ok "Gemini CLI found"
@@ -384,7 +388,26 @@ LINEAR_ORG="$LINEAR_ORG"
 
 # ── AI Models ────────────────────────────────────────────────
 AI_CODE_MODEL="$AI_CODE_MODEL"
+AI_CODE_EFFORT="$AI_CODE_EFFORT"
 AI_RESEARCH_MODEL="$AI_RESEARCH_MODEL"
+
+# ── Agent Tuning ─────────────────────────────────────────────
+# Advanced knobs — sensible defaults below; edit to tune cost/performance/behavior.
+# Per-agent turn caps (cost / performance):
+BUILDER_MAX_TURNS=100
+BUILDER_FIX_MAX_TURNS=30
+BUILDER_PREPICK_MAX_TURNS=2
+DISCOVER_MAX_TURNS=30
+ARCHITECT_MAX_TURNS=40
+TRIAGE_MAX_TURNS=6
+ROADMAP_MAX_TURNS=3
+# Builder resilience (behavior):
+MAX_CONSECUTIVE_FAILURES=3
+MAX_STALLS=2
+MAX_FIX_ATTEMPTS=1
+# Sonnet planning-agent effort (creativity / quality) — low|medium|high|max:
+AI_TRIAGE_EFFORT="high"
+AI_ROADMAP_EFFORT="high"
 
 # Review pipeline (3-layer cross-model)
 AI_REVIEW_MODEL_L1="$AI_REVIEW_MODEL_L1"
@@ -554,7 +577,7 @@ echo ""
 echo "  Project:    $PROJECT_NAME"
 echo "  Repo:       $REPO_PATH"
 echo "  Tracker:    $TRACKER_ADAPTER"
-echo "  Builder:    ${AI_CODE_MODEL} ($(echo "$BUILDER_DAYS" | tr ',' '/' | sed 's/1/Mon/;s/2/Tue/;s/3/Wed/;s/4/Thu/;s/5/Fri/'))"
+echo "  Builder:    ${AI_CODE_MODEL} (effort: ${AI_CODE_EFFORT}) ($(echo "$BUILDER_DAYS" | tr ',' '/' | sed 's/1/Mon/;s/2/Tue/;s/3/Wed/;s/4/Thu/;s/5/Fri/'))"
 echo "  Discovery:  ${AI_RESEARCH_MODEL:-disabled} ($(echo "$DISCOVER_DAYS" | tr ',' '/' | sed 's/0/Sun/;s/2/Tue/;s/4/Thu/'))"
 echo ""
 echo "  Next steps:"

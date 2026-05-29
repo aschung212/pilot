@@ -142,7 +142,8 @@ if [ -z "${_PILOT_TEST_MODE:-}" ]; then
     --allowedTools "Read,Bash(gh:*)" \
     --output-format json \
     --model sonnet \
-    --max-turns 3 \
+    --effort "${AI_ROADMAP_EFFORT:-high}" \
+    --max-turns "${ROADMAP_MAX_TURNS:-3}" \
     -p "$CLUSTER_PROMPT" > "$SYNTH_JSON" 2>&1
   CLAUDE_EXIT=$?
 else
