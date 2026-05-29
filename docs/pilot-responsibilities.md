@@ -143,6 +143,23 @@ updated: 2026-05-08
 
 ## Changelog
 
+### 2026-05-28 — Fixed 5 locally-failing bats tests (env-leak + stale fixtures)
+
+**Symptom.** Running the bats suite from a normal interactive shell failed 5 tests (in `cleanup.bats`, `digest.bats`, `health-report.bats`) on a clean tree, even though CI-style runs looked fine.
+
+**Causes (three distinct, not one).**
+- `digest.sh` used `set -euo pipefail`. The `-e` aborted the run on benign pipeline "failures" — `grep` with no match on an empty board, and `head -N` closing a pipe early (SIGPIPE, exit 141). Both `digest.bats` tests asserted `status -eq 0` and so failed. (This is exactly the footgun CLAUDE.md warns about: use `set -uo pipefail`, not `-e`.)
+- `cleanup.bats` asserted the output `"No Linear API token"`, a credential-gate message that the Linear→GitHub tracker migration (2732bce) deleted from `cleanup.sh`. Current code runs against `gh` and exits 0 with a summary — the test could never pass again.
+- `health-report.bats` hardcoded fixture dates (`2026-04-23/22`) that aged past `health-report.sh`'s rolling 7-day window, so every fixture row was filtered out (`nights_run` → 0 instead of 2).
+
+**Action.**
+- `scripts/digest.sh`: `set -euo pipefail` → `set -uo pipefail` (with a comment explaining the SIGPIPE/no-match rationale). No user-visible output change; the digest just no longer aborts mid-run.
+- `tests/test_helper.bash`: hardened `setup()` to scrub inherited secrets (all `SLACK_WEBHOOK_*`, `SLACK_BOT_TOKEN`, `LINEAR_API_*`) so the suite is hermetic — `_PILOT_TEST_MODE` only blocks re-sourcing, it does not clear vars bats inherits from `~/.zshenv`.
+- `tests/cleanup.bats`: re-pointed the stale assertion at current GitHub-backed behavior (exits 0 + prints a cleanup summary).
+- `tests/health-report.bats`: fixture dates are now generated relative to today, so they never age out of the 7-day window again.
+
+**Action needed for Aaron:** None. Full bats suite (199 tests) green from a plain interactive shell.
+
 ### 2026-05-28 — Centralized agent-tuning knobs in project.env
 
 Followed the model-config change by surfacing the rest of the system's hardcoded tunables into `project.env`, so cost/performance/behavior can be tuned in one place instead of editing scripts.
