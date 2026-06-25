@@ -147,3 +147,42 @@ EOF
   parse_stop_time "07:00" "06:30"
   [ "$STOP_AT" = "06:30" ]
 }
+
+# ── model_display_name ────────────────────────────────────────────────────────
+
+# bats test_tags=fast
+@test "builder: model_display_name strips [1m] context suffix" {
+  [ "$(model_display_name 'claude-opus-4-8[1m]')" = "Claude Opus 4.8" ]
+}
+
+# bats test_tags=fast
+@test "builder: model_display_name handles plain model id" {
+  [ "$(model_display_name 'claude-opus-4-8')" = "Claude Opus 4.8" ]
+  [ "$(model_display_name 'claude-sonnet-4-6')" = "Claude Sonnet 4.6" ]
+}
+
+# bats test_tags=fast
+@test "builder: model_display_name drops trailing date snapshot" {
+  [ "$(model_display_name 'claude-haiku-4-5-20251001')" = "Claude Haiku 4.5" ]
+}
+
+# bats test_tags=fast
+@test "builder: model_display_name handles single-component version" {
+  [ "$(model_display_name 'claude-fable-5')" = "Claude Fable 5" ]
+}
+
+# bats test_tags=fast
+@test "builder: model_display_name does not emit the stale self-reported version" {
+  # Regression: the builder used to self-report "Opus 4.6" in commit trailers
+  # regardless of the --model flag. The trailer must follow AI_CODE_MODEL.
+  run model_display_name 'claude-opus-4-8[1m]'
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"4.6"* ]]
+}
+
+# bats test_tags=fast
+@test "builder: model_display_name degrades gracefully on bare alias" {
+  # A bare alias has no parseable version; fall back to plain "Claude".
+  [ "$(model_display_name 'opus')" = "Claude" ]
+  [ "$(model_display_name '')" = "Claude" ]
+}

@@ -81,6 +81,14 @@ BUILDER_MAX_TURNS="${BUILDER_MAX_TURNS:-100}"
 BUILDER_FIX_MAX_TURNS="${BUILDER_FIX_MAX_TURNS:-30}"
 BUILDER_PREPICK_MAX_TURNS="${BUILDER_PREPICK_MAX_TURNS:-2}"
 
+# Commit co-author trailer — derived from the configured model so attribution
+# stays a single source of truth (project.env's AI_CODE_MODEL). Without an
+# explicit instruction the builder self-reports a stale version in the trailer
+# (it identifies as its training-cutoff model, historically "Opus 4.6",
+# regardless of the --model flag in use), producing inconsistent attribution.
+CODE_MODEL="${AI_CODE_MODEL:-claude-opus-4-8[1m]}"
+COAUTHOR_TRAILER="Co-Authored-By: $(model_display_name "$CODE_MODEL") <noreply@anthropic.com>"
+
 USAGE_CSV="$OUTPUT_DIR/lift-usage-tracking.csv"
 if [ ! -f "$USAGE_CSV" ]; then
   echo "date,run,input_tokens,output_tokens,cache_read_tokens,cache_create_tokens,nightly_output_total,duration_sec" > "$USAGE_CSV"
@@ -489,6 +497,14 @@ Use structured commit prefixes:
 - refactor(LIFT-XXX): for code refactoring
 - chore(LIFT-XXX): for maintenance tasks
 
+### Commit author attribution
+
+Every commit you make MUST end with exactly this co-author trailer, verbatim, as the last line of the commit body:
+
+\`$COAUTHOR_TRAILER\`
+
+Do NOT write any other version, capitalization, or suffix (no "(1M context)", no "Opus 4.6", no "Co-authored-by" lowercase). Your own self-knowledge of which model you are is unreliable here — use the exact trailer string above and nothing else. This is the canonical attribution for the model actually running this iteration.
+
 ## Current repo state
 
 Recent commits:
@@ -586,6 +602,7 @@ After your final push completes, you MUST emit the full structured response belo
 - Quality over quantity — fully implement the issue rather than doing it halfway
 - If you cannot find anything meaningful to improve, output ONLY the line "NO_IMPROVEMENTS_REMAINING" and exit
 - Commit with clear conventional commit messages (feat/fix/a11y/test/perf/style/refactor/chore prefix)
+- End every commit body with exactly this trailer (see "Commit author attribution" above): \`$COAUTHOR_TRAILER\`. Do not self-report a different model version.
 - Include \`Closes #N\` (where N is the issue number, no LIFT- prefix) in at least one commit body so GitHub auto-closes the issue when the PR merges. The pipeline depends on this — it no longer closes issues at implementation time because that orphaned issues whose PRs failed CI (see PR #467 / LIFT-436, 2026-04-30).
 - If a test is failing when you start, you may try to fix it ONCE. If it still fails after one attempt, skip it and move on to new work. Do not spend more than 10 turns on any single fix.
 - IMPORTANT: Focus on SHIPPING, not perfecting. Commit working improvements and move on.
@@ -859,7 +876,7 @@ $PRIMARY_ISSUE"
                 claude --allowedTools "$BUILDER_ALLOWED_TOOLS" --disallowedTools "$BUILDER_DISALLOWED_TOOLS" --model "${AI_CODE_MODEL:-claude-opus-4-8[1m]}" --effort "${AI_CODE_EFFORT:-max}" -p "You are in the $REPO repo on branch $ITER_BRANCH. There are merge conflicts with master in these files:
 $CONFLICT_FILES
 
-Resolve all merge conflicts, keeping the intent of both sides. Then run npm test and npm run build to verify. Commit the resolution with message 'fix: resolve merge conflicts with master'." --max-turns "$BUILDER_FIX_MAX_TURNS" 2>&1 | tee -a "$RUN_LOG" || true
+Resolve all merge conflicts, keeping the intent of both sides. Then run npm test and npm run build to verify. Commit the resolution with message 'fix: resolve merge conflicts with master'. End the commit body with exactly this trailer (do not self-report a different model version): $COAUTHOR_TRAILER" --max-turns "$BUILDER_FIX_MAX_TURNS" 2>&1 | tee -a "$RUN_LOG" || true
               fi
             fi
 
@@ -879,7 +896,7 @@ $FAIL_SNIPPET
 Test output (last 30 lines):
 $TEST_SNIPPET
 
-Fix the failing build/tests. Do NOT revert the feature — fix the actual issue. Commit with conventional commit prefix. Run npm test and npm run build to verify your fix works." --max-turns "$BUILDER_FIX_MAX_TURNS" 2>&1 | tee -a "$RUN_LOG" || true
+Fix the failing build/tests. Do NOT revert the feature — fix the actual issue. Commit with conventional commit prefix. Run npm test and npm run build to verify your fix works. End the commit body with exactly this trailer (do not self-report a different model version): $COAUTHOR_TRAILER" --max-turns "$BUILDER_FIX_MAX_TURNS" 2>&1 | tee -a "$RUN_LOG" || true
 
               # Re-check
               CI_PASS=true

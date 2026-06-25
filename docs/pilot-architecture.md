@@ -304,6 +304,18 @@ See [Pilot Responsibilities](pilot-responsibilities.md) for the complete list of
 
 ## Changelog
 
+### 2026-06-25 — Builder commit co-author trailer pinned to the configured model
+
+**Problem.** Lift PR commits carried inconsistent attribution — `Co-Authored-By: Claude Opus 4.6`, `Co-authored-by: Claude Opus 4.6` (lowercase), and occasionally `Claude Opus 4.8 (1M context)` — even though the builder runs `claude-opus-4-8[1m]`. The 2026-05-28 model pin assumed the trailer would follow `--model`, but the builder prompt never specified one. In headless `claude -p` mode the model **self-reports** the trailer from its training-cutoff self-knowledge (it identifies as "Opus 4.6"), so the `--model` flag had no effect on attribution.
+
+**Fix.** Attribution is now derived from `AI_CODE_MODEL` (single source of truth) and instructed explicitly:
+- New tested helper `model_display_name()` in `lib/builder-utils.sh` converts the model ID to a display name (`claude-opus-4-8[1m]` → `Claude Opus 4.8`; strips `[1m]` and trailing date snapshots; degrades to `Claude` for a bare alias).
+- `scripts/builder.sh` computes `COAUTHOR_TRAILER` once from `AI_CODE_MODEL` and injects an explicit "use exactly this trailer, do not self-report a version" instruction into all three committing prompts (main build, merge-conflict fix, CI-fix).
+- Because it derives from `AI_CODE_MODEL`, the trailer follows future model bumps automatically — no second edit needed.
+- 6 regression tests added in `tests/builder.bats` (18 total, all green), including an assertion that the output never contains the stale `4.6`.
+
+**No model allocation change.** The builder still runs `claude-opus-4-8[1m]` at max effort; only the self-reported attribution string is corrected.
+
 ### 2026-05-28 — Centralized agent-tuning knobs in project.env
 
 Extended the centralized-config pattern beyond models. Hardcoded per-agent tunables are now `project.env` vars (with safe `${VAR:-default}` fallbacks at every call site, so test mode and partial configs still work):
@@ -324,7 +336,7 @@ All Opus-tier agents now run **`claude-opus-4-8[1m]`** with **`--effort max`**, 
 - All call sites use `${AI_CODE_MODEL:-claude-opus-4-8[1m]}` / `${AI_CODE_EFFORT:-max}` fallbacks so they stay valid even when `project.env` is not sourced (e.g. test mode).
 - Model string verified against the live CLI (`contextWindow: 1000000`) — not assumed.
 - **Cost note:** a max-effort 1M call carries higher per-iteration cost (cache-creation heavy). Watch `data/lift-usage-tracking.csv`; dial `AI_CODE_EFFORT` down to `high` if nightly spend climbs.
-- Commit-trailer attribution in Lift PRs (`Co-Authored-By: Claude Opus 4.x`) is self-reported by the builder and will now read 4.8.
+- Commit-trailer attribution in Lift PRs (`Co-Authored-By: Claude Opus 4.x`) was self-reported by the builder at this point and continued to read 4.6/4.7 inconsistently — fixed deterministically on 2026-06-25 (see entry above).
 
 ### 2026-05-21 — Builder: deterministic backlog filter + Stage 2 NO_IMPROVEMENTS gate
 

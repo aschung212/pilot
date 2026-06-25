@@ -117,3 +117,43 @@ parse_stop_time() {
     STOP_AT="23:59"
   fi
 }
+
+# ── model_display_name ────────────────────────────────────────────────────────
+# Convert a Claude model ID into the human-readable name used in the commit
+# co-author trailer. The builder otherwise self-reports a stale version (it
+# identifies as its training-cutoff model — historically "Opus 4.6" — regardless
+# of the --model flag in use), so we derive the name from $AI_CODE_MODEL and
+# instruct the builder to use it verbatim. Single source of truth: project.env.
+#   claude-opus-4-8[1m]        -> Claude Opus 4.8
+#   claude-sonnet-4-6          -> Claude Sonnet 4.6
+#   claude-haiku-4-5-20251001  -> Claude Haiku 4.5
+#   claude-fable-5             -> Claude Fable 5
+# Input: $1 = model ID. Output: prints display name to stdout.
+model_display_name() {
+  local id="${1:-}"
+  id="${id%%\[*}"                       # strip context-window suffix, e.g. "[1m]"
+  # Drop a trailing 8-digit date snapshot, e.g. "-20251001"
+  case "$id" in
+    *-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) id="${id%-*}" ;;
+  esac
+
+  local IFS='-'
+  local parts
+  read -ra parts <<< "$id"              # [0]=brand, [1]=family, [2..]=version
+  local family="${parts[1]:-}"
+  [ -z "$family" ] && { printf 'Claude\n'; return; }
+
+  # Title-case the family (bash 3.2 has no ${var^}, so use tr on the first char)
+  family="$(printf '%s' "${family:0:1}" | tr '[:lower:]' '[:upper:]')${family:1}"
+
+  local version="" i
+  for ((i = 2; i < ${#parts[@]}; i++)); do
+    if [ -z "$version" ]; then version="${parts[i]}"; else version="$version.${parts[i]}"; fi
+  done
+
+  if [ -n "$version" ]; then
+    printf 'Claude %s %s\n' "$family" "$version"
+  else
+    printf 'Claude %s\n' "$family"
+  fi
+}

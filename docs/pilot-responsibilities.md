@@ -143,6 +143,10 @@ updated: 2026-05-08
 
 ## Changelog
 
+### 2026-06-25 — Builder commit trailers now correctly attribute Claude Opus 4.8
+
+Lift PR commits had been tagged `Co-Authored-By: Claude Opus 4.6` (and lowercase / `(1M context)` variants) even though the builder runs Opus 4.8. Root cause: the builder prompt never specified a co-author trailer, so in headless mode the model self-reported a stale version from its own self-knowledge — the `--model` flag never controlled attribution. The trailer is now derived from `AI_CODE_MODEL` and injected explicitly into every committing prompt, so it reads `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>` and will track any future model bump automatically. Added `model_display_name()` to `lib/builder-utils.sh` with 6 regression tests. **No new responsibilities for Aaron** — existing open PRs keep their old trailers; only commits from tonight onward are corrected.
+
 ### 2026-05-28 — Fixed 5 locally-failing bats tests (env-leak + stale fixtures)
 
 **Symptom.** Running the bats suite from a normal interactive shell failed 5 tests (in `cleanup.bats`, `digest.bats`, `health-report.bats`) on a clean tree, even though CI-style runs looked fine.
