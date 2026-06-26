@@ -185,6 +185,45 @@ if [ -n "$FAILED_PRS" ]; then
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
+# ── Auth preflight: fail loud, not silent ────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# The builder authenticates the `claude` CLI via the Max-subscription OAuth
+# token in the macOS keychain. Under launchd there's no interactive session to
+# refresh it, so the token can lapse for days. When it does, EVERY iteration's
+# pre-pick stage 401s with "Invalid authentication credentials" — but the loop
+# swallows that as a soft "no parseable ISSUE_PICKED marker" warning and grinds
+# through MAX_CONSECUTIVE_FAILURES doomed iterations before stopping, producing
+# a silent zero-PR night with no obvious cause. Root cause of the 2026-06-19 and
+# 2026-06-22 dead nights.
+#
+# Catch it up front with one cheap probe down the exact code path the real
+# stages use. On an auth-signature failure, alert loudly and abort BEFORE the
+# loop. Transient/network errors are not auth signatures, so they fall through
+# to the loop's own per-iteration failure handling rather than blocking the
+# whole night. Escape hatch: SKIP_AUTH_PREFLIGHT=1.
+if [ -z "${_PILOT_TEST_MODE:-}" ] && [ -z "${SKIP_AUTH_PREFLIGHT:-}" ]; then
+  PREFLIGHT_LOG="$OUTPUT_DIR/lift-enhance-$DATE-preflight.md"
+  AUTH_PROBE=$(claude --allowedTools "Read" --model "${AI_CODE_MODEL:-claude-opus-4-8[1m]}" \
+    --output-format json --max-turns 1 -p "Reply with exactly: AUTH_OK" 2>&1 || true)
+  if is_auth_failure "$AUTH_PROBE"; then
+    AUTH_ALERT="🚨 *${PROJECT_NAME} builder ABORTED — claude CLI is not authenticated.*
+$(cat <<'PREFLIGHTMSG'
+The keychain OAuth token is expired/invalid, so every iteration would 401. No iterations ran tonight.
+*Fix:* run `claude setup-token` in a terminal (Max-subscription login), then re-run `scripts/builder.sh 1` to catch up.
+Verify + details: docs/pilot-responsibilities.md → "Builder auth".
+PREFLIGHTMSG
+)"
+    echo "🛑 Auth preflight FAILED — claude CLI not authenticated. Aborting before the loop at $(date)." | tee "$PREFLIGHT_LOG"
+    echo "$AUTH_PROBE" | head -c 500 >> "$PREFLIGHT_LOG"
+    log_error "Auth preflight failed: claude CLI not authenticated (401 / not logged in). Aborted before loop."
+    slack_send "$AUTH_ALERT"
+    thread_send "$AUTH_ALERT"
+    exit 1
+  fi
+  echo "✅ Auth preflight passed — claude CLI authenticated." | tee "$PREFLIGHT_LOG"
+fi
+
+# ══════════════════════════════════════════════════════════════════════════════
 # ── Main loop: one issue per iteration, one branch per issue ─────────────────
 # ══════════════════════════════════════════════════════════════════════════════
 while should_continue; do

@@ -101,6 +101,34 @@ updated: 2026-05-08
 
 ---
 
+## Builder Auth (re-login)
+
+Every pilot agent (`builder`, `discover`, `triage`, `architect`, `pipeline-auditor`, plus the `ai-code`/`ai-review` adapters) authenticates the `claude` CLI the same way. Under launchd there is no interactive session to refresh an OAuth login, so a keychain login can silently lapse for days — and when it does, **every** agent 401s. The builder's pre-pick stage fails on every iteration and the night produces zero PRs (root cause of the 2026-06-19 / 2026-06-22 dead nights).
+
+As of 2026-06-23 the builder runs an **auth preflight** before its main loop: one cheap `claude` probe. On an auth failure it aborts immediately and posts a 🚨 alert to **#lift-automation** (and the build thread) instead of grinding through doomed iterations. If you see that alert — or a run of zero-PR nights — the token has lapsed.
+
+**The durable fix (recommended) — a long-lived token in `~/.zshenv`.** A `claude setup-token` token does not expire for ~a year and, exported in `~/.zshenv` (which every pilot script sources), survives launchd with no keychain-refresh dependency. ⚠️ `claude setup-token` only *prints* the token — running it is **not** enough; the token must be persisted. Use the helper, which validates the token against the API before writing it:
+
+```bash
+claude setup-token                       # mint a token; copy the sk-ant-oat… value it prints
+~/Documents/Scripts/set-claude-token.sh  # paste it; validates + writes CLAUDE_CODE_OAUTH_TOKEN to ~/.zshenv + re-verifies
+```
+
+A green result means the next run of any agent will authenticate. This fixes the **whole pipeline** at once, not just the builder.
+
+**Quick alternative — `claude login`.** Refreshes the keychain login instead (no token handling), but it expires again in a few weeks, recreating this outage; the preflight would at least alert you the same night.
+
+**Verify manually** the way launchd sees it (clean env + source `~/.zshenv`, no inherited credentials):
+
+```bash
+env -i HOME="$HOME" PATH="/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:$HOME/.npm-global/bin" \
+  bash -c 'source ~/.zshenv 2>/dev/null; claude -p "Reply with exactly: AUTH_OK" --max-turns 1'
+```
+
+If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/Thu + builder Mon–Fri 23:00) will authenticate. To catch up the same day, run one manual iteration: `cd ~/development/pilot && scripts/builder.sh 1`. Escape hatch to skip the preflight (debugging only): `SKIP_AUTH_PREFLIGHT=1`.
+
+---
+
 ## Key Files
 
 | File | Purpose |
@@ -112,7 +140,7 @@ updated: 2026-05-08
 | `~/development/lift/CLAUDE.md` | Lift project standards (design, code, workflow) |
 | `~/.claude/commands/ai-review.md` | Daily review slash command |
 | `~/.claude/CLAUDE.md` | Global Claude instructions |
-| `~/development/pilot/tests/` | bats-core test suite — 16 test files, 105 tests (fast tier: 101, full tier: 105) |
+| `~/development/pilot/tests/` | bats-core test suite — 22 test files, 209 tests (fast tier runs in the pre-commit hook) |
 | `~/development/pilot/.github/workflows/test.yml` | GitHub Actions CI — runs full test suite on push |
 | `~/development/pilot/.githooks/pre-commit` | Git pre-commit hook — runs fast test tier before every commit |
 | `~/Documents/Scripts/lift-triage.sh` | Gemini issue triage — reviews, enhances, and plans before builder runs |
@@ -138,6 +166,7 @@ updated: 2026-05-08
 | `SLACK_WEBHOOK_URL` | Webhook for #lift-automation |
 | `SLACK_WEBHOOK_DAILY_REVIEW` | Webhook for #daily-review |
 | `SLACK_WEBHOOK_CHANGELOG` | Webhook for #pilot |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Long-lived `claude` auth for all headless agents. Set via `~/Documents/Scripts/set-claude-token.sh`. See [Builder Auth](#builder-auth-re-login). |
 
 ---
 
@@ -146,6 +175,22 @@ updated: 2026-05-08
 ### 2026-06-25 — Builder commit trailers now correctly attribute Claude Opus 4.8
 
 Lift PR commits had been tagged `Co-Authored-By: Claude Opus 4.6` (and lowercase / `(1M context)` variants) even though the builder runs Opus 4.8. Root cause: the builder prompt never specified a co-author trailer, so in headless mode the model self-reported a stale version from its own self-knowledge — the `--model` flag never controlled attribution. The trailer is now derived from `AI_CODE_MODEL` and injected explicitly into every committing prompt, so it reads `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>` and will track any future model bump automatically. Added `model_display_name()` to `lib/builder-utils.sh` with 6 regression tests. **No new responsibilities for Aaron** — existing open PRs keep their old trailers; only commits from tonight onward are corrected.
+
+### 2026-06-23 — Builder auth preflight (zero-PR-night root cause)
+
+**Symptom.** The builder produced zero PRs on 2026-06-19 and 2026-06-22 — every iteration "failed," 3/3, both nights.
+
+**Root cause.** The Max-subscription OAuth token in the macOS keychain expired 2026-06-19 06:00 and never refreshed (no interactive session under launchd). Every iteration's pre-pick stage 401'd with `Invalid authentication credentials`. The loop swallowed the 401 as a soft "no parseable ISSUE_PICKED marker" warning and ground through `MAX_CONSECUTIVE_FAILURES` doomed iterations before stopping — a silent failure with no obvious cause in the digest. (Jun 20–21 were Sat/Sun; the plist only runs Mon–Fri, which is why only two failing nights show.)
+
+**Action.**
+- `lib/builder-utils.sh`: added `is_auth_failure()` — classifies a `claude` probe's output as an auth failure (401 / logged out) vs. a transient/network error.
+- `scripts/builder.sh`: added an **auth preflight** before the main loop. One cheap `claude` probe down the real code path; on an auth-signature failure it posts a 🚨 alert to #lift-automation + the build thread and aborts (`exit 1`) instead of burning the loop. Transient errors are *not* auth signatures, so they fall through to the existing per-iteration handling. Escape hatch: `SKIP_AUTH_PREFLIGHT=1`.
+- `tests/builder.bats`: 4 new tests for `is_auth_failure` (real 401 string, logged-out string, healthy response, transient network error). Full suite 203 green.
+- Added a **Builder Auth (re-login)** section above with the exact `claude setup-token` + verify steps.
+
+**Action needed for Aaron (one-time, interactive — only you can do this):** `claude setup-token` then `~/Documents/Scripts/set-claude-token.sh` (paste the token; it validates + persists `CLAUDE_CODE_OAUTH_TOKEN` to `~/.zshenv` + re-verifies). See **Builder Auth (re-login)** above. Note: running `claude setup-token` alone does **not** fix it — the token it prints must be persisted, which the helper does. From now on, a lapsed token alerts loudly the same night instead of failing silently.
+
+**Resolved 2026-06-23:** token persisted to `~/.zshenv` and verified end-to-end — the clean-env probe returned `AUTH_OK`, and a manual `builder.sh 1` ran clean: auth preflight passed and the pre-pick stage (the call that was 401'ing) returned a valid `NO_IMPROVEMENTS_REMAINING`. Pipeline operational; tonight's discovery → triage → build chain will run normally.
 
 ### 2026-05-28 — Fixed 5 locally-failing bats tests (env-leak + stale fixtures)
 

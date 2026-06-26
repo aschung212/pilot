@@ -186,3 +186,31 @@ EOF
   [ "$(model_display_name 'opus')" = "Claude" ]
   [ "$(model_display_name '')" = "Claude" ]
 }
+
+# ── is_auth_failure ───────────────────────────────────────────────────────────
+
+# bats test_tags=fast
+@test "builder: is_auth_failure detects the launchd 401 signature" {
+  # The exact string the builder logged on 2026-06-19 and 2026-06-22.
+  run is_auth_failure 'Failed to authenticate. API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"Invalid authentication credentials"},"request_id":"req_x"}'
+  [ "$status" -eq 0 ]
+}
+
+# bats test_tags=fast
+@test "builder: is_auth_failure detects the logged-out signature" {
+  run is_auth_failure $'warn: CPU lacks AVX support\nNot logged in · Please run /login'
+  [ "$status" -eq 0 ]
+}
+
+# bats test_tags=fast
+@test "builder: is_auth_failure passes a healthy authenticated response" {
+  run is_auth_failure '{"type":"result","result":"AUTH_OK","is_error":false}'
+  [ "$status" -eq 1 ]
+}
+
+# bats test_tags=fast
+@test "builder: is_auth_failure does not abort on a transient network error" {
+  # Non-auth failures must fall through to the loop's per-iteration handling.
+  run is_auth_failure '{"type":"result","result":"Network error: connection reset","is_error":true}'
+  [ "$status" -eq 1 ]
+}

@@ -111,6 +111,7 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
 **Model:** Claude Opus 4.8 (1M context, max effort) — pinned via `AI_CODE_MODEL`/`AI_CODE_EFFORT` in `project.env`
 
 **What it does:**
+- **Auth preflight (before the loop):** one cheap `claude` probe down the real code path. If the keychain OAuth token is expired/logged-out, every iteration would 401; rather than burn the loop silently, the builder aborts immediately and alerts #lift-automation. Auth failures are classified by `is_auth_failure()` in `builder-utils.sh`; transient/network errors are *not* auth signatures and fall through to normal per-iteration handling. Skippable with `SKIP_AUTH_PREFLIGHT=1`. (Added 2026-06-23 after two silent zero-PR nights.)
 - Picks the highest-priority triaged issue from the backlog
 - Reads the triage agent's implementation plan from comments
 - Creates a dedicated branch per issue: `enhance/LIFT-{id}-{date}`
@@ -315,6 +316,15 @@ See [Pilot Responsibilities](pilot-responsibilities.md) for the complete list of
 - 6 regression tests added in `tests/builder.bats` (18 total, all green), including an assertion that the output never contains the stale `4.6`.
 
 **No model allocation change.** The builder still runs `claude-opus-4-8[1m]` at max effort; only the self-reported attribution string is corrected.
+
+### 2026-06-23 — Builder auth preflight
+
+Added a fail-loud auth check before the builder's main loop. The keychain OAuth token (Max subscription) expired 2026-06-19 and, with no interactive session under launchd to refresh it, every iteration's pre-pick stage 401'd — silently, producing zero-PR nights on 2026-06-19 and 2026-06-22. The loop swallowed the 401 as a soft "no ISSUE_PICKED marker" warning and burned `MAX_CONSECUTIVE_FAILURES` iterations.
+
+- **`lib/builder-utils.sh`:** new `is_auth_failure()` classifies a `claude` probe's output as an auth failure (401 / logged out) vs. transient/network error.
+- **`scripts/builder.sh`:** auth preflight before the loop — one probe; on auth failure, alert #lift-automation + the build thread and `exit 1`. Escape hatch `SKIP_AUTH_PREFLIGHT=1`.
+- **`tests/builder.bats`:** +4 tests for `is_auth_failure`. Full suite 203 green.
+- Operational fix is interactive: `claude setup-token` mints a long-lived token, then `~/Documents/Scripts/set-claude-token.sh` validates + persists it as `CLAUDE_CODE_OAUTH_TOKEN` in `~/.zshenv` (sourced by every agent, so it fixes the whole pipeline). Running `setup-token` alone is not enough — it only prints the token. See `docs/pilot-responsibilities.md` → "Builder Auth (re-login)".
 
 ### 2026-05-28 — Centralized agent-tuning knobs in project.env
 

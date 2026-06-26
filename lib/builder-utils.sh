@@ -98,6 +98,19 @@ should_continue() {
   return 0
 }
 
+# ── is_auth_failure ───────────────────────────────────────────────────────────
+# Detect whether a `claude` CLI invocation's combined stdout+stderr indicates an
+# authentication failure (expired/invalid keychain OAuth token, or logged out)
+# rather than a transient/network error. Used by the builder's auth preflight to
+# decide whether to abort the whole night vs. let the per-iteration failure
+# handling deal with it.
+# Input: $1 = captured combined output of a claude probe
+# Returns: 0 if the output looks like an auth failure, 1 otherwise
+is_auth_failure() {
+  local output="$1"
+  echo "$output" | grep -qiE 'authentication_error|Invalid authentication|Not logged in|Please run /login|API Error: 401'
+}
+
 # ── parse_stop_time ──────────────────────────────────────────────────────────
 # Parse the CLI argument: if numeric, treat as iteration count; if time, use as stop time.
 # Input: $1 = CLI arg (e.g. "06:00" or "5"), $2 = default stop time
