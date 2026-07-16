@@ -214,3 +214,58 @@ EOF
   run is_auth_failure '{"type":"result","result":"Network error: connection reset","is_error":true}'
   [ "$status" -eq 1 ]
 }
+
+# ── run_with_timeout / kill_process_tree ─────────────────────────────────────
+# Guards the 2026-07-09 regression: a claude call with no wall-clock bound hung
+# indefinitely and, because launchd will not start a new instance while the
+# previous one is alive, silently blocked the builder for 5 days.
+
+# bats test_tags=fast
+@test "builder: run_with_timeout returns 124 when the command overruns" {
+  run run_with_timeout 1 sleep 10
+  [ "$status" -eq 124 ]
+}
+
+# bats test_tags=fast
+@test "builder: run_with_timeout returns 0 for a command that finishes in time" {
+  run run_with_timeout 5 sleep 1
+  [ "$status" -eq 0 ]
+}
+
+# bats test_tags=fast
+@test "builder: run_with_timeout passes through the command's own exit code" {
+  run run_with_timeout 5 bash -c 'exit 7'
+  [ "$status" -eq 7 ]
+}
+
+# bats test_tags=fast
+@test "builder: run_with_timeout preserves stdout for \$(...) capture" {
+  out=$(run_with_timeout 5 echo hello)
+  [ "$out" = "hello" ]
+}
+
+# bats test_tags=fast
+@test "builder: run_with_timeout treats 0 / non-numeric as no-timeout passthrough" {
+  run run_with_timeout 0 bash -c 'exit 3'
+  [ "$status" -eq 3 ]
+  run run_with_timeout abc bash -c 'exit 4'
+  [ "$status" -eq 4 ]
+}
+
+# bats test_tags=fast
+@test "builder: run_with_timeout returns 124 for a nested backgrounded overrun" {
+  run run_with_timeout 1 bash -c 'sleep 6 & wait'
+  [ "$status" -eq 124 ]
+}
+
+# bats test_tags=fast
+@test "builder: run_with_timeout kills the whole descendant tree on timeout" {
+  marker="$TEST_TMPDIR/grandchild-alive"
+  # Grandchild would touch the marker at 2s; the tree is killed at the 1s
+  # timeout, so if tree-kill works the marker is never created. `run` keeps the
+  # 124 return from aborting the test.
+  run run_with_timeout 1 bash -c "( sleep 2 && touch '$marker' ) & wait"
+  [ "$status" -eq 124 ]
+  sleep 3
+  [ ! -e "$marker" ]
+}

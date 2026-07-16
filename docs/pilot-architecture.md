@@ -678,3 +678,13 @@ The `marker_emission_collapse` finding now points readers to whichever of the tw
 - Cost: Gemini 3.1 Pro covered by existing Google AI Pro subscription ($20/mo) — no additional cost
 - SWE-bench Verified scores: Gemini 3.1 Pro (80.6%) vs GPT-5.4 Codex (80.0%)
 - **No change to Aaron's workflow** — reviews remain fully automated inline
+
+### 2026-07-15 — Builder `claude`-call timeouts + builder-staleness alert
+
+Hardening after a hung `claude` call took the builder offline for 5 days (2026-07-09 → 07-14). The builder's launchd job uses `StartCalendarInterval`, which **skips a scheduled run whenever the previous instance is still alive** — so one indefinitely-blocked call suppressed every nightly run until the stuck process was killed by hand.
+
+- **Every builder `claude` call is now wall-clock bounded.** New `run_with_timeout` helper in `lib/builder-utils.sh` (portable — this Mac ships no GNU `timeout`/`gtimeout`) runs the call in the background with a poll-based watchdog; on expiry it kills the whole process tree (recursive TERM→KILL via `kill_process_tree`) and returns `124`. Applied to all four call sites: main implement, CI-fix / merge-conflict retries, pre-pick, and auth probe. A timed-out iteration is scored a failure and the loop continues, so the night finishes and launchd is free to launch the next run.
+- **New config knobs** (`project.env`, generous defaults so they only fire on a genuine hang): `BUILDER_ITERATION_TIMEOUT` (3600s), `BUILDER_FIX_TIMEOUT` (1800s), `BUILDER_PREPICK_TIMEOUT` (300s), `BUILDER_AUTH_TIMEOUT` (180s). `0` disables a given timeout. This extends the centralized-config pattern (see 2026-05-28 entries).
+- **Weekly health report gained a builder-staleness anomaly** (`scripts/health-report.sh`): computes days-since-last-builder-run across all metrics history and flags ≥3 days idle (plus a "Last builder run" line). Defense-in-depth backstop for hang modes outside a `claude` call; the per-call timeout is the primary prevention.
+- Tests: `tests/builder.bats` +7 (timeout / tree-kill), `tests/health-report.bats` +2 (staleness). Suite 218 green.
+- **No change to Aaron's workflow.**

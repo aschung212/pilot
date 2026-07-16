@@ -65,6 +65,18 @@ MAX_STALLS="${MAX_STALLS:-2}"
 STALLS=0
 MAX_FIX_ATTEMPTS="${MAX_FIX_ATTEMPTS:-1}"
 
+# Wall-clock timeouts (seconds) for the builder's `claude` calls. A hung call
+# with no timeout silently blocked the launchd builder for 5 days (2026-07-09),
+# because StartCalendarInterval skips scheduled runs while a prior instance is
+# still alive. run_with_timeout kills the process tree on expiry so the night
+# finishes and launchd is free to start the next run. Defaults are generous — a
+# healthy iteration runs ~5-12 min — so they only fire on a genuine hang.
+# Override in project.env. Set to 0 to disable a given timeout.
+BUILDER_ITERATION_TIMEOUT="${BUILDER_ITERATION_TIMEOUT:-3600}"  # main implement+review+push call
+BUILDER_FIX_TIMEOUT="${BUILDER_FIX_TIMEOUT:-1800}"              # CI-fix / merge-conflict retry calls
+BUILDER_PREPICK_TIMEOUT="${BUILDER_PREPICK_TIMEOUT:-300}"       # cheap issue pre-pick call
+BUILDER_AUTH_TIMEOUT="${BUILDER_AUTH_TIMEOUT:-180}"             # auth preflight probe
+
 mkdir -p "$OUTPUT_DIR"
 
 # ── Usage tracking ───────────────────────────────────────────────────────────
@@ -203,7 +215,7 @@ fi
 # whole night. Escape hatch: SKIP_AUTH_PREFLIGHT=1.
 if [ -z "${_PILOT_TEST_MODE:-}" ] && [ -z "${SKIP_AUTH_PREFLIGHT:-}" ]; then
   PREFLIGHT_LOG="$OUTPUT_DIR/lift-enhance-$DATE-preflight.md"
-  AUTH_PROBE=$(claude --allowedTools "Read" --model "${AI_CODE_MODEL:-claude-opus-4-8[1m]}" \
+  AUTH_PROBE=$(run_with_timeout "$BUILDER_AUTH_TIMEOUT" claude --allowedTools "Read" --model "${AI_CODE_MODEL:-claude-opus-4-8[1m]}" \
     --output-format json --max-turns 1 -p "Reply with exactly: AUTH_OK" 2>&1 || true)
   if is_auth_failure "$AUTH_PROBE"; then
     AUTH_ALERT="🚨 *${PROJECT_NAME} builder ABORTED — claude CLI is not authenticated.*
@@ -374,7 +386,7 @@ $detail
   PRE_PICK_JSON="$OUTPUT_DIR/lift-enhance-$DATE-run${RUN}-prepick.json"
   # Pin the Opus-tier model for picking quality, but deliberately NOT max effort:
   # choosing one issue from titles is trivial, so max effort would only add cost/latency.
-  PRE_PICK_RESULT=$(claude --allowedTools "Read,Glob,Grep" --disallowedTools "$BUILDER_DISALLOWED_TOOLS" --model "${AI_CODE_MODEL:-claude-opus-4-8[1m]}" --output-format json --max-turns "$BUILDER_PREPICK_MAX_TURNS" -p "$(cat <<PREPICK
+  PRE_PICK_RESULT=$(run_with_timeout "$BUILDER_PREPICK_TIMEOUT" claude --allowedTools "Read,Glob,Grep" --disallowedTools "$BUILDER_DISALLOWED_TOOLS" --model "${AI_CODE_MODEL:-claude-opus-4-8[1m]}" --output-format json --max-turns "$BUILDER_PREPICK_MAX_TURNS" -p "$(cat <<PREPICK
 You are the pre-pick stage of the overnight builder pipeline for $PROJECT_NAME. Your only job in this call is to pick exactly ONE issue from the unstarted backlog to work on next. You are NOT implementing anything in this call — that happens in the next stage. Pick the issue and exit immediately.
 
 ## Unstarted backlog (pickable)
@@ -504,7 +516,7 @@ ASSIGNED
     STEP2_TEXT="**Pick exactly ONE issue** from the unstarted backlog to implement fully"
   fi
 
-  if claude --allowedTools "$BUILDER_ALLOWED_TOOLS" --disallowedTools "$BUILDER_DISALLOWED_TOOLS" --model "${AI_CODE_MODEL:-claude-opus-4-8[1m]}" --effort "${AI_CODE_EFFORT:-max}" --output-format json -p "$(cat <<PROMPT
+  run_with_timeout "$BUILDER_ITERATION_TIMEOUT" claude --allowedTools "$BUILDER_ALLOWED_TOOLS" --disallowedTools "$BUILDER_DISALLOWED_TOOLS" --model "${AI_CODE_MODEL:-claude-opus-4-8[1m]}" --effort "${AI_CODE_EFFORT:-max}" --output-format json -p "$(cat <<PROMPT
 You are iteration $RUN of the overnight self-improving enhancer for $PROJECT_NAME at $REPO. This is Aaron Chung's portfolio project — he's an ex-AWS SDE2 targeting SWE roles at companies like Notion, Airtable, and Linear.
 
 You are running in a loop. Previous iterations tonight and from recent days have already made improvements. Your job is to find the NEXT most impactful thing to do that hasn't been done yet.
@@ -711,7 +723,14 @@ SCREENSHOT_ROUTE:NONE
 - Build: pass/fail
 - Category: feat|fix|a11y|test|perf|style|refactor|chore
 PROMPT
-)" --max-turns "$BUILDER_MAX_TURNS" 2>&1 > "$CLAUDE_JSON"; then
+)" --max-turns "$BUILDER_MAX_TURNS" 2>&1 > "$CLAUDE_JSON"
+  CLAUDE_EXIT=$?
+  if [ "$CLAUDE_EXIT" -eq 124 ]; then
+    echo "⏱️  Run $RUN timed out after ${BUILDER_ITERATION_TIMEOUT}s — killed the hung claude call" | tee -a "$RUN_LOG"
+    log_error "Run $RUN timed out after ${BUILDER_ITERATION_TIMEOUT}s (hung claude implement call killed)"
+    thread_send "⏱️ *Builder Run $RUN timed out* — the implement call exceeded ${BUILDER_ITERATION_TIMEOUT}s and was killed. Scored as a failure; the loop continues."
+  fi
+  if [ "$CLAUDE_EXIT" -eq 0 ]; then
     # Extract text result and append to run log
     CLAUDE_RESULT=$(python3 -c "
 import json, sys
@@ -912,7 +931,7 @@ $PRIMARY_ISSUE"
               # Merge conflict — ask Claude to resolve
               CONFLICT_FILES=$(git diff --name-only --diff-filter=U 2>/dev/null || true)
               if [ -n "$CONFLICT_FILES" ]; then
-                claude --allowedTools "$BUILDER_ALLOWED_TOOLS" --disallowedTools "$BUILDER_DISALLOWED_TOOLS" --model "${AI_CODE_MODEL:-claude-opus-4-8[1m]}" --effort "${AI_CODE_EFFORT:-max}" -p "You are in the $REPO repo on branch $ITER_BRANCH. There are merge conflicts with master in these files:
+                run_with_timeout "$BUILDER_FIX_TIMEOUT" claude --allowedTools "$BUILDER_ALLOWED_TOOLS" --disallowedTools "$BUILDER_DISALLOWED_TOOLS" --model "${AI_CODE_MODEL:-claude-opus-4-8[1m]}" --effort "${AI_CODE_EFFORT:-max}" -p "You are in the $REPO repo on branch $ITER_BRANCH. There are merge conflicts with master in these files:
 $CONFLICT_FILES
 
 Resolve all merge conflicts, keeping the intent of both sides. Then run npm test and npm run build to verify. Commit the resolution with message 'fix: resolve merge conflicts with master'. End the commit body with exactly this trailer (do not self-report a different model version): $COAUTHOR_TRAILER" --max-turns "$BUILDER_FIX_MAX_TURNS" 2>&1 | tee -a "$RUN_LOG" || true
@@ -927,7 +946,7 @@ Resolve all merge conflicts, keeping the intent of both sides. Then run npm test
             if [ "$CI_PASS" = "false" ]; then
               FAIL_SNIPPET=$(echo "$BUILD_OUT" | tail -30)
               TEST_SNIPPET=$(echo "$TEST_OUT" | tail -30)
-              claude --allowedTools "$BUILDER_ALLOWED_TOOLS" --disallowedTools "$BUILDER_DISALLOWED_TOOLS" --model "${AI_CODE_MODEL:-claude-opus-4-8[1m]}" --effort "${AI_CODE_EFFORT:-max}" -p "You are in the $REPO repo on branch $ITER_BRANCH. The CI build or tests are failing. Fix the issues and commit the fix.
+              run_with_timeout "$BUILDER_FIX_TIMEOUT" claude --allowedTools "$BUILDER_ALLOWED_TOOLS" --disallowedTools "$BUILDER_DISALLOWED_TOOLS" --model "${AI_CODE_MODEL:-claude-opus-4-8[1m]}" --effort "${AI_CODE_EFFORT:-max}" -p "You are in the $REPO repo on branch $ITER_BRANCH. The CI build or tests are failing. Fix the issues and commit the fix.
 
 Build output (last 30 lines):
 $FAIL_SNIPPET

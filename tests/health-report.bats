@@ -138,3 +138,40 @@ print(anomalies[0] if anomalies else 'none')
     ! grep -q "chat.postMessage" "$TEST_TMPDIR/mock_calls/curl" || true
   fi
 }
+
+# bats test_tags=slow
+@test "health-report: flags a stale builder (last run >=3 days ago)" {
+  # Regression guard for 2026-07-09: a hung builder produced no metrics for 5
+  # days and nothing surfaced it. Latest metrics row is 5 days old → the
+  # staleness anomaly must fire in the generated report.
+  local stale
+  stale=$(python3 -c 'import datetime; print(datetime.date.today() - datetime.timedelta(days=5))')
+  {
+    echo "$METRICS_HEADER"
+    echo "$stale,1,23:00:00,23:10:00,600,2,100,102,2,1,0,0,0,1500.0,true"
+  } > "$OUTPUT_DIR/lift-metrics.csv"
+  echo "date,run,input_tokens,output_tokens,cache_read_tokens,cache_create_tokens,nightly_output_total,duration_sec" > "$OUTPUT_DIR/lift-usage-tracking.csv"
+  echo "date,iterations_before,iterations_after,tokens_before,tokens_after,cooldown_before,cooldown_after,reasons" > "$OUTPUT_DIR/lift-tune-log.csv"
+  echo "date,focus,discoveries_count,priorities,duration_sec" > "$OUTPUT_DIR/lift-discovery-metrics.csv"
+
+  run bash "$PILOT_DIR/scripts/health-report.sh" --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Builder has not run in 5 days"* ]]
+}
+
+# bats test_tags=slow
+@test "health-report: no staleness anomaly when builder ran today" {
+  local today
+  today=$(python3 -c 'import datetime; print(datetime.date.today())')
+  {
+    echo "$METRICS_HEADER"
+    echo "$today,1,23:00:00,23:10:00,600,2,100,102,2,1,0,0,0,1500.0,true"
+  } > "$OUTPUT_DIR/lift-metrics.csv"
+  echo "date,run,input_tokens,output_tokens,cache_read_tokens,cache_create_tokens,nightly_output_total,duration_sec" > "$OUTPUT_DIR/lift-usage-tracking.csv"
+  echo "date,iterations_before,iterations_after,tokens_before,tokens_after,cooldown_before,cooldown_after,reasons" > "$OUTPUT_DIR/lift-tune-log.csv"
+  echo "date,focus,discoveries_count,priorities,duration_sec" > "$OUTPUT_DIR/lift-discovery-metrics.csv"
+
+  run bash "$PILOT_DIR/scripts/health-report.sh" --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"has not run in"* ]]
+}

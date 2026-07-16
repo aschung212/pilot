@@ -71,6 +71,21 @@ commits_per_iter = total_commits / successful if successful else 0
 
 # Nights = distinct dates with at least one builder iteration.
 nights_run = len({r['date'] for r in metrics_rows if r.get('date')})
+
+# Builder staleness — computed across ALL history, not just this week, so a
+# stuck builder is caught before a full week of silence. On 2026-07-09 one
+# iteration's claude call hung with no timeout; because launchd will not start a
+# new instance while the previous one is still alive, the builder produced no
+# output for 5 days and nothing flagged it. The builder is scheduled Mon-Fri.
+all_metrics = read_csv(f'{output_dir}/lift-metrics.csv')
+builder_dates = [r['date'] for r in all_metrics if r.get('date')]
+last_builder_date = max(builder_dates) if builder_dates else None
+days_since_builder = None
+if last_builder_date:
+    try:
+        days_since_builder = (now.date() - datetime.strptime(last_builder_date, '%Y-%m-%d').date()).days
+    except ValueError:
+        days_since_builder = None
 # Builder runtime per night = sum of iteration durations / nights.
 total_builder_sec = sum(int(r.get('duration_sec', 0) or 0) for r in metrics_rows)
 avg_builder_min = (total_builder_sec / nights_run / 60) if nights_run else 0
@@ -100,11 +115,20 @@ if discoveries_created == 0 and discovery_runs > 0:
     anomalies.append('Discovery ran but created zero issues')
 if nights_run == 0:
     anomalies.append('No pipeline runs detected this week')
+# Builder scheduled Mon-Fri; >=3 days since the last iteration means at least one
+# weekday run was missed — the signature of a hung/blocked builder holding its
+# launchd slot. 999 = never ran (no metrics history at all).
+if days_since_builder is None:
+    anomalies.append('Builder has no run history — has it ever run?')
+elif days_since_builder >= 3:
+    anomalies.append(f'Builder has not run in {days_since_builder} days (last: {last_builder_date}; expected Mon-Fri nightly) — check for a hung/blocked builder holding its launchd slot')
 
 # ── Output ──
 report = {
     'period': f'{week_start} to {now.strftime("%Y-%m-%d")}',
     'nights_run': nights_run,
+    'last_builder_date': last_builder_date or 'never',
+    'days_since_builder': days_since_builder if days_since_builder is not None else 999,
     'avg_builder_min': round(avg_builder_min, 1),
     'total_iterations': total_iterations,
     'successful_iterations': successful,
@@ -128,6 +152,8 @@ PYEOF
 # Parse JSON into bash variables
 PERIOD=$(echo "$REPORT_DATA" | python3 -c "import json,sys; print(json.load(sys.stdin)['period'])")
 NIGHTS=$(echo "$REPORT_DATA" | python3 -c "import json,sys; print(json.load(sys.stdin)['nights_run'])")
+LAST_BUILDER=$(echo "$REPORT_DATA" | python3 -c "import json,sys; print(json.load(sys.stdin)['last_builder_date'])")
+DAYS_SINCE_BUILDER=$(echo "$REPORT_DATA" | python3 -c "import json,sys; print(json.load(sys.stdin)['days_since_builder'])")
 AVG_MIN=$(echo "$REPORT_DATA" | python3 -c "import json,sys; print(json.load(sys.stdin)['avg_builder_min'])")
 ITERATIONS=$(echo "$REPORT_DATA" | python3 -c "import json,sys; print(json.load(sys.stdin)['total_iterations'])")
 SUCCESSFUL=$(echo "$REPORT_DATA" | python3 -c "import json,sys; print(json.load(sys.stdin)['successful_iterations'])")
@@ -169,6 +195,7 @@ cat > "$REPORT" << REPORT_EOF
 
 ## Pipeline Activity
 - **Nights run:** $NIGHTS
+- **Last builder run:** $LAST_BUILDER (${DAYS_SINCE_BUILDER}d ago)
 - **Avg builder runtime:** ${AVG_MIN}m
 - **Builder iterations:** $ITERATIONS ($SUCCESSFUL successful, $STALLS stalls)
 - **Stall rate:** ${STALL_RATE}%

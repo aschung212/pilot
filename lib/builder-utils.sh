@@ -170,3 +170,85 @@ model_display_name() {
     printf 'Claude %s\n' "$family"
   fi
 }
+
+# ── kill_process_tree ─────────────────────────────────────────────────────────
+# Recursively signal a process and all of its descendants, deepest-first.
+# macOS has no `setsid`/`pkill -g` we can rely on from a non-login launchd shell,
+# and killing only the parent leaves reparented children alive — that's exactly
+# what left 14 orphaned node/git/gh processes when the 2026-07-09 builder hung.
+# Input: $1 = root pid, $2 = signal (default TERM)
+kill_process_tree() {
+  local pid="$1" sig="${2:-TERM}" child
+  for child in $(pgrep -P "$pid" 2>/dev/null); do
+    kill_process_tree "$child" "$sig"
+  done
+  kill -"$sig" "$pid" 2>/dev/null || true
+}
+
+# ── run_with_timeout ──────────────────────────────────────────────────────────
+# Portable wall-clock timeout — this Mac ships neither GNU `timeout` nor
+# `gtimeout`, so we roll our own watchdog. Runs "$@", and if it is still alive
+# after <seconds>, kills its whole process tree (TERM, then KILL after a grace
+# period) and returns 124 (GNU `timeout` convention). Otherwise returns the
+# command's own exit code. stdout/stderr pass through untouched so this is safe
+# inside `$(...)` capture and `... | tee` pipes.
+#
+# Why this exists: the overnight builder's `claude` calls had no timeout. On
+# 2026-07-09 one call hung indefinitely (0% CPU, blocked); because launchd's
+# StartCalendarInterval will not launch a new instance while the previous one is
+# still running, that single stuck process silently suppressed every scheduled
+# builder run for 5 days. A per-call timeout makes a hung call self-terminate so
+# the iteration is scored a failure and the night finishes normally.
+#
+# Input: $1 = timeout seconds (0 or non-numeric = run with no timeout), $2.. = command
+run_with_timeout() {
+  local secs="$1"; shift
+  if ! [[ "$secs" =~ ^[0-9]+$ ]] || [ "$secs" -eq 0 ]; then
+    "$@"
+    return $?
+  fi
+
+  local fired
+  fired="$(mktemp -t pilot-rwt.XXXXXX)" || { "$@"; return $?; }
+
+  "$@" &
+  local cmd_pid=$!
+  local start_s=$SECONDS
+
+  # Watchdog: poll (so it can exit early when the command finishes) up to $secs,
+  # then kill the tree. stdout→/dev/null so it never corrupts a captured stream.
+  (
+    waited=0
+    while [ "$waited" -lt "$secs" ]; do
+      kill -0 "$cmd_pid" 2>/dev/null || exit 0
+      sleep 1
+      waited=$((waited + 1))
+    done
+    if kill -0 "$cmd_pid" 2>/dev/null; then
+      printf timeout > "$fired"      # marker written BEFORE the kill
+      kill_process_tree "$cmd_pid" TERM
+      sleep 5
+      kill -0 "$cmd_pid" 2>/dev/null && kill_process_tree "$cmd_pid" KILL
+    fi
+  ) >/dev/null 2>&1 &
+  local watch_pid=$!
+
+  wait "$cmd_pid" 2>/dev/null
+  local rc=$?
+  local elapsed=$((SECONDS - start_s))
+
+  kill "$watch_pid" 2>/dev/null || true   # cancel the watchdog if it is still waiting
+  wait "$watch_pid" 2>/dev/null || true
+
+  # Timeout detected two ways: the watchdog's marker file (authoritative — set
+  # even if the command traps TERM and exits 0), OR a fallback for harnesses
+  # where the marker write races the reap (e.g. bats) — the command was killed
+  # by a signal at/after the deadline. Either path returns the GNU convention 124.
+  local timed_out=""
+  [ -s "$fired" ] && timed_out=1
+  [ -z "$timed_out" ] && [ "$elapsed" -ge "$secs" ] && [ "$rc" -gt 128 ] && timed_out=1
+  rm -f "$fired"
+
+  [ -n "$timed_out" ] && return 124
+  return "$rc"
+}
