@@ -16,6 +16,7 @@ SCRIPT_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
 
 TRACKER="$SCRIPT_DIR/../adapters/tracker.sh"
 NOTIFY="$SCRIPT_DIR/../adapters/notify.sh"
+AI_RESEARCH="$SCRIPT_DIR/../adapters/ai-research.sh"
 source "$SCRIPT_DIR/../lib/log.sh"
 LOG_COMPONENT="discover"
 
@@ -235,26 +236,28 @@ List the specific queries and URLs you searched (for the search log):
 SEARCH:query or URL searched
 PROMPT
 
-# Phase 1: Gemini does web research (native Google Search — better results, saves Claude tokens)
+# Phase 1: Gemini web research via the ai-research adapter (Gemini API — Flash
+# with Google Search grounding). Native web search returns real URLs/versions
+# and saves Claude tokens. Uses the API key, not the retired OAuth CLI.
 GEMINI_RESEARCH="$OUTPUT_DIR/lift-discover-$DATE-gemini-research.md"
 echo "  🔍 Phase 1: Gemini web research ($FOCUS)..." | tee -a "$RUN_LOG"
 RESEARCH_PROMPT="You are a product research assistant. $SEARCH_PROMPT Be specific — include URLs, app names, version numbers, Reddit post links, dates. Structure your findings as a numbered list. Do NOT make recommendations — just report what you find."
-GEMINI_RESEARCH_PROMPT_FILE=$(mktemp)
-echo "$RESEARCH_PROMPT" > "$GEMINI_RESEARCH_PROMPT_FILE"
-gemini -p "$(cat "$GEMINI_RESEARCH_PROMPT_FILE")" -m gemini-2.5-flash --sandbox 2>&1 | grep -v "^Registering\|^Server\|^Scheduling\|^Executing\|^MCP\|^Loaded cached\|^Attempt" > "$GEMINI_RESEARCH" 2>/dev/null || true
-# Fall back to Flash if Pro fails or empty
-if [ ! -s "$GEMINI_RESEARCH" ]; then
-  echo "  ⚠️ Pro unavailable, falling back to Flash..." | tee -a "$RUN_LOG"
-  gemini -p "$(cat "$GEMINI_RESEARCH_PROMPT_FILE")" -m gemini-2.5-flash --sandbox 2>&1 | grep -v "^Registering\|^Server\|^Scheduling\|^Executing\|^MCP\|^Loaded cached" > "$GEMINI_RESEARCH" 2>/dev/null || true
+RESEARCH_ERR=$(mktemp)
+if bash "$AI_RESEARCH" prompt "$RESEARCH_PROMPT" --output "$GEMINI_RESEARCH" 2>"$RESEARCH_ERR" && [ -s "$GEMINI_RESEARCH" ]; then
+  echo "  ✅ Gemini research complete ($(wc -l < "$GEMINI_RESEARCH" | tr -d ' ') lines)" | tee -a "$RUN_LOG"
+else
+  RESEARCH_REASON=$(head -1 "$RESEARCH_ERR" 2>/dev/null)
+  echo "  ⚠️ Gemini research FAILED — ${RESEARCH_REASON:-unknown}. Claude will self-research (degraded quality)." | tee -a "$RUN_LOG"
+  echo "Gemini research was unavailable for this run (${RESEARCH_REASON:-unknown})." > "$GEMINI_RESEARCH"
+  # FAIL LOUD — a silent research outage (the retired Gemini OAuth CLI) degraded
+  # discovery for ~2.5 weeks before anyone noticed. Alert instead of skipping quietly.
+  slack_send "⚠️ *Discovery — web research FAILED*
+Focus: $FOCUS | Date: $DATE
+Gemini research adapter error: ${RESEARCH_REASON:-unknown}
+Discovery continues but Claude self-researches (lower quality). Check GEMINI_API_KEY / adapters/ai-research.sh." || true
 fi
-rm -f "$GEMINI_RESEARCH_PROMPT_FILE"
-# If Gemini failed entirely, skip Phase 1 gracefully
-if [ ! -s "$GEMINI_RESEARCH" ]; then
-  echo "  ⚠️ Gemini research unavailable, Claude will do its own research." | tee -a "$RUN_LOG"
-  echo "Gemini research was unavailable for this run." > "$GEMINI_RESEARCH"
-fi
+rm -f "$RESEARCH_ERR"
 GEMINI_FINDINGS=$(cat "$GEMINI_RESEARCH" 2>/dev/null || echo "Gemini research unavailable.")
-echo "  ✅ Gemini research complete ($(wc -l < "$GEMINI_RESEARCH" | tr -d ' ') lines)" | tee -a "$RUN_LOG"
 
 # Append Gemini research to the Claude prompt file
 cat >> "$PROMPT_FILE" <<GEMINI_APPEND

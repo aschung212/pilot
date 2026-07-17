@@ -24,6 +24,7 @@ SCRIPT_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
 
 TRACKER="$SCRIPT_DIR/../adapters/tracker.sh"
 NOTIFY="$SCRIPT_DIR/../adapters/notify.sh"
+AI_RESEARCH="$SCRIPT_DIR/../adapters/ai-research.sh"
 source "$SCRIPT_DIR/../lib/log.sh"
 LOG_COMPONENT="triage"
 
@@ -172,13 +173,22 @@ SUB_ISSUE_2_PRIORITY: ...
 SUB_ISSUE_2_DESCRIPTION: ...
 (repeat for each sub-issue, max 4)"
 
-  # Run Gemini Flash, fall back to Claude Sonnet if Gemini fails
+  # Run Gemini Flash via the ai-research adapter (Gemini API key; no web
+  # grounding needed — triage reasons over the prompt context, not the web).
+  # Fall back to Claude Sonnet if Gemini is unavailable or returns no verdict.
   TRIAGE_MODEL="gemini-2.5-flash"
-  TRIAGE_RESULT=$(gemini -p "$TRIAGE_PROMPT" -m gemini-2.5-flash --sandbox 2>&1 | grep -v "^Registering\|^Server\|^Scheduling\|^Executing\|^MCP\|^Loaded cached\|^Attempt" || true)
+  TRIAGE_RESULT=$(bash "$AI_RESEARCH" prompt "$TRIAGE_PROMPT" --no-grounding 2>>"$TRIAGE_LOG" || true)
 
   # Validate we got a real verdict, not an error
   if ! echo "$TRIAGE_RESULT" | grep -qE 'VERDICT: (APPROVE|ENHANCE|SKIP|FLAG|RESCOPE)'; then
     echo "    (Gemini failed, falling back to Claude Sonnet)" | tee -a "$TRIAGE_LOG"
+    # FAIL LOUD once per run — if the Gemini path is down (API key / tier issue),
+    # surface it instead of silently burning Claude tokens on every issue all night.
+    if [ -z "${TRIAGE_GEMINI_ALERTED:-}" ]; then
+      TRIAGE_GEMINI_ALERTED=1
+      bash "$NOTIFY" --as triage thread-reply automation "$THREAD_TS" "⚠️ *Triage — Gemini Flash unavailable*
+Falling back to Claude Sonnet for triage this run (higher token cost). Check GEMINI_API_KEY / adapters/ai-research.sh." >/dev/null 2>&1 || true
+    fi
     TRIAGE_MODEL="claude-sonnet"
     # Triage only needs read access — no writes, no shell beyond git log
     TRIAGE_ALLOWED_TOOLS="Read,Glob,Grep,Bash(git log:*),Bash(git diff:*),Bash(ls:*),Bash(cat:*)"

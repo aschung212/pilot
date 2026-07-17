@@ -76,10 +76,10 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
 ### 1. Discovery Agent
 **Script:** `~/Documents/Scripts/lift-discover.sh`
 **Schedule:** Nightly at 11 PM (first stage of overnight pipeline)
-**Models:** Gemini 2.5 Flash (web research) + Claude Opus (analysis)
+**Models:** Gemini 2.5 Flash (web research, via the Gemini REST API + Google Search grounding) + Claude Opus (analysis)
 
 **What it does:**
-- Phase 1 (Gemini): Searches the web for the current focus area — competitors, UI trends, performance, accessibility, testing, SEO, data viz, onboarding, DX/CI, PWA patterns, security, monetization
+- Phase 1 (Gemini): Searches the web for the current focus area — competitors, UI trends, performance, accessibility, testing, SEO, data viz, onboarding, DX/CI, PWA patterns, security, monetization. Runs through the `ai-research.sh` adapter, which calls the Gemini API with the `GEMINI_API_KEY` (Flash is free-tier; the retired OAuth CLI is no longer used). If research fails it **alerts loudly** and Claude self-researches instead of degrading silently.
 - Phase 2 (Claude): Cross-references findings against the codebase, existing backlog, canceled issues, and product decisions. Creates specific, actionable GitHub issues.
 
 **Focus area rotation:** 12 focus areas in a weighted 19-slot cycle (~3 weeks). High-value areas (competitors, UI trends) run every ~6 days. Slow-moving areas (security, monetization) run every ~19 days.
@@ -89,7 +89,7 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
 ### 2. Triage Agent
 **Script:** `~/Documents/Scripts/lift-triage.sh`
 **Schedule:** Nightly after discovery (second stage)
-**Model:** Gemini 2.5 Flash (with Claude Sonnet fallback)
+**Model:** Gemini 2.5 Flash (via the Gemini REST API, no grounding — reasons over the prompt) with Claude Sonnet fallback
 
 **What it does:**
 - Reviews every untriaged backlog issue
@@ -222,11 +222,11 @@ Pipeline is fully decomposed — each service has its own launchd plist. No orch
 
 | Agent | Model | Rationale |
 |---|---|---|
-| Discovery (research) | Gemini 2.5 Flash | Native Google Search, saves Claude tokens |
+| Discovery (research) | Gemini 2.5 Flash (Gemini API + Google Search grounding) | Grounded web search returns real URLs/versions, saves Claude tokens. Free tier via `GEMINI_API_KEY`. |
 | Discovery (analysis) | Claude Opus 4.8 (1M, max effort) | Best at codebase reasoning + issue creation |
-| Triage | Gemini 2.5 Flash (Claude Sonnet fallback) | Good at planning, uses Google AI Plus (free) |
+| Triage | Gemini 2.5 Flash via Gemini API (Claude Sonnet fallback) | Good at planning; free-tier Flash via `GEMINI_API_KEY`. **Not** Google AI Pro — that consumer subscription grants no API access. |
 | Builder | Claude Opus 4.8 (1M, max effort) | Best coding model, complex multi-file changes |
-| Review (push) | Gemini 3.1 Pro | Inline via pre-push hook — adversarial review of full branch diff. Single model, single pass. Paid via Google AI Pro ($20/mo). |
+| Review (commit) | Claude Sonnet (`PILOT_REVIEW_MODEL` overridable) | Headless `claude -p` adversarial review of full branch diff — a different model than the Opus builder. Re-platformed off the retired Gemini CLI on 2026-07-16; uses the same Claude auth as the builder (no separate billing). |
 | Cover letter review | Gemini 2.5 Flash | Second opinion, zero extra cost |
 
 ---
@@ -254,17 +254,17 @@ Pipeline is fully decomposed — each service has its own launchd plist. No orch
 ## Data Flow
 
 ```
-Gemini (web research)
+Gemini Flash (web research — grounded Google Search via Gemini API)
     ↓
 Claude (analysis) → GitHub issues created
     ↓
-Gemini (triage) → Implementation plans added as comments
+Gemini Flash (triage — via Gemini API, Claude Sonnet fallback) → Implementation plans added as comments
     ↓
 Claude Opus (builder) → Per-issue branch + code committed
     ↓
-Gemini 3.1 Pro adversarial review (pre-push hook):
-    → Single model, single pass — reviews full branch diff
-    → Claude sees findings inline and fixes before push completes
+Claude adversarial review on commit (review-router.sh, a different model than the builder):
+    → Single pass — reviews full branch diff
+    → Builder sees findings inline and fixes before push completes
     → No PR comments — issues resolved before PR creation
     ↓
 Per-issue PR created with structured description (Linear links, test results, review verdicts)
@@ -688,3 +688,14 @@ Hardening after a hung `claude` call took the builder offline for 5 days (2026-0
 - **Weekly health report gained a builder-staleness anomaly** (`scripts/health-report.sh`): computes days-since-last-builder-run across all metrics history and flags ≥3 days idle (plus a "Last builder run" line). Defense-in-depth backstop for hang modes outside a `claude` call; the per-call timeout is the primary prevention.
 - Tests: `tests/builder.bats` +7 (timeout / tree-kill), `tests/health-report.bats` +2 (staleness). Suite 218 green.
 - **No change to Aaron's workflow.**
+
+### 2026-07-17 — Discovery research + triage re-platformed off the retired Gemini CLI
+
+Companion to the 2026-07-16 review re-platform. Google retired the free "Gemini Code Assist for individuals" OAuth tier on 2026-06-18, so every bare `gemini` CLI call (default OAuth auth) now returns `IneligibleTierError` / `UNSUPPORTED_CLIENT`. This silently broke discovery web research (no fallback → empty findings, Claude self-researched blind) and forced triage onto its Claude Sonnet fallback every night — both undetected, same failure class as the review outage.
+
+- **`adapters/ai-research.sh` rewritten to call the Gemini REST API directly** (`generateContent`) with the `GEMINI_API_KEY` from `~/.zshenv` — no `gemini` CLI, no OAuth. Flash is free on the API key (Pro is billed and excluded from the free tier). Research keeps **Google Search grounding** (`tools:[{google_search:{}}]`) so it still returns real URLs/versions instead of hallucinations; `--no-grounding` disables it for pure-reasoning callers. The adapter now **fails loud** — non-zero exit + reason on stderr — instead of swallowing errors with `|| true`. Verified live: grounded Flash returns fresh sourced results; a bad key/model surfaces the API error and exits non-zero.
+- **`scripts/discover.sh` Phase 1 routed through the adapter** (was calling `gemini` directly, twice, in violation of the adapter pattern). On failure it posts a **loud Slack alert** to the discovery thread and Claude self-researches — no more silent degradation.
+- **`scripts/triage.sh` routed through the adapter** (`--no-grounding`), keeping the Claude Sonnet fallback. Restores free Flash triage (was quietly burning Claude tokens on the fallback every night). Alerts **once per run** if the Gemini path is down.
+- **Interactive `gemini` CLI is untouched** — the pipeline no longer depends on the CLI binary at all, so this cannot disturb Aaron's manual `gemini` usage.
+- **Model Allocation + Data Flow updated.** Also corrected the stale "Gemini 3.1 Pro" review references these two structures still carried from before the 2026-07-16 migration (review is Claude Sonnet now). Deeper review-prose (hook timing, the 2026-04-06 entries) still predates the migration and needs a separate cleanup pass.
+- **Tests:** `ai-research.bats` rewritten for the REST/curl contract + fail-loud cases; `curl` mock extended for `-o`/`generateContent`; `triage.bats` dry-run fed via the mocked API; `GEMINI_API_KEY` added to `test_helper.bash` for hermeticity. Full suite green: **223/223**.

@@ -9,9 +9,9 @@ An autonomous multi-agent pipeline that discovers, triages, implements, and revi
 Every night, Pilot:
 
 1. **Discovers** improvement opportunities by researching competitors, UI trends, accessibility standards, and more (Gemini + Claude)
-2. **Triages** each discovery — approves, enhances, rescopes, skips, or flags for your review (Gemini, Claude fallback)
+2. **Triages** each discovery — approves, enhances, rescopes, skips, or flags for your review (Gemini Flash, Claude fallback)
 3. **Implements** the highest-priority approved issues — writes code, runs tests, commits, creates PRs (Claude Opus)
-4. **Reviews** its own PRs with Gemini 3.1 Pro adversarial review (Codex fallback)
+4. **Reviews** its own PRs with a headless Claude adversarial review — a different model than the builder
 5. **Cleans up** — archives completed issues, deduplicates the backlog
 6. **Self-tunes** — adjusts iteration budgets, token limits, and review quality based on outcomes
 
@@ -66,7 +66,7 @@ The interactive setup wizard walks you through:
 
 - **macOS** (uses launchd for scheduling)
 - **[Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)** — code generation + reviews
-- **[Gemini CLI](https://github.com/google-gemini/gemini-cli)** (optional) — web research + triage
+- **Gemini API key** (`GEMINI_API_KEY` in `~/.zshenv`) — web research + triage (free-tier Flash via the REST API; the retired OAuth `gemini` CLI is no longer used)
 - **Issue tracker CLI** — [Linear CLI](https://github.com/linear/linear-cli) or `gh` (GitHub CLI)
 - **Node.js** — for building/testing your project
 - **Slack** (optional) — incoming webhooks for basic notifications, bot token for threaded updates
@@ -117,8 +117,8 @@ Components are swappable via thin adapter scripts:
 | Issue Tracker | Linear | GitHub Issues, Jira |
 | Notifications | Slack | Discord, email |
 | Code Generation | Claude Opus 4.8 (1M, max effort) | — |
-| Research | Gemini 3.1 Pro | ChatGPT, Perplexity |
-| Code Review | Gemini 3.1 Pro (Codex fallback) | — |
+| Research | Gemini 2.5 Flash (Gemini API + Google Search grounding) | ChatGPT, Perplexity |
+| Code Review | Claude Sonnet (headless, on commit) | — |
 
 To swap a tool, rewrite one adapter file (~20 lines). No pipeline scripts change.
 
@@ -175,8 +175,8 @@ pilot/
     tracker.sh               # Issue tracker (Linear)
     notify.sh                # Notifications (Slack, --as bot identity)
     ai-code.sh               # Code generation (Claude)
-    ai-research.sh           # Research (Gemini)
-    ai-review.sh             # Code review (3-layer: Flash + Pro + Sonnet)
+    ai-research.sh           # Research (Gemini API — Flash + Google Search grounding)
+    ai-review.sh             # Code review adapter (deprecated; review now runs via review-router.sh)
   lib/
     log.sh                   # Shared logging library
     builder-utils.sh         # Builder helper functions

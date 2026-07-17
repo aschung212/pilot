@@ -204,12 +204,9 @@ OPTION_3_CONS: con c"
 
 # bats test_tags=fast
 @test "triage: dry-run does not create issues or post to Slack" {
-  export MOCK_GEMINI_OUTPUT="VERDICT: APPROVE
-CONFIDENCE: 8
-REASON: Good issue
-IMPLEMENTATION_PLAN: Fix the thing
-COMPLEXITY: small
-SUGGESTED_PRIORITY: 2"
+  # Triage now reasons via the ai-research adapter (Gemini REST API → curl).
+  # Feed the verdict back through the mocked API response.
+  export MOCK_CURL_OUTPUT='{"candidates":[{"content":{"parts":[{"text":"VERDICT: APPROVE\nCONFIDENCE: 8\nREASON: Good issue\nIMPLEMENTATION_PLAN: Fix the thing\nCOMPLEXITY: small\nSUGGESTED_PRIORITY: 2"}]}}]}'
   run bash "$TRIAGE" --dry-run
   [ "$status" -eq 0 ]
   # In dry-run mode, tracker comment-add should not be called
