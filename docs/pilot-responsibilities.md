@@ -23,7 +23,7 @@ updated: 2026-05-08
 | **Merge green PRs** | PRs with MERGE verdict — CI passed, 3-layer review clean. Merge directly. | github.com/aschung212/Lift/pulls |
 | **Review yellow PRs** | PRs with REVIEW verdict — read review comments in PR description, decide merge/comment | github.com/aschung212/Lift/pulls |
 | **Ignore failed PRs** | PRs labeled `ci:failed` auto-retry next night — no action needed | — |
-| **Check per-PR review status** | Each PR has inline review results in description (Gemini 3.1 Pro pre-push review). PRs now include a Verification section (steps to test, expected behavior, risk assessment) and a Vercel preview URL for quick testing. | PR description shows review findings + verification checklist + preview link |
+| **Check per-PR review status** | Each PR has inline review results in description (Claude Sonnet post-commit review). PRs now include a Verification section (steps to test, expected behavior, risk assessment) and a Vercel preview URL for quick testing. | PR description shows review findings + verification checklist + preview link |
 | **Test on preview deploys** | Click the Vercel preview URL in the PR description. Preview mode is enabled by default — Supabase writes are blocked (safe to use real Google account). Toggle "Enable writes" in the blue banner if you need full write-path testing. Test account available: test@lift.local / LiftTest2026! | Vercel preview URL in PR body |
 | **Test locally if needed** | `cd ~/development/lift && npm run dev` | localhost |
 | **Merge or request changes** | GitHub PR UI — merge individually, each PR is self-contained | Vercel auto-deploys on merge to master |
@@ -70,7 +70,7 @@ updated: 2026-05-08
 - Decomposed pipeline — 6 independent services, each with own launchd plist:
   - Discovery (Sun/Tue/Thu 10 PM): finds improvements, creates Linear issues (Gemini + Claude)
   - Triage (Sun/Tue/Thu 10:30 PM): reviews issues, adds implementation plans (Gemini, Claude fallback)
-  - Builder (Mon-Fri 11 PM): implements per-issue branches (`enhance/LIFT-{id}-{date}`), per-issue PRs with Gemini 3.1 Pro adversarial review (pre-push hook, single model) + auto-fix cycle, CI check. Uses git worktree for isolation. Failed PRs (`ci:failed`) auto-retried next night.
+  - Builder (Mon-Fri 11 PM): implements per-issue branches (`enhance/LIFT-{id}-{date}`), per-issue PRs with Claude Sonnet adversarial review (post-commit hook, single model) + auto-fix cycle, CI check. Uses git worktree for isolation. Failed PRs (`ci:failed`) auto-retried next night.
   - Cleanup: runs at end of builder — archives completed/canceled, deduplicates backlog
   - Budget Tuner (Sunday 9 PM): adjusts iteration/token caps based on week's data
   - Review Tuner (Sunday 9:15 PM): learns from PR feedback
@@ -171,6 +171,20 @@ If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/T
 ---
 
 ## Changelog
+
+### 2026-07-17 — Adversarial review migrated off the (retired) Gemini CLI to Claude
+
+**Symptom.** Every builder PR since ~2026-06-30 shipped with no working adversarial review — silently. The review step printed an auth error and the build continued.
+
+**Root cause.** Google retired the free "Gemini Code Assist for individuals" OAuth tier on 2026-06-18; the `gemini` CLI now returns `IneligibleTierError` / `UNSUPPORTED_CLIENT` ("migrate to Antigravity"). Google AI Pro/Ultra grant **no** Gemini API or CLI access, and the Gemini API free tier excludes all Pro models (`limit: 0`), so the paid AI Pro subscription could not rescue it. The Codex fallback was independently broken (missing binary).
+
+**Fix.** `~/.claude/scripts/review-router.sh` now runs a headless `claude -p` reviewer (Sonnet by default, a different model than the Opus builder) on the same Claude auth that powers the builder — no new vendor, no extra billing. Same post-commit hook, env, and log paths. It now **fails loud** (Slack alert to #lift-automation + a `REVIEW FAILED` marker) instead of silently skipping. `builder.sh` prompt/Slack strings and all docs updated. Old Gemini script backed up at `review-router.sh.gemini.bak-13c1d68`.
+
+**New for Aaron:**
+- Nightly PRs are reviewed again (by Claude Sonnet) — morning triage review findings resume.
+- Override the reviewer model with `PILOT_REVIEW_MODEL` (e.g. `opus`); tune the wall-clock cap with `PILOT_REVIEW_TIMEOUT`.
+- **Same root cause also breaks discovery research + triage** — both still call the bare `gemini` CLI (triage has a Claude fallback; discovery does not). Decide whether to point those at the Gemini API key (Flash works free) or move them to Claude too. Not fixed in this change.
+- To reinstate Gemini for review specifically, enable pay-as-you-go billing on the Gemini API project (~$0.10/review, separate from AI Pro) and switch the script/model back.
 
 ### 2026-06-25 — Builder commit trailers now correctly attribute Claude Opus 4.8
 

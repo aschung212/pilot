@@ -11,7 +11,7 @@ Every night, Pilot:
 1. **Discovers** improvement opportunities by researching competitors, UI trends, accessibility standards, and more (Gemini + Claude)
 2. **Triages** each discovery — approves, enhances, rescopes, skips, or flags for your review (Gemini, Claude fallback)
 3. **Implements** the highest-priority approved issues — writes code, runs tests, commits, creates PRs (Claude Opus)
-4. **Reviews** its own PRs with Gemini 3.1 Pro adversarial review (Codex fallback)
+4. **Reviews** its own PRs with a Claude Sonnet adversarial review (independent model from the Opus author)
 5. **Cleans up** — archives completed issues, deduplicates the backlog
 6. **Self-tunes** — adjusts iteration budgets, token limits, and review quality based on outcomes
 
@@ -118,7 +118,7 @@ Components are swappable via thin adapter scripts:
 | Notifications | Slack | Discord, email |
 | Code Generation | Claude Opus 4.8 (1M, max effort) | — |
 | Research | Gemini 3.1 Pro | ChatGPT, Perplexity |
-| Code Review | Gemini 3.1 Pro (Codex fallback) | — |
+| Code Review | Claude Sonnet (independent from Opus builder) | — |
 
 To swap a tool, rewrite one adapter file (~20 lines). No pipeline scripts change.
 

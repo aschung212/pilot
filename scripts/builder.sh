@@ -491,7 +491,7 @@ for line in sys.stdin:
   # counting HEAD would score that as success while $ITER_BRANCH stays empty.
   COMMITS_BEFORE=$(git rev-list --count "${DEFAULT_BRANCH:-master}".."$ITER_BRANCH" 2>/dev/null || echo 0)
   CLAUDE_JSON="$OUTPUT_DIR/lift-enhance-$DATE-run${RUN}-output.json"
-  # Enable review-router builder mode — Gemini 3.1 Pro review on commit, Codex fallback
+  # Enable review-router builder mode — Claude (Sonnet) adversarial review via post-commit hook
   export PILOT_BUILDER=1
   export PILOT_REVIEW_LOG="$OUTPUT_DIR/lift-review-$DATE-run${RUN}.log"
 
@@ -621,23 +621,20 @@ Do NOT fix discoveries in the same iteration — just create an issue. Fix them 
 
 ## Review feedback and push workflow
 
-A Gemini 3.1 Pro review runs automatically via a Husky pre-push git hook. It reviews the full branch diff before the push completes.
+A Claude adversarial review runs automatically via a Husky post-commit git hook — after each commit it sends the full branch diff (vs master) to an independent Claude model (Sonnet, different from the one writing this code) and prints the findings inline. No separate command is needed; the review appears right after your commit completes.
 
-### Step 1: Implement and commit
-Write code, run tests, commit with conventional prefixes. No review runs on commit — focus on shipping.
+### Step 1: Implement and commit (FOREGROUND ONLY)
+Write code, run tests, then commit with conventional prefixes. The post-commit review runs synchronously and can take 2-5 minutes — this is expected; wait for it. DO NOT pass run_in_background:true on this or any \`git commit\` / \`git push\` / git-hook call. Backgrounding triggers the early-exit failure mode where you receive a "background task completed" notification and reply with a chatty one-liner instead of the structured response. That pattern caused the 2026-05-13 P2 audit finding (25/60 runs missing ISSUE_DONE markers — full iteration of compute wasted on each).
 
-### Step 2: Push for review (FOREGROUND ONLY)
-When your implementation is complete, push to remote IN THE FOREGROUND:
-  git push -u origin $ITER_BRANCH
-DO NOT pass run_in_background:true on this or any \`git commit\` / \`git push\` / pre-push-hook call. The pre-push hook sends the FULL branch diff to Gemini 3.1 Pro for adversarial review and can take 2-5 minutes — wait for it synchronously. Backgrounding triggers the early-exit failure mode where you receive a "background task completed" notification and reply with a chatty one-liner instead of the structured response. That pattern caused the 2026-05-13 P2 audit finding (25/60 runs missing ISSUE_DONE markers — full iteration of compute wasted on each).
-
-### Step 3: Address findings
-Read the review output carefully. If Pro identifies real issues (P1/P2):
-1. Fix them in new commits
-2. Push again — another review runs automatically
-3. One or two review passes is typically sufficient
-
+### Step 2: Address findings
+Read the review output carefully. If the reviewer identifies real issues (P1/P2):
+1. Fix them in new commits — each commit triggers a fresh review
+2. One or two review passes is typically sufficient
 If findings are false positives (e.g. concerns about persistence that's already handled by a watcher), ignore them and move on.
+
+### Step 3: Push (FOREGROUND ONLY)
+When your implementation is complete and findings are addressed, push to remote IN THE FOREGROUND:
+  git push -u origin $ITER_BRANCH
 
 ### Step 4: Output structured response, THEN exit
 After your final push completes, you MUST emit the full structured response below (Plan / Changes / Issue updates / Verification / Screenshots / Summary) **as your final assistant message in this session**. The pipeline parses ISSUE_DONE / ISSUE_PROGRESS markers from this response — if you exit without them, the issue is dropped from tomorrow's tracking and gets re-attempted next night, wasting a full iteration of compute. "The pipeline handles PR creation" does NOT mean you can skip the response format. Specifically: do NOT exit with a chatty one-liner like "background task completed, pipeline will handle the rest" — that is the failure mode that caused the 2026-05-06 P1 and 2026-05-13 P2 audit findings.
@@ -659,9 +656,9 @@ After your final push completes, you MUST emit the full structured response belo
 - IMPORTANT: Focus on SHIPPING, not perfecting. Commit working improvements and move on.
 - Do NOT create, switch, or rename branches — no \`git checkout\`, \`git switch\`, \`git branch\`, or \`git checkout -b\`. You are already on \`$ITER_BRANCH\`; commit directly to it. Work committed to any other branch is invisible to the pipeline and produces no PR (see "Branch-per-issue mode" above).
 - Do NOT create pull requests — the pipeline handles PR creation after your work is done.
-- You MUST push to remote when your implementation is complete: git push -u origin $ITER_BRANCH. A Gemini 3.1 Pro review runs automatically via the pre-push hook. After addressing any findings, push again.
+- You MUST push to remote when your implementation is complete: git push -u origin $ITER_BRANCH. A Claude adversarial review runs automatically after each commit (post-commit hook); address any P1/P2 findings in follow-up commits before you push.
 - CRITICAL — DO NOT DELEGATE: do this work yourself in this session. Do not invoke Task, Agent, or any sub-agent. The pipeline parses your final assistant message for the structured \`## Issue updates\` markers below; if you delegate, those markers end up inside a sub-agent's response that the pipeline cannot read, and the iteration gets re-run on the same issue tomorrow night. The 2026-04-29 builder run produced 12 duplicate PRs because the parent kept exiting after one turn while the real work was happening in a sub-agent. Stay in your own session, emit the markers, finish the iteration.
-- CRITICAL — DO NOT BACKGROUND GIT OPERATIONS: run \`git commit\`, \`git push\`, and pre-push hooks in the FOREGROUND (see Step 2 above for the full rationale). Do not pass run_in_background:true for any git command. That pattern caused the 2026-05-06 P1 (33/55 runs) and the 2026-05-13 P2 (25/60 runs) audit findings. Foreground git, run the Step 4 self-check, then exit.
+- CRITICAL — DO NOT BACKGROUND GIT OPERATIONS: run \`git commit\`, \`git push\`, and git hooks in the FOREGROUND (see Step 1 above for the full rationale). Do not pass run_in_background:true for any git command. That pattern caused the 2026-05-06 P1 (33/55 runs) and the 2026-05-13 P2 (25/60 runs) audit findings. Foreground git, run the Step 4 self-check, then exit.
 
 ## Output format
 
@@ -823,7 +820,7 @@ $CLAUDE_RESULT"
           PRIMARY_ISSUE=$(grep -oE "ISSUE_PROGRESS:${ISSUE_PREFIX}-[0-9]+" "$RUN_LOG" 2>/dev/null | head -1 | sed "s/ISSUE_PROGRESS://" || true)
         fi
         # Fallback: when Claude doesn't emit ISSUE_DONE markers (happens when
-        # the inline pre-push review hook makes Claude exit with a terse ack),
+        # the inline post-commit review hook makes Claude exit with a terse ack),
         # infer the issue from the commit messages so the branch still gets
         # renamed and the dedupe guard below can fire.
         if [ -z "$PRIMARY_ISSUE" ]; then
@@ -1185,7 +1182,7 @@ Test on your phone: $PREVIEW_URL" 2>/dev/null || true
         thread_send "*Run $RUN complete* — $NEW_COMMITS commit(s)
 ${DONE_LINKS}
 
-🔍 Reviewed inline (Gemini 3.1 Pro on commit, Codex fallback)
+🔍 Reviewed inline (Claude adversarial review on commit)
 
 ${ITER_COMMITS:+*Commits:*
 $ITER_COMMITS}

@@ -135,24 +135,23 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
 **Manual override:** `PICKED_ISSUE_OVERRIDE=LIFT-NNN ./scripts/builder.sh 1` forces the first iteration to work on a specific issue, skipping the pre-pick stage. Intended for one-off "fix this issue now" runs; the override is cleared after use so a multi-iteration loop falls back to normal pre-picking for subsequent iterations.
 
 ### 4. Inline Hook-Based Review
-**When:** Automatically during Claude's implementation, via git pre-push hook
-**Model:** Gemini 3.1 Pro (single model, adversarial review of full branch diff)
+**When:** Automatically during Claude's implementation, after each commit via git post-commit hook
+**Model:** Claude Sonnet (single model, adversarial review of the full branch diff, independent from the Opus builder). Overridable via `PILOT_REVIEW_MODEL`.
 **Script:** `~/.claude/scripts/review-router.sh` (builder mode, triggered by `PILOT_BUILDER=1`)
 
 **How it works:**
-- **Primary mechanism — git pre-push hook (fires for any git operation, including headless `claude -p` mode):**
-  - `.husky/pre-push`: Gemini 3.1 Pro adversarial review before push (blocks until complete)
-- **No post-commit hook** — removed 2026-04-06. Gemini Flash had a 71% false positive rate, generating noise that trained developers to ignore review output.
-- **No Codex (GPT-5.4)** — removed 2026-04-06. Head-to-head testing showed Gemini 3.1 Pro matched or exceeded Codex on all findings (8 bugs found vs Codex's 5 on the same diff).
-- **Builder prompt references Gemini 3.1 Pro pre-push hook** — Claude sees review findings and fixes before push completes.
-- **Claude fixes issues naturally:** Findings appear inline; builder prompt instructs Claude to fix before pushing. No separate fix iteration needed.
+- **Primary mechanism — git post-commit hook (fires for any git operation, including headless `claude -p` mode):**
+  - `.husky/post-commit`: after each commit, sends the full branch diff (vs master) + changed files + resolved imports + CLAUDE.md to a headless `claude -p` reviewer (default Sonnet) for an adversarial audit. Blocks until complete.
+- **Same Claude auth that powers the builder** — a different model (Sonnet) than the Opus author, so it's genuinely adversarial, with no external vendor and no extra billing. Replaced the Gemini CLI on 2026-07-16 (see Note below).
+- **No Codex (GPT-5.4)** — removed 2026-04-06 as a distinct reviewer; the broken `codex review` fallback was dropped in the 2026-07-16 migration.
+- **Builder prompt references the post-commit Claude review** — Claude sees findings inline right after committing and fixes them in follow-up commits before pushing. No separate fix iteration needed.
 - **No PR comments:** Issues resolved before PR creation. PRs that reach morning triage are already reviewed.
 - **Audit trail:** Output logged to `$OUTPUT_DIR/lift-review-$DATE-run${RUN}.log`.
-- **Graceful degradation:** If Gemini is unavailable, review is skipped and build continues.
+- **Fails loud (not silently):** if the reviewer errors or times out, the hook emits a `REVIEW FAILED` marker and (in builder mode) posts a Slack alert to #lift-automation, then lets the build continue — it never blocks the push, but the failure is visible. This replaced the old silent-skip behavior that hid a ~2.5-week Gemini outage.
 
 **Secondary mechanism — builder-side pattern scan (`lib/security-scan.sh`):** Before the builder pushes an iteration branch (`scripts/builder.sh`, after commit detection), it greps the full `master...HEAD` diff for prompt-injection / exfiltration signatures: network calls, non-public env access, dynamic code execution (`eval`/`exec`/`spawn`/`Function`), base64/charcode obfuscation, crypto-mining strings, and image-beacon exfiltration. A hit blocks the push for that iteration (`continue`) and posts to Slack. This is a regex heuristic, so it carries false-positive risk and the patterns are tuned narrowly: the `Function` arm is case-sensitive (lowercase `function ()` IIFEs are fine — LIFT-545, 2026-05-12) and the `exec` arm excludes method calls so `RegExp.prototype.exec()` is not flagged (LIFT-653, 2026-05-27). Regression-tested by `tests/security-scan.bats`.
 
-> **Note:** The review pipeline has been progressively simplified: Gemini  review (Flash → Pro → Sonnet) was replaced with inline hooks on 2026-04-06, then further simplified to Gemini 3.1 Pro only on 2026-04-06 after head-to-head testing showed Flash's 71% false positive rate and Gemini 3.1 Pro matching/exceeding Codex. The old adapter (`adapters/ai-review.sh`) is deprecated; the review tuner was removed on 2026-05-11.
+> **Note:** The review pipeline has been progressively simplified, then re-platformed off Google. Gemini review (Flash → Pro → Sonnet) was replaced with inline hooks on 2026-04-06, simplified to Gemini 3.1 Pro only, then **migrated to a headless Claude reviewer on 2026-07-16**. Google retired the free "Gemini Code Assist for individuals" OAuth tier on 2026-06-18 — the `gemini` CLI began returning `IneligibleTierError` / `UNSUPPORTED_CLIENT` ("migrate to Antigravity"), which silently broke every review from ~2026-06-30 on. Google AI Pro/Ultra grant no Gemini API or CLI access, and the Gemini API free tier excludes all Pro models (`limit: 0`), so restoring Gemini would require enabling paid Cloud billing. The reviewer is now a `claude -p` call (Sonnet by default, `PILOT_REVIEW_MODEL` overridable) on the same auth as the builder. The old adapter (`adapters/ai-review.sh`) is deprecated; the review tuner was removed on 2026-05-11.
 
 ### 5. Auto-Tuners
 **Scripts:** `lift-tune-budget.sh`
@@ -226,7 +225,7 @@ Pipeline is fully decomposed — each service has its own launchd plist. No orch
 | Discovery (analysis) | Claude Opus 4.8 (1M, max effort) | Best at codebase reasoning + issue creation |
 | Triage | Gemini 2.5 Flash (Claude Sonnet fallback) | Good at planning, uses Google AI Plus (free) |
 | Builder | Claude Opus 4.8 (1M, max effort) | Best coding model, complex multi-file changes |
-| Review (push) | Gemini 3.1 Pro | Inline via pre-push hook — adversarial review of full branch diff. Single model, single pass. Paid via Google AI Pro ($20/mo). |
+| Review (commit) | Claude Sonnet | Inline via post-commit hook — adversarial review of full branch diff, independent from the Opus builder. Single model, single pass. Uses the builder's Claude auth (no extra billing). |
 | Cover letter review | Gemini 2.5 Flash | Second opinion, zero extra cost |
 
 ---
@@ -262,9 +261,9 @@ Gemini (triage) → Implementation plans added as comments
     ↓
 Claude Opus (builder) → Per-issue branch + code committed
     ↓
-Gemini 3.1 Pro adversarial review (pre-push hook):
-    → Single model, single pass — reviews full branch diff
-    → Claude sees findings inline and fixes before push completes
+Claude adversarial review (post-commit hook):
+    → Single model (Sonnet), single pass — reviews full branch diff, independent from the Opus author
+    → Claude sees findings inline after each commit and fixes before pushing
     → No PR comments — issues resolved before PR creation
     ↓
 Per-issue PR created with structured description (Linear links, test results, review verdicts)
@@ -304,6 +303,14 @@ See [Pilot Responsibilities](pilot-responsibilities.md) for the complete list of
 ---
 
 ## Changelog
+
+### 2026-07-17 — Review re-platformed from Gemini CLI to headless Claude
+
+**Problem.** The `gemini` CLI's OAuth-personal auth started returning `IneligibleTierError` / `UNSUPPORTED_CLIENT` after Google retired the free "Gemini Code Assist for individuals" tier on 2026-06-18. Every review from ~2026-06-30 failed silently (graceful-degradation skip — no alert for ~2.5 weeks). Verified live: Google AI Pro/Ultra provide no API/CLI entitlement; the Gemini API free key works for Flash but returns 429 `limit: 0` for all Pro models; the `codex review` fallback binary was missing (ENOENT).
+
+**Fix.** Rewrote the review engine in `~/.claude/scripts/review-router.sh`: Gemini CLI → `claude -p --model "$PILOT_REVIEW_MODEL"` (default `sonnet`), `--max-turns 1`, `Read,Glob,Grep` allowed, wrapped in a `$PILOT_REVIEW_TIMEOUT` (180s) wall-clock guard (no `gtimeout` on this host). Context building (CLAUDE.md + full changed files + resolved imports + diff), the post-commit hook interface, `PILOT_BUILDER`/`PILOT_REVIEW_LOG` env, and log paths are unchanged. Added fail-loud: on reviewer error/timeout it emits `REVIEW FAILED`, posts a #lift-automation Slack alert in builder mode, and exits 0 (never blocks the push). `scripts/builder.sh` prompt corrected — the review fires on **post-commit**, not pre-push (a long-standing doc drift) — and its model/Slack strings updated. Backup: `review-router.sh.gemini.bak-13c1d68`; verified end-to-end against planted P1/P2 bugs before cutover.
+
+**Not covered here.** Discovery research (`ai-research.sh`) and triage still invoke the bare `gemini` CLI and are broken by the same cutoff (triage has a Claude fallback; discovery does not). Tracked separately.
 
 ### 2026-06-25 — Builder commit co-author trailer pinned to the configured model
 
