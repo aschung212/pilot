@@ -49,13 +49,19 @@ if [ "${1:-}" = "--check" ]; then
       ERRORS=$((ERRORS + 1))
     fi
   done
-  for tool in gemini linear; do
-    if command -v "$tool" &>/dev/null; then
-      ok "$tool installed (optional)"
-    else
-      warn "$tool not found (optional)"
-    fi
-  done
+  # linear CLI is optional (GitHub Issues is the default tracker)
+  if command -v linear &>/dev/null; then
+    ok "linear installed (optional)"
+  else
+    warn "linear not found (optional)"
+  fi
+  # Web research + triage use the Gemini REST API (free-tier Flash), not the
+  # retired 'gemini' OAuth CLI — only the API key matters now.
+  if [ -n "${GEMINI_API_KEY:-}" ]; then
+    ok "GEMINI_API_KEY set (web research + triage enabled)"
+  else
+    warn "GEMINI_API_KEY not set (optional) — research/triage fall back to Claude"
+  fi
 
   # Check optional tools
   if command -v bats &>/dev/null; then
@@ -218,13 +224,13 @@ ask "Code reasoning effort — low/medium/high/max [max]: "
 read -r AI_CODE_EFFORT
 AI_CODE_EFFORT="${AI_CODE_EFFORT:-max}"
 
-if command -v gemini &>/dev/null; then
-  ok "Gemini CLI found"
+if [ -n "${GEMINI_API_KEY:-}" ]; then
+  ok "GEMINI_API_KEY found — web research + triage enabled (free-tier Flash via the Gemini API)"
   ask "Research model [gemini-2.5-flash]: "
   read -r AI_RESEARCH_MODEL
   AI_RESEARCH_MODEL="${AI_RESEARCH_MODEL:-gemini-2.5-flash}"
 else
-  warn "Gemini CLI not found (optional). Skipping research model."
+  warn "GEMINI_API_KEY not set (add it to ~/.zshenv). Research falls back to Claude; triage uses its Claude fallback."
   AI_RESEARCH_MODEL=""
 fi
 

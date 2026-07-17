@@ -1,22 +1,53 @@
 #!/bin/bash
-# Mock: curl — logs calls, returns success
-# Override with MOCK_CURL_OUTPUT, MOCK_CURL_EXIT, MOCK_CURL_HTTP_CODE
+# Mock: curl — logs calls, returns canned responses.
+# Override with MOCK_CURL_OUTPUT, MOCK_CURL_EXIT, MOCK_CURL_HTTP_CODE.
+#
+# Handles three shapes the pipeline uses:
+#   1. Slack webhook check:  curl -o /dev/null -w "%{http_code}" ...   → echoes the code
+#   2. Gemini research call: curl -o <file> -w "%{http_code}" .../generateContent
+#        → writes a canned Gemini JSON body to <file>, echoes the code
+#   3. Slack bot API:        curl -X POST .../chat.postMessage ...     → echoes ok JSON
 MOCK_LOG="${TEST_TMPDIR:-/tmp}/mock_calls"
 mkdir -p "$MOCK_LOG"
 echo "$@" >> "$MOCK_LOG/curl"
 
+# Parse -o <file> target, -w %{http_code} presence, and whether this is a
+# Gemini generateContent request (the ai-research adapter).
+out_file=""
+want_http_code=""
+is_gemini=""
+prev=""
+for arg in "$@"; do
+  [ "$prev" = "-o" ] && out_file="$arg"
+  [ "$arg" = "%{http_code}" ] && want_http_code="1"
+  case "$arg" in *generateContent*) is_gemini="1" ;; esac
+  prev="$arg"
+done
+
+# Explicit override wins (lets a test inject an exact API body / error).
 if [ -n "${MOCK_CURL_OUTPUT:-}" ]; then
-  echo "$MOCK_CURL_OUTPUT"
+  if [ -n "$out_file" ]; then
+    printf '%s' "$MOCK_CURL_OUTPUT" > "$out_file"
+    [ -n "$want_http_code" ] && echo "${MOCK_CURL_HTTP_CODE:-200}"
+  else
+    echo "$MOCK_CURL_OUTPUT"
+  fi
   exit "${MOCK_CURL_EXIT:-0}"
 fi
 
-# Check if -w "%{http_code}" was passed (webhook check)
-for arg in "$@"; do
-  if [ "$arg" = "%{http_code}" ]; then
-    echo "${MOCK_CURL_HTTP_CODE:-200}"
-    exit 0
-  fi
-done
+# Default Gemini research response (ai-research adapter happy path).
+if [ -n "$is_gemini" ]; then
+  body='{"candidates":[{"content":{"parts":[{"text":"1. Mock research finding. Source: https://example.com/mock"}]}}]}'
+  if [ -n "$out_file" ]; then printf '%s' "$body" > "$out_file"; else echo "$body"; fi
+  echo "${MOCK_CURL_HTTP_CODE:-200}"
+  exit "${MOCK_CURL_EXIT:-0}"
+fi
 
-# Default: Slack API success
+# Webhook-style check: -w "%{http_code}" (notify.sh) → echo just the code.
+if [ -n "$want_http_code" ]; then
+  echo "${MOCK_CURL_HTTP_CODE:-200}"
+  exit 0
+fi
+
+# Default: Slack API success.
 echo '{"ok": true, "ts": "1234567890.123456"}'

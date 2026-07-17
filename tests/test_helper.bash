@@ -53,6 +53,11 @@ setup() {
   # AI model config
   export AI_CODE_MODEL="opus"
   export AI_RESEARCH_MODEL="gemini-2.5-flash"
+  # Deterministic fake Gemini API key. ai-research.sh now authenticates to the
+  # Gemini REST API with this (the OAuth CLI tier was retired 2026-06-18), so a
+  # fixed value keeps tests hermetic — overrides any real key leaked from the
+  # parent shell and lets CI run without one. curl is mocked, so it never leaves.
+  export GEMINI_API_KEY="test-gemini-key"
   export AI_REVIEW_MODEL_L1="gemini-2.5-flash"
   export AI_REVIEW_MODEL_L2="gemini-2.5-pro"
   export AI_REVIEW_MODEL_L3="sonnet"
