@@ -58,15 +58,6 @@ setup() {
   # fixed value keeps tests hermetic — overrides any real key leaked from the
   # parent shell and lets CI run without one. curl is mocked, so it never leaves.
   export GEMINI_API_KEY="test-gemini-key"
-  export AI_REVIEW_MODEL_L1="gemini-2.5-flash"
-  export AI_REVIEW_MODEL_L2="gemini-2.5-pro"
-  export AI_REVIEW_MODEL_L3="sonnet"
-  export AI_REVIEW_FALLBACK_L1="sonnet"
-  export AI_REVIEW_FALLBACK_L2="gemini-2.5-flash"
-  export AI_REVIEW_FALLBACK_L3="haiku"
-  export AI_REVIEW_TIMEOUT_L1=5
-  export AI_REVIEW_TIMEOUT_L2=5
-  export AI_REVIEW_TIMEOUT_L3=5
 
   # Put mocks first on PATH so they intercept external commands
   export PATH="$MOCK_DIR:$PATH"
