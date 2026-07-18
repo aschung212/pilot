@@ -103,7 +103,7 @@ updated: 2026-05-08
 
 ## Builder Auth (re-login)
 
-Every pilot agent (`builder`, `discover`, `triage`, `architect`, `pipeline-auditor`, plus the `ai-code`/`ai-review` adapters) authenticates the `claude` CLI the same way. Under launchd there is no interactive session to refresh an OAuth login, so a keychain login can silently lapse for days — and when it does, **every** agent 401s. The builder's pre-pick stage fails on every iteration and the night produces zero PRs (root cause of the 2026-06-19 / 2026-06-22 dead nights).
+Every pilot agent (`builder`, `discover`, `triage`, `architect`, `pipeline-auditor`, plus the `ai-code` adapter and the `review-router.sh` reviewer) authenticates the `claude` CLI the same way. Under launchd there is no interactive session to refresh an OAuth login, so a keychain login can silently lapse for days — and when it does, **every** agent 401s. The builder's pre-pick stage fails on every iteration and the night produces zero PRs (root cause of the 2026-06-19 / 2026-06-22 dead nights).
 
 As of 2026-06-23 the builder runs an **auth preflight** before its main loop: one cheap `claude` probe. On an auth failure it aborts immediately and posts a 🚨 alert to **#lift-automation** (and the build thread) instead of grinding through doomed iterations. If you see that alert — or a run of zero-PR nights — the token has lapsed.
 
@@ -135,7 +135,7 @@ If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/T
 |---|---|
 | `~/development/pilot/` | Pipeline repo — all scripts, adapters, config, docs ([GitHub](https://github.com/aschung212/pilot)) |
 | `~/Documents/Scripts/lift-*.sh` | Symlinks to `~/development/pilot/scripts/` — launchd points here |
-| `~/development/pilot/adapters/` | Swappable adapters: tracker, notify, ai-code, ai-research, ai-review |
+| `~/development/pilot/adapters/` | Swappable adapters: tracker, notify, ai-code, ai-research |
 | `~/development/pilot/lib/log.sh` | Shared structured logging (unified log, error alerting) |
 | `~/development/lift/CLAUDE.md` | Lift project standards (design, code, workflow) |
 | `~/.claude/commands/ai-review.md` | Daily review slash command |
@@ -171,6 +171,27 @@ If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/T
 ---
 
 ## Changelog
+
+### 2026-07-17 — Deleted the dead `ai-review.sh` adapter (last `gemini` CLI caller in the repo)
+
+**What prompted it.** Sweeping for leftover callers of the retired `gemini` CLI turned up `adapters/ai-review.sh`, which still shelled out to `gemini -p ... --sandbox`. Those calls have failed with `IneligibleTierError` since 2026-06-18, and the adapter's Claude fallback meant it would have "worked" only on its degraded path — the same silent-degradation class fixed for research/triage in 089d662 and for the reviewer in 13c1d68.
+
+**What we found instead.** The adapter was dead code, not a broken dependency:
+- No callers anywhere — repo-wide, `~/.claude/scripts`, `~/.claude/commands`, launchd plists, and hooks. (The only home-wide hits were Claude session transcripts.)
+- Its own header, dated 2026-04-06, read *"Safe to delete after 2026-05-06 if no issues arise."* That was 72 days ago.
+- `tests/adapter-contracts.bats` had an "ai-review.sh interface" section whose only test actually asserts **triage** verdicts — the contract test was gutted in 2026-04-06 and just the label survived.
+- The live `project.env` already had every `AI_REVIEW_*` var commented out, and `data/lift-review-learnings.md` no longer exists — so the adapter was reading "No learnings yet." even on its fallback path.
+
+**Fix.** Deleted rather than migrated — migrating would have meant maintaining a REST-API path for code nothing calls.
+- Removed `adapters/ai-review.sh` and `tests/ai-review.bats` (9 tests).
+- Removed the `AI_REVIEW_MODEL_L*` / `AI_REVIEW_FALLBACK_L*` / `AI_REVIEW_TIMEOUT_L*` vars from `project.env.example`, `init.sh`, and `tests/test_helper.bash` — confirmed the deleted adapter was their only reader.
+- Removed the dead 3-layer review wizard from `init.sh` (it prompted for L1/L2/L3 models that nothing consumed); it now just states that review runs via the hook.
+- Relabeled the mislabeled contract-test section; updated `CLAUDE.md`, `README.md`, `docs/adapters.md`, and both source-of-truth docs to state that review is a **hook, not an adapter**.
+- Also corrected `docs/adapters.md`, which still listed research as "Gemini CLI" — it moved to the REST API in 089d662.
+
+Test suite: 223 → 214 passing, 0 failures (the 9 removed tests only covered the deleted adapter). No behavior change — nothing executed this code.
+
+**New for Aaron:** Nothing to do. No runtime path changed. If you ever want a swappable review backend again, note the deliberate design decision recorded in `docs/adapters.md`: review is a PostToolUse hook (`~/.claude/scripts/review-router.sh`), so it has no adapter surface — reinstating one is a new design, not a revert.
 
 ### 2026-07-17 — Adversarial review migrated off the (retired) Gemini CLI to Claude
 

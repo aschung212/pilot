@@ -38,9 +38,12 @@ The `tracker.sh` adapter routes automatically based on project name or issue ID 
 All external tools are accessed through adapters in `adapters/`:
 - `tracker.sh` — issue tracking (GitHub Issues + Linear dual-backend)
 - `notify.sh` — Slack notifications (webhooks + Bot API)
-- `ai-review.sh` — 3-layer code review pipeline
 - `ai-code.sh` — code generation (Claude)
-- `ai-research.sh` — web research (Gemini)
+- `ai-research.sh` — web research (Gemini REST API)
+
+Adversarial code review is **not** an adapter — it runs inline via
+`~/.claude/scripts/review-router.sh` (headless `claude -p`) as a PostToolUse hook.
+The old `adapters/ai-review.sh` was deleted 2026-07-17; see the changelog.
 
 Never call external tools directly from scripts — always go through the adapter. This enables swapping backends without touching every script.
 

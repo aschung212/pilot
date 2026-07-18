@@ -151,7 +151,7 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
 
 **Secondary mechanism — builder-side pattern scan (`lib/security-scan.sh`):** Before the builder pushes an iteration branch (`scripts/builder.sh`, after commit detection), it greps the full `master...HEAD` diff for prompt-injection / exfiltration signatures: network calls, non-public env access, dynamic code execution (`eval`/`exec`/`spawn`/`Function`), base64/charcode obfuscation, crypto-mining strings, and image-beacon exfiltration. A hit blocks the push for that iteration (`continue`) and posts to Slack. This is a regex heuristic, so it carries false-positive risk and the patterns are tuned narrowly: the `Function` arm is case-sensitive (lowercase `function ()` IIFEs are fine — LIFT-545, 2026-05-12) and the `exec` arm excludes method calls so `RegExp.prototype.exec()` is not flagged (LIFT-653, 2026-05-27). Regression-tested by `tests/security-scan.bats`.
 
-> **Note:** The review pipeline has been progressively simplified, then re-platformed off Google. Gemini review (Flash → Pro → Sonnet) was replaced with inline hooks on 2026-04-06, simplified to Gemini 3.1 Pro only, then **migrated to a headless Claude reviewer on 2026-07-16**. Google retired the free "Gemini Code Assist for individuals" OAuth tier on 2026-06-18 — the `gemini` CLI began returning `IneligibleTierError` / `UNSUPPORTED_CLIENT` ("migrate to Antigravity"), which silently broke every review from ~2026-06-30 on. Google AI Pro/Ultra grant no Gemini API or CLI access, and the Gemini API free tier excludes all Pro models (`limit: 0`), so restoring Gemini would require enabling paid Cloud billing. The reviewer is now a `claude -p` call (Sonnet by default, `PILOT_REVIEW_MODEL` overridable) on the same auth as the builder. The old adapter (`adapters/ai-review.sh`) is deprecated; the review tuner was removed on 2026-05-11.
+> **Note:** The review pipeline has been progressively simplified, then re-platformed off Google. Gemini review (Flash → Pro → Sonnet) was replaced with inline hooks on 2026-04-06, simplified to Gemini 3.1 Pro only, then **migrated to a headless Claude reviewer on 2026-07-16**. Google retired the free "Gemini Code Assist for individuals" OAuth tier on 2026-06-18 — the `gemini` CLI began returning `IneligibleTierError` / `UNSUPPORTED_CLIENT` ("migrate to Antigravity"), which silently broke every review from ~2026-06-30 on. Google AI Pro/Ultra grant no Gemini API or CLI access, and the Gemini API free tier excludes all Pro models (`limit: 0`), so restoring Gemini would require enabling paid Cloud billing. The reviewer is now a `claude -p` call (Sonnet by default, `PILOT_REVIEW_MODEL` overridable) on the same auth as the builder. The old adapter (`adapters/ai-review.sh`) was deprecated 2026-04-06 and **deleted 2026-07-17** — it had no callers, and its `gemini` CLI calls would have failed the same way; the review tuner was removed on 2026-05-11. There is deliberately no review adapter: review is a hook, not a swappable backend.
 
 ### 5. Auto-Tuners
 **Scripts:** `lift-tune-budget.sh`
@@ -164,7 +164,7 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
 - Runtime-aware: if pipeline uses <25% of the overnight window, suggests raising iteration cap
 - Detects context bloat: flags when per-iteration duration trends up >50%
 
-> **Removed 2026-05-11:** The review tuner (`scripts/tune-reviews.sh`, weekly at Sun 21:15) was deleted. It was deprecated 2026-04-06 when the review system moved to inline hooks (no PR comments to learn from). The frozen `lift-review-learnings.md` data file is retained for the deprecated `adapters/ai-review.sh`.
+> **Removed 2026-05-11:** The review tuner (`scripts/tune-reviews.sh`, weekly at Sun 21:15) was deleted. It was deprecated 2026-04-06 when the review system moved to inline hooks (no PR comments to learn from). Its `lift-review-learnings.md` data file had one remaining reader, `adapters/ai-review.sh`; that adapter was deleted 2026-07-17, so nothing reads the learnings file now.
 
 ### 6. Issue Cleanup
 **Script:** `cleanup.sh`
@@ -196,7 +196,7 @@ The pipeline has a bats-core test suite with **199 tests across 22 test files** 
 
 **Key testing patterns:**
 - **Auto-discovery smoke tests:** Automatically detect new scripts in `scripts/` and `adapters/` that lack corresponding test files. These tests fail when coverage is missing, ensuring the test suite grows with the codebase.
-- **Adapter contract tests:** Verify that all swappable adapters (tracker, notify, ai-code, ai-research, ai-review) conform to their expected interface — correct flags, exit codes, and output formats.
+- **Adapter contract tests:** Verify that all swappable adapters (tracker, notify, ai-code, ai-research) conform to their expected interface — correct flags, exit codes, and output formats.
 - **PATH-based mocking:** Mock commands (claude, gemini, linear, curl, gh) are injected via PATH so scripts under test call mocks instead of real external services. No network calls during tests.
 - **Test mode guard:** All scripts check `_PILOT_TEST_MODE=1` and skip `project.env` sourcing when set, allowing tests to run in isolation without Lift-specific configuration.
 
@@ -287,7 +287,7 @@ Feedback loop → Aaron's corrections improve future reviews + discovery
 |---|---|
 | `~/development/pilot/` | Version-controlled repo for all pipeline code ([GitHub](https://github.com/aschung212/pilot)) |
 | `~/development/pilot/scripts/` | All pipeline scripts (symlinked to `~/Documents/Scripts/`) |
-| `~/development/pilot/adapters/` | Swappable tool adapters (tracker, notify, ai-code, ai-research, ai-review) |
+| `~/development/pilot/adapters/` | Swappable tool adapters (tracker, notify, ai-code, ai-research) |
 | `~/development/pilot/lib/log.sh` | Shared structured logging library |
 | `~/development/pilot/config/budget.conf` | Budget config (auto-tuned) |
 | `~/development/pilot/tests/` | bats-core test suite (199 tests, 22 files, two-tier execution) |

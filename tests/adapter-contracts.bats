@@ -79,7 +79,7 @@ load test_helper
   [ "$status" -eq 0 ]
 }
 
-# ── ai-review.sh interface (DEPRECATED — adapter no longer called by builder) ──
+# ── triage verdict vocabulary ───────────────────────────────────────────────
 
 # bats test_tags=fast
 @test "contract: triage verdicts are one of five values" {
