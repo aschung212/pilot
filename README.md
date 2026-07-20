@@ -176,7 +176,6 @@ pilot/
     notify.sh                # Notifications (Slack, --as bot identity)
     ai-code.sh               # Code generation (Claude)
     ai-research.sh           # Research (Gemini API — Flash + Google Search grounding)
-    ai-review.sh             # Code review adapter (deprecated; review now runs via review-router.sh)
   lib/
     log.sh                   # Shared logging library
     builder-utils.sh         # Builder helper functions

@@ -235,51 +235,11 @@ else
 fi
 
 echo ""
-say "   Review Pipeline"
+say "   Code Review"
 echo ""
-echo "  The review pipeline uses 3 layers with different models:"
-echo "    L1 — mechanical gate (per-iteration, fast)"
-echo "    L2 — architecture review (per-PR, thorough)"
-echo "    L3 — self-check (per-PR, catches what L1+L2 missed)"
-echo ""
-ask "Use 3-layer cross-model review? (y/n) [y]: "
-read -r USE_3LAYER
-USE_3LAYER="${USE_3LAYER:-y}"
-
-if [ "$USE_3LAYER" = "y" ]; then
-  ask "L1 model (mechanical gate) [gemini-2.5-flash]: "
-  read -r AI_REVIEW_MODEL_L1
-  AI_REVIEW_MODEL_L1="${AI_REVIEW_MODEL_L1:-gemini-2.5-flash}"
-
-  ask "L2 model (architecture) [gemini-2.5-pro]: "
-  read -r AI_REVIEW_MODEL_L2
-  AI_REVIEW_MODEL_L2="${AI_REVIEW_MODEL_L2:-gemini-2.5-pro}"
-
-  ask "L3 model (self-check) [sonnet]: "
-  read -r AI_REVIEW_MODEL_L3
-  AI_REVIEW_MODEL_L3="${AI_REVIEW_MODEL_L3:-sonnet}"
-
-  AI_REVIEW_FALLBACK_L1="sonnet"
-  AI_REVIEW_FALLBACK_L2="gemini-2.5-flash"
-  AI_REVIEW_FALLBACK_L3="haiku"
-  AI_REVIEW_TIMEOUT_L1=90
-  AI_REVIEW_TIMEOUT_L2=120
-  AI_REVIEW_TIMEOUT_L3=90
-else
-  ask "Single review model [sonnet]: "
-  read -r SINGLE_REVIEW_MODEL
-  SINGLE_REVIEW_MODEL="${SINGLE_REVIEW_MODEL:-sonnet}"
-  AI_REVIEW_MODEL_L1="$SINGLE_REVIEW_MODEL"
-  AI_REVIEW_MODEL_L2="$SINGLE_REVIEW_MODEL"
-  AI_REVIEW_MODEL_L3="$SINGLE_REVIEW_MODEL"
-  AI_REVIEW_FALLBACK_L1="haiku"
-  AI_REVIEW_FALLBACK_L2="haiku"
-  AI_REVIEW_FALLBACK_L3="haiku"
-  AI_REVIEW_TIMEOUT_L1=90
-  AI_REVIEW_TIMEOUT_L2=90
-  AI_REVIEW_TIMEOUT_L3=90
-fi
-
+echo "  Review is not configured here — it runs inline as a PostToolUse hook via"
+echo "  ~/.claude/scripts/review-router.sh (headless 'claude -p', Sonnet by default)."
+echo "  Override the model with PILOT_REVIEW_MODEL in ~/.zshenv."
 echo ""
 
 # ── 4. Notifications ──────────────────────────────────────────
@@ -415,16 +375,8 @@ MAX_FIX_ATTEMPTS=1
 AI_TRIAGE_EFFORT="high"
 AI_ROADMAP_EFFORT="high"
 
-# Review pipeline (3-layer cross-model)
-AI_REVIEW_MODEL_L1="$AI_REVIEW_MODEL_L1"
-AI_REVIEW_MODEL_L2="$AI_REVIEW_MODEL_L2"
-AI_REVIEW_MODEL_L3="$AI_REVIEW_MODEL_L3"
-AI_REVIEW_FALLBACK_L1="$AI_REVIEW_FALLBACK_L1"
-AI_REVIEW_FALLBACK_L2="$AI_REVIEW_FALLBACK_L2"
-AI_REVIEW_FALLBACK_L3="$AI_REVIEW_FALLBACK_L3"
-AI_REVIEW_TIMEOUT_L1=$AI_REVIEW_TIMEOUT_L1
-AI_REVIEW_TIMEOUT_L2=$AI_REVIEW_TIMEOUT_L2
-AI_REVIEW_TIMEOUT_L3=$AI_REVIEW_TIMEOUT_L3
+# Review runs via ~/.claude/scripts/review-router.sh (headless claude -p).
+# Model override: PILOT_REVIEW_MODEL in ~/.zshenv (defaults to sonnet).
 
 # ── Notifications ────────────────────────────────────────────
 # Webhooks and bot token should be set in ~/.zshenv

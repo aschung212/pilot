@@ -9,8 +9,13 @@ Adapters are thin wrapper scripts that provide a stable interface between the pi
 | Issue Tracker | Linear CLI | `adapters/tracker.sh` |
 | Notifications | Slack (webhooks + Bot API) | `adapters/notify.sh` |
 | Code Generation | Claude CLI | `adapters/ai-code.sh` |
-| Research | Gemini CLI | `adapters/ai-research.sh` |
-| Code Review | 3-layer (Flash + Pro + Sonnet) | `adapters/ai-review.sh` |
+| Research | Gemini REST API (Flash + Search grounding) | `adapters/ai-research.sh` |
+
+Code review is deliberately **not** an adapter. It runs inline as a PostToolUse
+hook via `~/.claude/scripts/review-router.sh` (headless `claude -p`), so there is
+no swappable surface to wrap. The former `adapters/ai-review.sh` — a 3-layer
+Gemini/Claude pipeline — was deprecated 2026-04-06 when review moved to hooks and
+deleted 2026-07-17 after Google retired the free Gemini CLI OAuth tier.
 
 ## Interface Contracts
 
@@ -61,22 +66,6 @@ ai-research.sh prompt <text> [opts]
   --model <model>                            # override model
   --output <file>                            # save to file
 ```
-
-### ai-review.sh
-
-```bash
-ai-review.sh layer1 <prompt> [opts]          # mechanical gate (Gemini Flash, failover: Pro)
-  --json-output <file>
-  --model <model>
-ai-review.sh layer2 <prompt> [opts]          # architecture review (Gemini Pro, failover: Sonnet)
-  --output <file>
-  --model <model>
-ai-review.sh layer3 <prompt> [opts]          # self-check (Claude Sonnet, failover: Pro)
-  --json-output <file>
-  --model <model>
-```
-
-Output includes a `REVIEW_CROSSCHECK` section that flags disagreements between layers.
 
 ## Writing a Custom Adapter
 
