@@ -193,6 +193,14 @@ Test suite: 223 → 214 passing, 0 failures (the 9 removed tests only covered th
 
 **New for Aaron:** Nothing to do. No runtime path changed. If you ever want a swappable review backend again, note the deliberate design decision recorded in `docs/adapters.md`: review is a PostToolUse hook (`~/.claude/scripts/review-router.sh`), so it has no adapter surface — reinstating one is a new design, not a revert.
 
+### 2026-07-17 — Cover-letter reviewer moved off the (retired) Gemini CLI to the REST adapter
+
+- **Symptom.** `scripts/review-cover-letter.sh` — the second-opinion reviewer you run before sending an application (symlinked at `~/Documents/Scripts/review-cover-letter.sh`) — still shelled out to the bare `gemini` CLI, so it had been silently broken since the 2026-06-18 OAuth-tier retirement (`IneligibleTierError`). It's career/personal tooling, not the overnight Lift pipeline, which is why the same-day research/triage fix skipped it.
+- **Root cause.** Identical to the research/triage + review outages: Google retired the free "Gemini Code Assist for individuals" OAuth tier, so every `gemini -p` call now fails.
+- **Fix.** Rewrote the script to route both review passes through `adapters/ai-research.sh` (Gemini REST API, free-tier Flash via `GEMINI_API_KEY`) — the same adapter discovery + triage use — with `--no-grounding` (it reviews supplied cover-letter text, it doesn't research the web). The retired CLI is no longer invoked anywhere. Kept the two-pass structure (full hiring-manager rubric → shorter fallback prompt); the adapter returns clean text, so the old `gemini`-startup-noise grep filter is gone. It now **fails loud** (non-zero exit + reason on stderr) when both passes come back empty, instead of printing a blank review. Also switched `set -euo pipefail` → `set -uo pipefail` per the code standard (the adapter fallback is an expected-failure path).
+- **New for Aaron.** No new responsibility, still $0 (free Flash). Same command: `bash ~/Documents/Scripts/review-cover-letter.sh <letter.md> [job-desc.md]`. If it ever prints **"❌ Cover-letter review failed"**, that's the `GEMINI_API_KEY` / free-Flash quota — same fix as the discovery/triage alert (`~/.zshenv`, `adapters/ai-research.sh`).
+- **Tests.** `tests/review-cover-letter.bats` switched from the `gemini` mock to the curl/REST path — it now asserts the adapter called `generateContent` **and** that the retired `gemini` CLI was never invoked, plus a fail-loud test for the both-passes-error case. Full suite green: **216/216** (after the `ai-review.sh` deletion above removed 9 tests). `bash -n` clean; verified end-to-end with a live Flash review.
+
 ### 2026-07-17 — Adversarial review migrated off the (retired) Gemini CLI to Claude
 
 **Symptom.** Every builder PR since ~2026-06-30 shipped with no working adversarial review — silently. The review step printed an auth error and the build continued.
