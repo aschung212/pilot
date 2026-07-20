@@ -140,11 +140,10 @@ If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/T
 | `~/development/lift/CLAUDE.md` | Lift project standards (design, code, workflow) |
 | `~/.claude/commands/ai-review.md` | Daily review slash command |
 | `~/.claude/CLAUDE.md` | Global Claude instructions |
-| `~/development/pilot/tests/` | bats-core test suite — 22 test files, 209 tests (fast tier runs in the pre-commit hook) |
+| `~/development/pilot/tests/` | bats-core test suite — 20 test files, 211 tests (fast tier runs in the pre-commit hook) |
 | `~/development/pilot/.github/workflows/test.yml` | GitHub Actions CI — runs full test suite on push |
 | `~/development/pilot/.githooks/pre-commit` | Git pre-commit hook — runs fast test tier before every commit |
 | `~/Documents/Scripts/lift-triage.sh` | Gemini issue triage — reviews, enhances, and plans before builder runs |
-| `~/Documents/Scripts/review-cover-letter.sh` | Gemini cover letter reviewer — run before sending applications |
 | `~/Documents/Scripts/lift-budget.conf` | Token budget config — auto-tuned nightly by `lift-tune-budget.sh` |
 | `~/Documents/Scripts/lift-tune-budget.sh` | Auto-tuner — analyzes usage + runtime history and adjusts budget config |
 | `~/Documents/Scripts/lift-linear-cleanup.sh` | Linear cleanup — archives done/canceled issues, deduplicates backlog |
@@ -171,6 +170,14 @@ If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/T
 ---
 
 ## Changelog
+
+### 2026-07-17 — Relocated the cover-letter reviewer out of Pilot (job-search tooling, not the Lift pipeline)
+
+The cover-letter reviewer fixed earlier today (see "Cover-letter reviewer moved off the (retired) Gemini CLI" below) was never actually part of the overnight Lift pipeline: nothing scheduled or referenced it, it used no Pilot infrastructure (`project.env`, `lib/`, adapters, `$TRACKER`/`$NOTIFY`), and it had simply been swept into the 2026-04-01 initial commit. Routing it through `adapters/ai-research.sh` in PR #15 had just given it its first real Pilot dependency — pulling the repo's scope toward "Aaron's AI-automation home" instead of "the Lift pipeline."
+
+- **Moved it out.** `~/Documents/Scripts/review-cover-letter.sh` is now a **self-contained** script (the Gemini REST call inlined — no adapter dependency), replacing the symlink that used to point into the repo. Verified end-to-end with a live Flash review.
+- **Removed from Pilot.** Deleted `scripts/review-cover-letter.sh` and `tests/review-cover-letter.bats` (5 tests) plus its Key Files row. Full suite: 216 → **211**, green.
+- **New for Aaron.** No change in how you use it: `bash ~/Documents/Scripts/review-cover-letter.sh <letter.md> [job-desc.md]`, auth via `GEMINI_API_KEY` in `~/.zshenv`. It's now a real file (not a symlink), so it no longer depends on the pilot repo being present or on your branch state. Career/job-search tooling lives in `~/Documents/Scripts` and the Obsidian vault, not in Pilot.
 
 ### 2026-07-17 — Deleted the dead `ai-review.sh` adapter (last `gemini` CLI caller in the repo)
 
