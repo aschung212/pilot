@@ -172,9 +172,27 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
 
 **What it does:**
 - Closes completed/canceled issues that are still open on GitHub via the tracker adapter — issues already closed in a prior session are skipped (checked via `tracker.sh state`), so no redundant `gh issue close` writes are fired
+- **Recycles abandoned in-progress issues** (added 2026-07-27) — see below
 - Detects duplicate issues by title (keeps oldest, cancels+archives newer copies)
 - Keeps issue list clean — closes resolved/duplicate issues
-- Reports `N closed` (real open→closed transitions only) and `K already closed, skipped`
+- Reports `N closed` (real open→closed transitions only), `R recycled`, and `K already closed, skipped`
+
+**Backlog recycling.** The builder's pre-pick flips an issue to `state:started` *before* implementation. If that iteration then dies before opening a PR (auth blip, CI failure, context exhaustion, killed run), nothing clears the label — and because `tracker.sh list pickable` is exclusion-based, a `state:started` issue is removed from the picking pool permanently. This leaks the backlog one issue at a time until the builder starves.
+
+Cleanup now sorts every `state:started` issue into four buckets by cross-referencing PR titles (three `gh pr list` calls, not a per-issue search):
+
+| Bucket | Condition | Action |
+|---|---|---|
+| Recycle | no PR of **any** state references it | auto-reset to `state:unstarted` |
+| In flight | has an **open** PR | none (normal state) |
+| Done, awaiting close | has a **merged** PR | reported as a count |
+| Needs your call | every PR was **closed unmerged** | reported by ID — never auto-recycled |
+
+The rule is deliberately conservative: only the "no PR ever" case is unambiguous. A closed-unmerged PR may have been a deliberate rejection, so auto-recycling it would rebuild work Aaron already declined — those are surfaced for a human decision instead.
+
+Recycled counts are appended to `data/lift-cleanup-metrics.csv` as a fourth `recycled` column. Rows written before 2026-07-27 have three fields, so parsers must tolerate both widths.
+
+> **Adapter query limits.** `tracker.sh list <state>` fetches `--limit 200` (raised from 100 on 2026-07-27 to match the `pickable` query). Truncation here fails *silently* — `gh issue list` just returns a short list with no error — so a stale limit silently hides issues from every consumer, including the builder's do-not-pick list and this recycle step. Keep the limit comfortably above the real open-issue count.
 
 ---
 

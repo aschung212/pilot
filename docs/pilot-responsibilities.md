@@ -171,6 +171,29 @@ If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/T
 
 ## Changelog
 
+### 2026-07-27 — Builder was starving, not crashing: recycled abandoned issues and closed the backlog leak
+
+**Symptom.** No PRs since 2026-07-23. The builder looked dead, but launchd was healthy and it had run on schedule — Fri 2026-07-24 fired at 23:00, ran for 4 minutes, produced 0 PRs, and exited after a single iteration with `NO_IMPROVEMENTS_REMAINING`. (Sat/Sun are not scheduled; the builder runs Mon–Fri.) Both 2026-07-23 run 3 and the whole 2026-07-24 session ended on the same log line: `🧹 Backlog filter: 2 pickable → 0 after removing already-claimed/attempted issues`.
+
+**Root cause — a one-way backlog leak.** The builder's pre-pick flips an issue to `state:started` *before* implementation. If that iteration dies before opening a PR, nothing ever clears the label. Because `tracker.sh list pickable` is exclusion-based (everything not in triage/backlog/started/blocked/needs-input/canceled), a stuck `state:started` issue leaves the picking pool **permanently**. Nothing in the pipeline ever recycled them — `cleanup.sh` only closed issues already in tracker-state `completed`/`canceled`, which is why it kept reporting `0 closed` while the backlog quietly drained.
+
+At diagnosis: 145 open issues carried `state:started`. Only 34 had an open PR. Of the remaining 113 — 92 had a **merged** PR (done, issue never closed) and 21 were genuinely stranded.
+
+**A second, hidden bug.** `tracker.sh list <state>` used `--limit 100`, but 131 issues carried `state:started`. `gh issue list` truncates silently, so 31 issues were invisible to every consumer — the builder's do-not-pick list and the new recycle step alike. Raised to `--limit 200` to match the `pickable` query.
+
+**Fixes.**
+- **Immediate (data).** Recycled the 14 stranded issues that had **no PR of any state** back to `state:unstarted` — LIFT-536, 580, 598, 616, 619, 664, 666, 667, 751, 783, 834, 836, 850, 966. Effective picking pool went from **2 → 16**, above the 12-iteration nightly cap.
+- **Durable (`scripts/cleanup.sh`).** New step 2 sorts every `state:started` issue into four buckets by cross-referencing PR titles and auto-recycles only the unambiguous "no PR ever" case. Issues whose PR was closed unmerged are reported, never auto-recycled — closing a PR may have been a deliberate rejection, and rebuilding it would churn. Adds a `recycled` column to `data/lift-cleanup-metrics.csv` (pre-existing rows have 3 fields; parsers must tolerate both).
+- **`adapters/tracker.sh`.** `list <state>` limit 100 → 200.
+
+**Verification.** `bash -n` on both scripts; `cleanup.sh --dry-run` reports `0 recycled` (the 14 were already fixed by hand), `92 done awaiting close`, `7 needs your call`, with in-flight open-PR issues correctly excluded — the buckets reconcile to 131 and match an independent manual cross-reference. Confirmed the builder's own filter now yields 16 pickable. I did **not** run `builder.sh 1`: it would open a real PR and spend tonight's token budget, so I verified the exact tracker queries the builder depends on instead.
+
+**⚠️ New for Aaron — two things need your decision:**
+1. **7 issues stuck with a closed-unmerged PR** — LIFT-750, 910, 925, 926, 949, 968, 969. Six were batch-closed within three minutes on 2026-07-20 (a stale-PR sweep, no rejection comments), so they're probably still wanted. Recycle to `state:unstarted` to rebuild, or close as not planned. Cleanup will keep reporting them until you act.
+2. **92 issues are `state:started` with a merged PR** — work is done, the issue was never closed. They no longer block the builder, but they inflate the do-not-pick list injected into every builder prompt. Closing them is a 92-issue bulk write, so I left it for you.
+
+Also worth knowing: **39 open PRs** are outstanding, the oldest from 2026-05-27. Every one of them holds its issue out of the picking pool, so the merge queue is now the pipeline's real throughput limit.
+
 ### 2026-07-17 — Relocated the cover-letter reviewer out of Pilot (job-search tooling, not the Lift pipeline)
 
 The cover-letter reviewer fixed earlier today (see "Cover-letter reviewer moved off the (retired) Gemini CLI" below) was never actually part of the overnight Lift pipeline: nothing scheduled or referenced it, it used no Pilot infrastructure (`project.env`, `lib/`, adapters, `$TRACKER`/`$NOTIFY`), and it had simply been swept into the 2026-04-01 initial commit. Routing it through `adapters/ai-research.sh` in PR #15 had just given it its first real Pilot dependency — pulling the repo's scope toward "Aaron's AI-automation home" instead of "the Lift pipeline."

@@ -127,7 +127,14 @@ gh_list() {
           --jq '.[] | "'"${ISSUE_PREFIX}"'-\(.number) \(.title)"' 2>/dev/null || true
         ;;
       *)
-        gh issue list --repo "$GITHUB_ISSUES_REPO" --limit 100 --label "state:$state" \
+        # --limit 200 matches the "pickable" query above. It was 100 until
+        # 2026-07-27, which silently truncated `list started` at exactly 100
+        # rows while 131 issues carried state:started — the extra 31 were
+        # invisible to every consumer, including the builder's do-not-pick
+        # list and cleanup.sh's recycle step. A truncated list here fails
+        # silently (no error, just a short list), so keep this comfortably
+        # above the real open-issue count.
+        gh issue list --repo "$GITHUB_ISSUES_REPO" --limit 200 --label "state:$state" \
           --json number,title,labels \
           --jq '.[] | "'"${ISSUE_PREFIX}"'-\(.number) \(.title)"' 2>/dev/null || true
         ;;
