@@ -8,7 +8,7 @@ An autonomous multi-agent pipeline that discovers, triages, implements, and revi
 
 Every night, Pilot:
 
-1. **Discovers** improvement opportunities by researching competitors, UI trends, accessibility standards, and more (Gemini + Claude)
+1. **Discovers** improvement opportunities across a weighted rotation of focus areas — from bug hunting, performance, UX polish, accessibility, and security (the current GA-readiness set) to optional feature-research areas like competitor analysis (Gemini + Claude)
 2. **Triages** each discovery — approves, enhances, rescopes, skips, or flags for your review (Gemini Flash, Claude fallback)
 3. **Implements** the highest-priority approved issues — writes code, runs tests, commits, creates PRs (Claude Opus)
 4. **Reviews** its own PRs with a Claude Sonnet adversarial review (independent model from the Opus author)

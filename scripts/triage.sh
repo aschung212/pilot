@@ -13,6 +13,12 @@
 # Usage:
 #   ./triage.sh              # triage all unreviewed backlog issues
 #   ./triage.sh --dry-run    # preview without updating tracker
+#   ./triage.sh --re-triage  # one-shot sweep: re-review ALL triageable issues,
+#                            # including already-triaged ones (used to re-baseline
+#                            # the backlog when triage policy changes, e.g. the
+#                            # 2026-08-21 GA-readiness shift). Combinable with
+#                            # --dry-run. Parked issues (needs-input/blocked/
+#                            # started) stay untouched.
 
 set -uo pipefail
 # Note: not using -e (errexit) because individual issue failures should not abort the loop
@@ -32,14 +38,28 @@ REPO="${REPO_PATH:?REPO_PATH not set — run init.sh}"
 DATE=$(date +%Y-%m-%d)
 OUTPUT_DIR="${OUTPUT_DIR:-$PILOT_DIR/data}"
 TRIAGE_LOG="$OUTPUT_DIR/lift-triage-$DATE.md"
-DRY_RUN="${1:-}"
+
+DRY_RUN=""
+RETRIAGE=""
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run)   DRY_RUN="--dry-run" ;;
+    --re-triage) RETRIAGE="1" ;;
+    *) echo "Unknown argument: $arg (valid: --dry-run, --re-triage)" >&2; exit 1 ;;
+  esac
+done
+
+# Comment marker. "Re-triaged by" both records the sweep and satisfies the
+# idempotency grep below, so re-triaged issues are not re-reviewed nightly.
+TRIAGE_MARKER="Triaged by"
+[ -n "$RETRIAGE" ] && TRIAGE_MARKER="Re-triaged by"
 
 mkdir -p "$OUTPUT_DIR"
 
-echo "🚥 Triage Agent — $DATE" | tee "$TRIAGE_LOG"
+echo "🚥 Triage Agent — $DATE${RETRIAGE:+ (re-triage sweep)}" | tee "$TRIAGE_LOG"
 
 # Start Slack thread for this triage session
-THREAD_TS=$(bash "$NOTIFY" --as triage thread-start automation "🚥 *Triage — $DATE*")
+THREAD_TS=$(bash "$NOTIFY" --as triage thread-start automation "🚥 *Triage — $DATE*${RETRIAGE:+ — GA re-triage sweep}")
 THREAD_TS=$(echo "$THREAD_TS" | tr -d ' \n')
 
 # Load product decisions for context
@@ -63,15 +83,21 @@ if [ -z "$ISSUE_IDS" ]; then
   exit 0
 fi
 
-# Check which issues have already been triaged (have a "Triaged by" comment)
-UNTRIAGED_IDS=""
-for issue_id in $ISSUE_IDS; do
-  COMMENTS=$(bash "$TRACKER" comment-list "$issue_id" || true)
-  if ! echo "$COMMENTS" | grep -q "Triaged by\|Re-triaged by"; then
-    UNTRIAGED_IDS+="$issue_id "
-  fi
-done
-UNTRIAGED_IDS=$(echo "$UNTRIAGED_IDS" | xargs)
+# Check which issues have already been triaged (have a "Triaged by" comment).
+# In --re-triage mode, skip the idempotency filter: every triageable issue is
+# re-reviewed under the current policy, prior verdicts notwithstanding.
+if [ -n "$RETRIAGE" ]; then
+  UNTRIAGED_IDS=$(echo "$ISSUE_IDS" | xargs)
+else
+  UNTRIAGED_IDS=""
+  for issue_id in $ISSUE_IDS; do
+    COMMENTS=$(bash "$TRACKER" comment-list "$issue_id" || true)
+    if ! echo "$COMMENTS" | grep -q "Triaged by\|Re-triaged by"; then
+      UNTRIAGED_IDS+="$issue_id "
+    fi
+  done
+  UNTRIAGED_IDS=$(echo "$UNTRIAGED_IDS" | xargs)
+fi
 
 if [ -z "$UNTRIAGED_IDS" ]; then
   echo "  All issues already triaged." | tee -a "$TRIAGE_LOG"
@@ -120,6 +146,13 @@ CRITICAL RULES FROM PAST CORRECTIONS: $TRIAGE_LEARNINGS
 
 Issue: $ISSUE_TITLE
 Details: $(echo "$ISSUE_DETAIL" | head -20 | tr '\n' ' ')
+
+GA-READINESS POLICY (in effect since 2026-08, supersedes any older triage verdict in the issue's comments): $PROJECT_NAME is feature-complete and in beta, stabilizing for a general-availability release. The pipeline now ships ONLY: bug fixes, performance improvements, UI/UX refinement of existing flows, accessibility fixes, and security fixes.
+- SKIP any issue proposing a net-new feature, new screen, new integration, or monetization/growth/marketing/SEO work. In the REASON, say 'deferred until post-GA' — these are not bad ideas, just not now.
+- SKIP issues that only add test coverage or tooling without fixing a user-facing defect (the suite is already extensive). Tests are welcome only inside a bug-fix issue as regression proof.
+- Large refactors: APPROVE only if they directly unblock a bug, performance, or reliability fix — not for cleanliness alone.
+- Bug reports, perf issues, UX polish, a11y, and security issues triage normally under the rules below.
+- SUGGESTED_PRIORITY under this policy: 1=crash/data loss/security, 2=user-visible bug or significant perf problem, 3=UX friction/polish, 4=cosmetic or deferred.
 
 $RESCOPE_GUIDANCE
 
@@ -219,7 +252,7 @@ Falling back to Claude Sonnet for triage this run (higher token cost). Check GEM
       IMPL_PLAN=$(echo "$TRIAGE_RESULT" | sed -n '/IMPLEMENTATION_PLAN:/,/COMPLEXITY:\|SUGGESTED_PRIORITY:\|$/p' | head -10)
       CONFIDENCE=$(echo "$TRIAGE_RESULT" | grep -oE 'CONFIDENCE: [0-9]+' | head -1 | grep -oE '[0-9]+' || echo "?")
       COMPLEXITY=$(echo "$TRIAGE_RESULT" | grep -oE 'COMPLEXITY: [a-z]+' | head -1 | sed 's/COMPLEXITY: //' || echo "?")
-      bash "$TRACKER" comment-add "$issue_id" "**Triaged by $TRIAGE_MODEL** ($DATE) — ✅ APPROVED
+      bash "$TRACKER" comment-add "$issue_id" "**$TRIAGE_MARKER $TRIAGE_MODEL** ($DATE) — ✅ APPROVED
 
 $IMPL_PLAN
 
@@ -234,7 +267,7 @@ _Automated triage — suggested starting point, not a mandate. Read the codebase
       IMPL_PLAN=$(echo "$TRIAGE_RESULT" | sed -n '/IMPLEMENTATION_PLAN:/,/COMPLEXITY:\|SUGGESTED_PRIORITY:\|$/p' | head -10)
       CONFIDENCE=$(echo "$TRIAGE_RESULT" | grep -oE 'CONFIDENCE: [0-9]+' | head -1 | grep -oE '[0-9]+' || echo "?")
       COMPLEXITY=$(echo "$TRIAGE_RESULT" | grep -oE 'COMPLEXITY: [a-z]+' | head -1 | sed 's/COMPLEXITY: //' || echo "?")
-      bash "$TRACKER" comment-add "$issue_id" "**Triaged by $TRIAGE_MODEL** ($DATE) — ✨ ENHANCED
+      bash "$TRACKER" comment-add "$issue_id" "**$TRIAGE_MARKER $TRIAGE_MODEL** ($DATE) — ✨ ENHANCED
 
 **Refined scope:**
 $ENHANCED_DESC
@@ -253,7 +286,7 @@ _Automated triage — suggested starting point, not a mandate. Read the codebase
     SKIP)
       SKIPPED=$((SKIPPED + 1))
       REASON=$(echo "$TRIAGE_RESULT" | grep -oE 'REASON: .*' | head -1 | sed 's/REASON: //')
-      bash "$TRACKER" comment-add "$issue_id" "**Triaged by $TRIAGE_MODEL** ($DATE) — ⏭️ SKIP
+      bash "$TRACKER" comment-add "$issue_id" "**$TRIAGE_MARKER $TRIAGE_MODEL** ($DATE) — ⏭️ SKIP
 
 $REASON
 
@@ -300,7 +333,7 @@ ${CONS_BULLETS}
         OPTIONS_BLOCK="_Triage did not emit structured options. Raw reason: ${REASON:-(empty)}_"
       fi
 
-      bash "$TRACKER" comment-add "$issue_id" "**Triaged by $TRIAGE_MODEL** ($DATE) — 🚩 NEEDS INPUT
+      bash "$TRACKER" comment-add "$issue_id" "**$TRIAGE_MARKER $TRIAGE_MODEL** ($DATE) — 🚩 NEEDS INPUT
 
 **Question:** ${FLAG_QUESTION:-${REASON:-No question summary provided.}}
 
@@ -337,7 +370,7 @@ _Automated triage — this issue needs a human decision before the builder can p
           SUB_URL=$(bash "$TRACKER" issue-url "$SUB_ID" 2>/dev/null || echo "")
           SUB_ISSUE_LINKS+="  - ${SUB_ID}: ${SUB_TITLE}\n"
           # Mark sub-issue as triaged so it doesn't get re-triaged
-          bash "$TRACKER" comment-add "$SUB_ID" "**Triaged by $TRIAGE_MODEL** ($DATE) — ✅ APPROVED (split from ${issue_id})
+          bash "$TRACKER" comment-add "$SUB_ID" "**$TRIAGE_MARKER $TRIAGE_MODEL** ($DATE) — ✅ APPROVED (split from ${issue_id})
 
 **Context:** This was split from ${issue_id} (${ISSUE_TITLE}) because the original issue bundled unrelated deliverables.
 
@@ -353,7 +386,7 @@ _Automated triage — suggested starting point, not a mandate._" || true
 
       if [ "$SUB_ISSUE_COUNT" -gt 0 ]; then
         # Comment on original with links to children, then cancel it
-        bash "$TRACKER" comment-add "$issue_id" "**Triaged by $TRIAGE_MODEL** ($DATE) — 🔀 RESCOPED
+        bash "$TRACKER" comment-add "$issue_id" "**$TRIAGE_MARKER $TRIAGE_MODEL** ($DATE) — 🔀 RESCOPED
 
 $REASON
 
@@ -367,7 +400,7 @@ _Original issue canceled — work continues in the sub-issues above._" || true
         # All sub-issue creation failed — flag for manual review instead
         FLAGGED=$((FLAGGED + 1))
         RESCOPED=$((RESCOPED - 1))
-        bash "$TRACKER" comment-add "$issue_id" "**Triaged by $TRIAGE_MODEL** ($DATE) — 🚩 RESCOPE FAILED
+        bash "$TRACKER" comment-add "$issue_id" "**$TRIAGE_MARKER $TRIAGE_MODEL** ($DATE) — 🚩 RESCOPE FAILED
 
 Attempted to split this issue but sub-issue creation failed. Needs manual rescoping.
 
@@ -394,7 +427,7 @@ log_info "Triage complete: $APPROVED approved, $ENHANCED enhanced, $RESCOPED res
 
 # Slack notification
 if [ "$DRY_RUN" != "--dry-run" ]; then
-  bash "$NOTIFY" --as triage thread-reply automation "$THREAD_TS" "*Triage complete* — $UNTRIAGED_COUNT issues reviewed (model: $TRIAGE_MODEL)
+  bash "$NOTIFY" --as triage thread-reply automation "$THREAD_TS" "*Triage complete*${RETRIAGE:+ (re-triage sweep)} — $UNTRIAGED_COUNT issues reviewed (model: $TRIAGE_MODEL)
 ✅ $APPROVED approved | ✨ $ENHANCED enhanced | 🔀 $RESCOPED rescoped | ⏭️ $SKIPPED skipped | 🚩 $FLAGGED flagged
 
 $(echo -e "$RESULTS")

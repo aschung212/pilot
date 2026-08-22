@@ -411,7 +411,7 @@ ${SKIPPED_ISSUES:-None}
 
 ## How to pick
 
-Pick the highest-priority unstarted issue that is NOT in any of the do-not-pick lists above. Priority labels (priority:1-urgent / 2-high / 3-medium / 4-low) appear in the issue list. If two issues are equal priority, prefer the one that touches code you can verify quickly (testing, accessibility, small bug fixes) over deep architectural changes.
+Pick the highest-priority unstarted issue that is NOT in any of the do-not-pick lists above. Priority labels (priority:1-urgent / 2-high / 3-medium / 4-low) appear in the issue list. $PROJECT_NAME is stabilizing for a GA release: if two issues are equal priority, prefer user-facing bug fixes first, then performance/reliability fixes, then UI/UX and accessibility polish. Put refactors, test-only additions, and anything feature-shaped last.
 
 You do NOT need to read the issue bodies or the codebase in this stage — just pick from titles and priorities. The next stage has the full context.
 
@@ -608,10 +608,10 @@ $ASSIGNED_BLOCK
 
 ## Discovery (every iteration)
 
-While reading the codebase, actively look for problems and improvement opportunities. For each discovery, output an ISSUE_DISCOVER line (see output format). Look for:
+While reading the codebase, actively look for problems. For each discovery, output an ISSUE_DISCOVER line (see output format). $PROJECT_NAME is feature-complete and stabilizing for GA, so report ONLY defects and refinements of existing behavior — do NOT file feature ideas, and do NOT file test-coverage gaps (the suite is already extensive; new tests belong inside bug fixes as regression proof). Look for:
+- Functional bugs (unhandled errors, race conditions, data loss paths, broken edge cases: empty data, offline, rapid input)
 - UI bugs (contrast issues, layout shifts, broken themes, missing aria attributes)
-- Code smells (dead code, unused imports, inconsistent patterns, TODO comments)
-- Missing tests for critical paths
+- UX friction in existing flows (missing loading/error/empty states, inconsistent spacing or copy, dead ends)
 - Performance issues (large bundles, unnecessary re-renders, unoptimized images)
 - Accessibility violations (missing labels, low contrast, keyboard traps)
 - CLAUDE.md checklist violations (hardcoded colors, wrong spacing, missing safe-area-inset)
