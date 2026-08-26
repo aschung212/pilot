@@ -30,44 +30,59 @@ RUN_LOG="$OUTPUT_DIR/lift-discover-$DATE.md"
 mkdir -p "$OUTPUT_DIR"
 touch "$SEARCH_LOG"
 
-# Weighted round robin — 30-slot cycle (~1 month at daily runs)
-# Higher weight = more frequent. Each focus area gets enough time between
-# runs for the landscape to actually change — avoids redundant findings.
+# Weighted round robin — GA-readiness rotation (2026-08-21).
+# Lift is feature-complete and in beta; the pipeline's job now is stabilization
+# for a general-availability release. The rotation covers ONLY bug-finding,
+# performance, UI/UX refinement, accessibility, PWA reliability, and security.
+# Feature-hunting focuses (competitors, monetization, marketing, growth,
+# seo-aso, onboarding, data-viz, ui-trends, dx-cicd, testing) are retired from
+# the rotation but keep their case branches below for manual one-off runs
+# (./discover.sh competitors).
 #
-# Frequency guide:
-#   3x/cycle (~10 days apart): competitors, ui-trends — fast-moving, high value
-#   2x/cycle (~15 days apart): performance, accessibility, testing — codebase evolves
-#   1x/cycle (~30 days apart): pwa-patterns, security-deps, monetization,
-#                               seo-aso, data-viz, onboarding, dx-cicd — slow-moving
+# 20-slot cycle at 3 runs/week (Sun/Tue/Thu) ≈ 6.5 weeks:
+#   5x/cycle (~1.3 weeks apart): bug-hunt — the GA priority
+#   4x/cycle (~1.6 weeks apart): performance, ux-polish
+#   3x/cycle (~2 weeks apart):   accessibility
+#   2x/cycle (~3 weeks apart):   pwa-reliability, security-deps
 QUEUE_FILE="$OUTPUT_DIR/lift-discovery-queue.txt"
+
+# Bump this when the rotation changes shape. A live queue written by an older
+# rotation is discarded on the next run so stale focus areas never run again.
+# init.sh reads this value (grep) and stamps it when seeding a fresh queue.
+QUEUE_VERSION="2026-08-21-ga"
+QUEUE_VERSION_FILE="$OUTPUT_DIR/lift-discovery-queue.version"
 
 refill_queue() {
   cat >> "$QUEUE_FILE" <<'QUEUE'
-competitors
+bug-hunt
 performance
-ui-trends
-testing
+ux-polish
 accessibility
-seo-aso
-marketing
-competitors
-data-viz
-pwa-patterns
-ui-trends
-onboarding
-growth
+bug-hunt
+pwa-reliability
+ux-polish
+performance
+bug-hunt
+security-deps
+ux-polish
+accessibility
+bug-hunt
+performance
+pwa-reliability
+ux-polish
+bug-hunt
+accessibility
 performance
 security-deps
-competitors
-accessibility
-dx-cicd
-ui-trends
-testing
-monetization
 QUEUE
 }
 
-# Refill if queue is empty or missing
+# Discard a queue written by an older rotation (stale focus areas), then
+# refill if the queue is empty or missing.
+if [ "$(cat "$QUEUE_VERSION_FILE" 2>/dev/null)" != "$QUEUE_VERSION" ]; then
+  : > "$QUEUE_FILE"
+  echo "$QUEUE_VERSION" > "$QUEUE_VERSION_FILE"
+fi
 if [ ! -s "$QUEUE_FILE" ]; then
   refill_queue
 fi
@@ -121,8 +136,20 @@ DECISIONS_FILE="${PRODUCT_DECISIONS_FILE:-$HOME/Documents/Obsidian Vault/20_Lear
 [ ! -f "$DECISIONS_FILE" ] && echo "  ⚠️ Product decisions file not found: $DECISIONS_FILE" >&2
 PRODUCT_DECISIONS=$(cat "$DECISIONS_FILE" 2>/dev/null || echo "No product decisions file found")
 
-# Focus-specific search instructions
+# Focus-specific search instructions.
+# GA rotation focuses (bug-hunt, ux-polish, performance, accessibility,
+# pwa-reliability, security-deps) come first; retired feature-hunting focuses
+# below them remain available for manual runs only.
 case "$FOCUS" in
+  bug-hunt)
+    SEARCH_PROMPT="Hunt for real, reachable bugs in the $PROJECT_NAME codebase. First search the web for known pitfall patterns in the exact stack ($TECH_STACK — check package.json for versions): Vue 3 reactivity edge cases, Pinia state bugs, Supabase auth/session pitfalls, service-worker cache bugs, IndexedDB/localStorage quota and corruption issues. Then read the codebase and audit for: unhandled promise rejections, race conditions (rapid taps, concurrent sync, component unmount during async work), stale or corrupted persisted state, timezone/DST and date-boundary errors in workout history, unit-conversion errors (kg/lb), empty-state and null-data crashes, off-by-one errors in streaks/PRs/aggregates, and error paths that swallow failures silently. Every discovery must cite the specific file and line pattern — a bug report without a code location is not actionable."
+    ;;
+  ux-polish)
+    SEARCH_PROMPT="Audit the EXISTING $PROJECT_NAME screens and flows for refinement opportunities — this is polish of what exists, not new features or redesigns. Search the web briefly for mobile UX heuristics for fitness apps (touch target sizes, thumb reach, interruption recovery mid-workout, one-handed use at the gym). Then read the components and audit for: inconsistent spacing/typography/color usage across screens, missing loading/disabled/error/empty states, janky or missing transitions, layout shift, unclear or inconsistent copy and labels, friction in the core log-a-set flow (taps to complete common actions), confusing affordances, and dead ends users cannot back out of. Cite the specific component file for every finding."
+    ;;
+  pwa-reliability)
+    SEARCH_PROMPT="Audit $PROJECT_NAME's PWA layer for reliability bugs — offline correctness, not new PWA features. Search the web for known service-worker and offline-sync failure patterns in 2026 (stale cache serving old builds, update loops, background sync data loss, iOS PWA storage eviction). Then read the service worker, manifest, and sync code and audit for: writes that can be lost when offline or mid-sync, cache strategies that serve stale app shells after deploy, missing offline fallbacks on uncached routes, service-worker update flow bugs, and install/standalone-mode display issues. Cite specific files."
+    ;;
   competitors)
     SEARCH_PROMPT="Search the web for the top workout tracker apps in 2026 (Strong, Hevy, JEFIT, FitNotes, StrongLifts, any new ones). Look at recent app store reviews, Reddit discussions (r/fitness, r/weightroom, r/bodybuilding), and Product Hunt launches. Find features users love that $PROJECT_NAME is missing, and common complaints about competitors that $PROJECT_NAME could capitalize on."
     ;;
@@ -164,6 +191,15 @@ case "$FOCUS" in
     ;;
   growth)
     SEARCH_PROMPT="Search for user acquisition and retention strategies for free fitness apps in 2026. Look at referral mechanics (share-a-workout, invite friends), viral loop patterns, and community-driven growth. Search for App Store optimization techniques specific to health/fitness category. Find retention research — what keeps users coming back to workout trackers (streaks, social features, progress photos, achievements). Look at how top fitness apps reduce churn in the first 30 days."
+    ;;
+  *)
+    # Fail loud on an unknown focus (typo in a manual run, or a stale queue
+    # entry that survived a rotation change). Under set -u an unset
+    # SEARCH_PROMPT would kill the script later with a confusing error.
+    echo "❌ Unknown focus area: '$FOCUS'" | tee -a "$RUN_LOG" >&2
+    echo "   Valid: bug-hunt ux-polish performance accessibility pwa-reliability security-deps" >&2
+    echo "   Manual-only (retired from rotation): competitors ui-trends testing pwa-patterns seo-aso data-viz onboarding dx-cicd monetization marketing growth" >&2
+    exit 1
     ;;
 esac
 
@@ -209,14 +245,19 @@ $PREVIOUS_SEARCHES
 
 ## Rules
 
+**GA-READINESS MODE (as of 2026-08):** $PROJECT_NAME is feature-complete and in beta, stabilizing for a general-availability release. Your job is finding defects and refinement opportunities in what EXISTS — not proposing what could be added.
+
+- Do NOT propose net-new features, new screens, new integrations, or monetization/growth/marketing work — these will be rejected. If you notice a compelling feature idea, mention it in the Search Summary prose only; do not create an issue for it.
+- Do NOT propose test-only additions — the suite is already extensive. New tests are welcome only bundled into a bug-fix issue as regression proof for that bug.
+- Every discovery must be a bug fix, a performance improvement, a UX refinement of an existing flow, an accessibility fix, or a security fix.
 - **NEVER** recommend features that match canceled issues or their variations — these were explicitly rejected
 - Do NOT duplicate open backlog items or completed issues
 - Do NOT repeat searches from the previous log — find new angles, new sources, new insights
 - Each discovery must be specific and actionable — not vague ("improve performance" is bad, "lazy-load the CalendarView component which loads 3 heavy date libraries on mount" is good)
+- Ground every discovery in the actual codebase: cite the file (and component/function) it applies to
 - Include the source URL or reasoning for each discovery
-- Aim for 3-8 high-quality discoveries per run
-- Priority guide: 1=urgent bug/security, 2=high-impact feature gap, 3=nice improvement, 4=low-priority polish
-- When a competitor feature seems useful, check if an existing $PROJECT_NAME feature already solves the same problem differently before recommending it
+- Aim for 2-6 high-quality discoveries per run. Fewer is fine — **zero is a valid result** if nothing meets the bar. Do not pad the list to hit a quota.
+- Priority guide: 1=crash, data loss, or security vulnerability; 2=user-visible bug, broken flow, or significant performance problem; 3=UX friction or polish with clear user benefit; 4=minor cosmetic issue
 
 ## Output format
 
@@ -228,8 +269,8 @@ For each finding, output:
 ISSUE_DISCOVER:priority:title|description with source URL or reasoning
 
 Example:
-ISSUE_DISCOVER:2:Add haptic feedback on set logging|Competitors Strong and Hevy both use haptic feedback when a set is logged. iOS supports this via navigator.vibrate() or Capacitor Haptics plugin. Source: https://reddit.com/r/fitness/...
-ISSUE_DISCOVER:3:Add workout streak counter to home screen|Duolingo-style streak tracking increases retention 23% per Nir Eyal research. Show current streak on the main workout tab.
+ISSUE_DISCOVER:2:Fix lost set data when app is backgrounded mid-rest-timer|WorkoutView.vue persists the active session only on explicit save; iOS kills backgrounded PWAs after ~30s, so sets logged before a rest timer are lost. Repro: log set, background app during timer, reopen. Fix: persist activeWorkout to localStorage on every mutation.
+ISSUE_DISCOVER:3:Debounce weight input in SetRow to stop cursor jumps|SetRow.vue writes to the store on every keystroke and the store round-trips the formatted value back into the input, resetting cursor position mid-typing. Debounce or write-through only on blur.
 
 ## Search Log
 List the specific queries and URLs you searched (for the search log):
@@ -351,21 +392,24 @@ DISCOVER_DURATION=$((DISCOVER_END - DISCOVER_START))
 # Map focus area to issue label
 focus_to_label() {
   case "$1" in
-    performance)   echo "Performance" ;;
-    accessibility) echo "Accessibility" ;;
-    ui-trends)     echo "UI/UX" ;;
-    testing)       echo "Testing" ;;
-    security-deps) echo "Security" ;;
-    pwa-patterns)  echo "PWA" ;;
-    competitors)   echo "Improvement" ;;
-    data-viz)      echo "UI/UX" ;;
-    onboarding)    echo "UI/UX" ;;
-    dx-cicd)       echo "Infrastructure" ;;
-    seo-aso)       echo "Growth" ;;
-    monetization)  echo "Growth" ;;
-    marketing)     echo "Marketing" ;;
-    growth)        echo "Growth" ;;
-    *)             echo "" ;;
+    bug-hunt)        echo "bug" ;;
+    ux-polish)       echo "UI/UX" ;;
+    pwa-reliability) echo "PWA" ;;
+    performance)     echo "Performance" ;;
+    accessibility)   echo "Accessibility" ;;
+    ui-trends)       echo "UI/UX" ;;
+    testing)         echo "Testing" ;;
+    security-deps)   echo "Security" ;;
+    pwa-patterns)    echo "PWA" ;;
+    competitors)     echo "Improvement" ;;
+    data-viz)        echo "UI/UX" ;;
+    onboarding)      echo "UI/UX" ;;
+    dx-cicd)         echo "Infrastructure" ;;
+    seo-aso)         echo "Growth" ;;
+    monetization)    echo "Growth" ;;
+    marketing)       echo "Marketing" ;;
+    growth)          echo "Growth" ;;
+    *)               echo "" ;;
   esac
 }
 FOCUS_LABEL=$(focus_to_label "$FOCUS")

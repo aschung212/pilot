@@ -79,10 +79,10 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
 **Models:** Gemini 2.5 Flash (web research, via the Gemini REST API + Google Search grounding) + Claude Opus (analysis)
 
 **What it does:**
-- Phase 1 (Gemini): Searches the web for the current focus area — competitors, UI trends, performance, accessibility, testing, SEO, data viz, onboarding, DX/CI, PWA patterns, security, monetization. Runs through the `ai-research.sh` adapter, which calls the Gemini API with the `GEMINI_API_KEY` (Flash is free-tier; the retired OAuth CLI is no longer used). If research fails it **alerts loudly** and Claude self-researches instead of degrading silently.
+- Phase 1 (Gemini): Searches the web for the current focus area. Runs through the `ai-research.sh` adapter, which calls the Gemini API with the `GEMINI_API_KEY` (Flash is free-tier; the retired OAuth CLI is no longer used). If research fails it **alerts loudly** and Claude self-researches instead of degrading silently.
 - Phase 2 (Claude): Cross-references findings against the codebase, existing backlog, canceled issues, and product decisions. Creates specific, actionable GitHub issues.
 
-**Focus area rotation:** 12 focus areas in a weighted 19-slot cycle (~3 weeks). High-value areas (competitors, UI trends) run every ~6 days. Slow-moving areas (security, monetization) run every ~19 days.
+**Focus area rotation (GA-readiness mode, since 2026-08-21):** Lift is feature-complete and in beta; discovery now hunts only stabilization work. Six focus areas in a weighted 20-slot cycle (~6.5 weeks at 3 runs/week): `bug-hunt` ×5 (codebase bug hunting: races, unhandled rejections, data loss, edge cases), `performance` ×4, `ux-polish` ×4 (refinement of existing flows — states, consistency, friction), `accessibility` ×3, `pwa-reliability` ×2 (offline sync correctness, SW update flow), `security-deps` ×2. The discovery prompt forbids net-new feature and test-only issues, requires every finding to cite a code location, and caps output at 2–6 discoveries (zero is valid — no quota padding). Retired feature-research areas (competitors, ui-trends, testing, seo-aso, data-viz, onboarding, dx-cicd, monetization, marketing, growth, pwa-patterns) keep their prompts for manual runs (`discover.sh <focus>`) but never enter the rotation. A `QUEUE_VERSION` stamp (`data/lift-discovery-queue.version`) discards any queue written by an older rotation, so stale focus areas can't run after a rotation change ships.
 
 **Self-improvement:** Reads [product decisions](pilot-responsibilities.md#product-decisions) and canceled issues to avoid recreating rejected features.
 
@@ -102,6 +102,10 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
   - **RESCOPE** — splits oversized issues into 2-4 focused sub-issues and cancels the original
 - Marks issues as triaged so they aren't re-reviewed
 
+**GA-readiness gate (since 2026-08-21):** the triage prompt carries a standing policy — Lift is stabilizing for GA, so only bug fixes, performance, UX refinement, accessibility, and security work passes. Net-new features and monetization/growth/marketing issues get SKIP with "deferred until post-GA"; test-only additions get SKIP (tests ship only as regression proof inside bug fixes); refactors pass only when they unblock a fix.
+
+**Re-triage sweep:** `triage.sh --re-triage` re-reviews ALL triageable issues (including already-triaged ones) under the current policy — a one-shot re-baseline for policy changes like the GA shift. Comments are marked "Re-triaged by …", which the nightly idempotency grep already accepts, so swept issues aren't re-reviewed every night. Parked issues (needs-input / blocked / started) are untouched. Combinable with `--dry-run`.
+
 **Why it matters:** The builder (Opus) reads these comments before implementing. Better plans = stronger implementations. Aaron spends less time triaging raw issues.
 
 ### 3. Overnight Builder
@@ -112,7 +116,7 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
 
 **What it does:**
 - **Auth preflight (before the loop):** one cheap `claude` probe down the real code path. If the keychain OAuth token is expired/logged-out, every iteration would 401; rather than burn the loop silently, the builder aborts immediately and alerts #lift-automation. Auth failures are classified by `is_auth_failure()` in `builder-utils.sh`; transient/network errors are *not* auth signatures and fall through to normal per-iteration handling. Skippable with `SKIP_AUTH_PREFLIGHT=1`. (Added 2026-06-23 after two silent zero-PR nights.)
-- Picks the highest-priority triaged issue from the backlog
+- Picks the highest-priority triaged issue from the backlog (GA tie-break since 2026-08-21: at equal priority, user-facing bug fixes > performance/reliability > UX/a11y polish; refactors, test-only work, and feature-shaped issues last). The per-iteration inline discovery follows the same GA rules — defects and refinements only, no feature or test-coverage issues.
 - Reads the triage agent's implementation plan from comments
 - Creates a dedicated branch per issue: `enhance/LIFT-{id}-{date}`
 - Implements the change: writes code, runs tests, commits with conventional prefixes (feat/fix/a11y/test/perf/style/refactor/chore)
@@ -172,9 +176,27 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
 
 **What it does:**
 - Closes completed/canceled issues that are still open on GitHub via the tracker adapter — issues already closed in a prior session are skipped (checked via `tracker.sh state`), so no redundant `gh issue close` writes are fired
+- **Recycles abandoned in-progress issues** (added 2026-07-27) — see below
 - Detects duplicate issues by title (keeps oldest, cancels+archives newer copies)
 - Keeps issue list clean — closes resolved/duplicate issues
-- Reports `N closed` (real open→closed transitions only) and `K already closed, skipped`
+- Reports `N closed` (real open→closed transitions only), `R recycled`, and `K already closed, skipped`
+
+**Backlog recycling.** The builder's pre-pick flips an issue to `state:started` *before* implementation. If that iteration then dies before opening a PR (auth blip, CI failure, context exhaustion, killed run), nothing clears the label — and because `tracker.sh list pickable` is exclusion-based, a `state:started` issue is removed from the picking pool permanently. This leaks the backlog one issue at a time until the builder starves.
+
+Cleanup now sorts every `state:started` issue into four buckets by cross-referencing PR titles (three `gh pr list` calls, not a per-issue search):
+
+| Bucket | Condition | Action |
+|---|---|---|
+| Recycle | no PR of **any** state references it | auto-reset to `state:unstarted` |
+| In flight | has an **open** PR | none (normal state) |
+| Done, awaiting close | has a **merged** PR | reported as a count |
+| Needs your call | every PR was **closed unmerged** | reported by ID — never auto-recycled |
+
+The rule is deliberately conservative: only the "no PR ever" case is unambiguous. A closed-unmerged PR may have been a deliberate rejection, so auto-recycling it would rebuild work Aaron already declined — those are surfaced for a human decision instead.
+
+Recycled counts are appended to `data/lift-cleanup-metrics.csv` as a fourth `recycled` column. Rows written before 2026-07-27 have three fields, so parsers must tolerate both widths.
+
+> **Adapter query limits.** `tracker.sh list <state>` fetches `--limit 200` (raised from 100 on 2026-07-27 to match the `pickable` query). Truncation here fails *silently* — `gh issue list` just returns a short list with no error — so a stale limit silently hides issues from every consumer, including the builder's do-not-pick list and this recycle step. Keep the limit comfortably above the real open-issue count.
 
 ---
 
@@ -303,6 +325,20 @@ See [Pilot Responsibilities](pilot-responsibilities.md) for the complete list of
 ---
 
 ## Changelog
+
+### 2026-08-21 — GA-readiness shift: pipeline re-aimed from feature discovery to stabilization
+
+**Context.** Lift is feature-complete; the beta build-out phase is over. Continuing to burn overnight runs on feature suggestions (mostly rejected) and test additions (suite already extensive) was waste. The whole pipeline now optimizes for a general-availability release: find bugs, fix bugs, improve performance, refine existing UX.
+
+**Discovery** (`scripts/discover.sh`): new weighted rotation — `bug-hunt` ×5, `performance` ×4, `ux-polish` ×4, `accessibility` ×3, `pwa-reliability` ×2, `security-deps` ×2 (20-slot cycle). Three new focus areas (`bug-hunt`, `ux-polish`, `pwa-reliability`) with codebase-grounded prompts; 11 feature-research areas retired from rotation but kept for manual runs. Prompt now forbids net-new-feature and test-only issues, requires a file citation per finding, re-anchors the priority scale on defects (1=crash/data loss/security … 4=cosmetic), and targets 2–6 discoveries with zero as a valid result. `QUEUE_VERSION` stamp (`lift-discovery-queue.version`) auto-discards queues from older rotations; unknown focus names now fail loud instead of dying on `set -u`. `init.sh` menu/map extended to 17 areas and stamps the version file when seeding.
+
+**Triage** (`scripts/triage.sh`): standing GA policy in the prompt — SKIP net-new features and monetization/growth/marketing ("deferred until post-GA"), SKIP test-only additions, refactors only when they unblock a fix; GA priority scale for SUGGESTED_PRIORITY. New `--re-triage` flag re-reviews the entire triageable backlog under current policy (one-shot re-baseline; "Re-triaged by" comments keep nightly idempotency; parked issues untouched; combinable with `--dry-run`).
+
+**Builder** (`scripts/builder.sh`): pre-pick tie-break re-ordered — bug fixes > perf/reliability > UX/a11y polish > refactors/tests/features. Inline per-iteration discovery list rewritten to defects-and-refinements-only (functional bugs and UX friction added; "missing tests" and "code smells" removed as issue sources).
+
+**Architect** (`lib/architect-utils.sh`): `test-architecture` axis retired, replaced by `error-resilience` (unhandled rejections, silent-failure UX, global error capture, partial-write consistency, retry/recovery). Mandate now carries a GA lens — user-visible bugs/data loss/perf over structural taste; pure refactors reported at P4 or not at all.
+
+**Tests:** discover/architect/triage bats updated + 4 new tests (GA queue shape, version-guard regeneration, re-triage arg parsing/marker, re-triage dry-run). Full suite green (215 tests).
 
 ### 2026-07-17 — Review re-platformed from Gemini CLI to headless Claude
 

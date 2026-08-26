@@ -7,12 +7,17 @@
 
 # ── AXES ─────────────────────────────────────────────────────────────────────
 # 8 architectural axes. The select_axis function rotates through them.
+# 2026-08-21 (GA-readiness shift): "test-architecture" retired — the suite is
+# already extensive and GA mode adds tests only as regression proof inside bug
+# fixes. Replaced by "error-resilience", which hunts the failure paths users
+# actually hit. Historical test-architecture rows in the history CSV are
+# harmless; select_axis simply no longer counts them.
 ARCHITECT_AXES=(
   "store-coherence"
   "composable-quality"
   "component-boundaries"
   "type-safety"
-  "test-architecture"
+  "error-resilience"
   "pwa-offline"
   "theme-invariants"
   "supabase-rls"
@@ -68,7 +73,7 @@ axis_display_name() {
     composable-quality)   echo "Composable Abstraction Quality" ;;
     component-boundaries) echo "Component Layer Boundaries" ;;
     type-safety)          echo "Type-Safety Gaps" ;;
-    test-architecture)    echo "Test Architecture" ;;
+    error-resilience)     echo "Error-Path Resilience" ;;
     pwa-offline)          echo "PWA / Offline Path" ;;
     theme-invariants)     echo "Theme System Invariants" ;;
     supabase-rls)         echo "Supabase RLS / Data-Shape Drift" ;;
@@ -205,19 +210,19 @@ Hunt for runtime type hazards in \`$repo/src/\`:
 Scan: all \`.ts\` and \`.vue\` files under \`$repo/src/\`.
 AXIS
       ;;
-    test-architecture)
+    error-resilience)
       cat <<AXIS
-## Axis: Test Architecture
+## Axis: Error-Path Resilience
 
-Investigate the test suite structure and health:
+Investigate what happens when things FAIL — the paths users hit when the network drops, a write races, or Supabase errors:
 
-1. **Test pyramid shape** — ratio of unit/integration/E2E tests. Are there Playwright/E2E tests, or only Vitest unit tests?
-2. **Mocked vs real** — do store tests mock Supabase, or do they use a real test DB? Inconsistency is a red flag.
-3. **Critical path coverage** — are the core user flows (log set, view history, sync data) covered by tests?
-4. **Composable test patterns** — composables tested in isolation vs only tested through component tests?
-5. **Test flakiness patterns** — tests with \`setTimeout\`, bare \`Promise\` awaits, or order-dependent state?
+1. **Unhandled rejections** — async actions (store actions, composables, event handlers) without try/catch or \`.catch\`. Each is a silent-failure or white-screen risk.
+2. **User-visible failure UX** — when a save/sync/load fails, does the user see an error state with a retry path, or does the UI pretend it worked? Silent data loss is the worst GA bug class.
+3. **Global error capture** — is there an app-level \`onErrorCaptured\` / \`window.onerror\` / unhandledrejection handler, or do errors vanish into the console?
+4. **Partial-write consistency** — multi-step writes (e.g. workout + sets) that can fail halfway and leave stores/DB inconsistent, with no rollback or reconciliation.
+5. **Retry and recovery** — are transient failures retried (with backoff), and does recovering (back online, re-auth) resume cleanly without a manual refresh?
 
-Scan: \`$repo/src/**/__tests__/**\`, \`$repo/tests/**\`, \`$repo/vitest.config.*\`.
+Scan: \`$repo/src/stores/**\`, \`$repo/src/composables/**\`, \`$repo/src/main.ts\`, \`$repo/src/App.vue\`, \`$repo/src/lib/**\`.
 AXIS
       ;;
     pwa-offline)
@@ -316,6 +321,7 @@ You MUST respond with a valid JSON block (and nothing else outside it). The JSON
 ## Rules
 
 - Return **3-7 findings** — quality over quantity. If you find fewer real issues, return fewer.
+- **GA-readiness lens:** $project is feature-complete and stabilizing for a general-availability release. Prefer findings that manifest as user-visible bugs, data loss, performance problems, or broken failure paths. Deprioritize purely structural refactors (naming, file organization, abstraction taste) — report those only at priority 4, or not at all.
 - Priority: 1=architectural risk (data loss / security), 2=high structural debt, 3=medium improvement, 4=low polish.
 - Each finding must reference at least one real file path you actually read.
 - Do NOT report trivial issues: unused imports, typos, style nits — those belong to the Discovery agent.

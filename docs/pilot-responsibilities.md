@@ -68,8 +68,8 @@ updated: 2026-05-08
 ## What's Fully Automated
 
 - Decomposed pipeline — 6 independent services, each with own launchd plist:
-  - Discovery (Sun/Tue/Thu 10 PM): finds improvements, creates Linear issues (Gemini + Claude)
-  - Triage (Sun/Tue/Thu 10:30 PM): reviews issues, adds implementation plans (Gemini, Claude fallback)
+  - Discovery (Sun/Tue/Thu 10 PM): finds improvements, creates GitHub issues (Gemini + Claude). **GA-readiness mode since 2026-08-21:** rotation covers only bug-hunt, performance, ux-polish, accessibility, pwa-reliability, security-deps — no feature research, no test-coverage hunting.
+  - Triage (Sun/Tue/Thu 10:30 PM): reviews issues, adds implementation plans (Gemini, Claude fallback). **GA gate:** net-new features and test-only issues are SKIPped ("deferred until post-GA"); only bug/perf/UX-polish/a11y/security work reaches the builder.
   - Builder (Mon-Fri 11 PM): implements per-issue branches (`enhance/LIFT-{id}-{date}`), per-issue PRs with Claude Sonnet adversarial review (post-commit hook, single model) + auto-fix cycle, CI check. Uses git worktree for isolation. Failed PRs (`ci:failed`) auto-retried next night.
   - Cleanup: runs at end of builder — archives completed/canceled, deduplicates backlog
   - Budget Tuner (Sunday 9 PM): adjusts iteration/token caps based on week's data
@@ -170,6 +170,43 @@ If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/T
 ---
 
 ## Changelog
+
+### 2026-08-21 — GA-readiness shift: Pilot re-aimed from feature discovery to stabilization
+
+Lift's build-out is treated as a completed beta; the pipeline now works toward a general-availability release. Full technical detail in the [architecture doc changelog](pilot-architecture.md#changelog).
+
+- **Discovery** rotation replaced: `bug-hunt` ×5, `performance` ×4, `ux-polish` ×4, `accessibility` ×3, `pwa-reliability` ×2, `security-deps` ×2. Feature-research focuses (competitors, ui-trends, monetization, marketing, growth, seo-aso, onboarding, data-viz, dx-cicd, testing, pwa-patterns) retired from rotation (still runnable manually). Discovery output capped at 2–6 findings, each must cite a code location; no feature or test-only issues.
+- **Triage** enforces the GA gate (features/tests SKIPped as "deferred until post-GA") and gained a one-shot `--re-triage` sweep to re-baseline the existing backlog under the new policy.
+- **Builder** pre-pick prefers bug fixes > perf > UX/a11y polish at equal priority; its inline discovery no longer files feature or test-coverage issues.
+- **Architect** swapped the `test-architecture` axis for `error-resilience` (failure paths, silent data loss, recovery) and deprioritizes purely structural refactors.
+
+**New/changed responsibilities for Aaron:**
+1. **One-time, after merging this change:** run `bash ~/development/pilot/scripts/triage.sh --re-triage` (optionally `--dry-run` first) to re-baseline the existing backlog under GA policy. Old feature-y issues will drop to P4 with "deferred until post-GA" comments — they are parked, not canceled.
+2. Expect morning PRs to be fixes/polish rather than features. SKIP verdicts on feature ideas are deferrals, not rejections — overridable per issue by flipping state back to `state:unstarted` after editing.
+3. Optionally mirror the GA policy in `Lift - Product Decisions.md` (vault) so manual issue writing stays consistent with what triage will pass.
+
+### 2026-07-27 — Builder was starving, not crashing: recycled abandoned issues and closed the backlog leak
+
+**Symptom.** No PRs since 2026-07-23. The builder looked dead, but launchd was healthy and it had run on schedule — Fri 2026-07-24 fired at 23:00, ran for 4 minutes, produced 0 PRs, and exited after a single iteration with `NO_IMPROVEMENTS_REMAINING`. (Sat/Sun are not scheduled; the builder runs Mon–Fri.) Both 2026-07-23 run 3 and the whole 2026-07-24 session ended on the same log line: `🧹 Backlog filter: 2 pickable → 0 after removing already-claimed/attempted issues`.
+
+**Root cause — a one-way backlog leak.** The builder's pre-pick flips an issue to `state:started` *before* implementation. If that iteration dies before opening a PR, nothing ever clears the label. Because `tracker.sh list pickable` is exclusion-based (everything not in triage/backlog/started/blocked/needs-input/canceled), a stuck `state:started` issue leaves the picking pool **permanently**. Nothing in the pipeline ever recycled them — `cleanup.sh` only closed issues already in tracker-state `completed`/`canceled`, which is why it kept reporting `0 closed` while the backlog quietly drained.
+
+At diagnosis: 145 open issues carried `state:started`. Only 34 had an open PR. Of the remaining 113 — 92 had a **merged** PR (done, issue never closed) and 21 were genuinely stranded.
+
+**A second, hidden bug.** `tracker.sh list <state>` used `--limit 100`, but 131 issues carried `state:started`. `gh issue list` truncates silently, so 31 issues were invisible to every consumer — the builder's do-not-pick list and the new recycle step alike. Raised to `--limit 200` to match the `pickable` query.
+
+**Fixes.**
+- **Immediate (data).** Recycled the 14 stranded issues that had **no PR of any state** back to `state:unstarted` — LIFT-536, 580, 598, 616, 619, 664, 666, 667, 751, 783, 834, 836, 850, 966. Effective picking pool went from **2 → 16**, above the 12-iteration nightly cap.
+- **Durable (`scripts/cleanup.sh`).** New step 2 sorts every `state:started` issue into four buckets by cross-referencing PR titles and auto-recycles only the unambiguous "no PR ever" case. Issues whose PR was closed unmerged are reported, never auto-recycled — closing a PR may have been a deliberate rejection, and rebuilding it would churn. Adds a `recycled` column to `data/lift-cleanup-metrics.csv` (pre-existing rows have 3 fields; parsers must tolerate both).
+- **`adapters/tracker.sh`.** `list <state>` limit 100 → 200.
+
+**Verification.** `bash -n` on both scripts; `cleanup.sh --dry-run` reports `0 recycled` (the 14 were already fixed by hand), `92 done awaiting close`, `7 needs your call`, with in-flight open-PR issues correctly excluded — the buckets reconcile to 131 and match an independent manual cross-reference. Confirmed the builder's own filter now yields 16 pickable. I did **not** run `builder.sh 1`: it would open a real PR and spend tonight's token budget, so I verified the exact tracker queries the builder depends on instead.
+
+**⚠️ New for Aaron — two things need your decision:**
+1. **7 issues stuck with a closed-unmerged PR** — LIFT-750, 910, 925, 926, 949, 968, 969. Six were batch-closed within three minutes on 2026-07-20 (a stale-PR sweep, no rejection comments), so they're probably still wanted. Recycle to `state:unstarted` to rebuild, or close as not planned. Cleanup will keep reporting them until you act.
+2. **92 issues are `state:started` with a merged PR** — work is done, the issue was never closed. They no longer block the builder, but they inflate the do-not-pick list injected into every builder prompt. Closing them is a 92-issue bulk write, so I left it for you.
+
+Also worth knowing: **39 open PRs** are outstanding, the oldest from 2026-05-27. Every one of them holds its issue out of the picking pool, so the merge queue is now the pipeline's real throughput limit.
 
 ### 2026-07-17 — Relocated the cover-letter reviewer out of Pilot (job-search tooling, not the Lift pipeline)
 
