@@ -313,12 +313,18 @@ echo "  11) dx-cicd          — CI/CD, build tools, developer experience"
 echo "  12) monetization     — pricing, freemium, revenue"
 echo "  13) marketing        — social media, launch strategy, content"
 echo "  14) growth           — user acquisition, retention, referrals"
+echo "  15) bug-hunt         — codebase bug hunting: races, edge cases, data loss"
+echo "  16) ux-polish        — refine existing flows: states, consistency, friction"
+echo "  17) pwa-reliability  — offline sync correctness, SW update flow, cache bugs"
+echo ""
+echo "  Tip: for a mature app stabilizing toward release, pick 15,16,2,4,17,6"
+echo "  (the GA-readiness set — no feature-hunting focuses)."
 echo ""
 ask "Enter numbers to include (comma-separated) [1,2,3,4,5,6]: "
 read -r FOCUS_CHOICES
 FOCUS_CHOICES="${FOCUS_CHOICES:-1,2,3,4,5,6}"
 
-FOCUS_MAP=("" "competitors" "performance" "ui-trends" "accessibility" "testing" "security-deps" "pwa-patterns" "seo-aso" "data-viz" "onboarding" "dx-cicd" "monetization" "marketing" "growth")
+FOCUS_MAP=("" "competitors" "performance" "ui-trends" "accessibility" "testing" "security-deps" "pwa-patterns" "seo-aso" "data-viz" "onboarding" "dx-cicd" "monetization" "marketing" "growth" "bug-hunt" "ux-polish" "pwa-reliability")
 FOCUS_AREAS=""
 IFS=',' read -ra CHOICES <<< "$FOCUS_CHOICES"
 for c in "${CHOICES[@]}"; do
@@ -427,6 +433,11 @@ fi
 DISCOVERY_QUEUE="$PILOT_DIR/data/${PROJECT_NAME,,}-discovery-queue.txt"
 mkdir -p "$(dirname "$DISCOVERY_QUEUE")"
 echo -e "$FOCUS_AREAS" | sed '/^$/d' > "$DISCOVERY_QUEUE"
+# Stamp the queue with discover.sh's current QUEUE_VERSION so the version
+# guard there doesn't discard this custom seed on the first run. (Unstamped
+# or stale-stamped queues are treated as leftovers from an older rotation.)
+QUEUE_VERSION=$(grep -m1 '^QUEUE_VERSION=' "$PILOT_DIR/scripts/discover.sh" | cut -d'"' -f2)
+[ -n "$QUEUE_VERSION" ] && echo "$QUEUE_VERSION" > "${DISCOVERY_QUEUE%.txt}.version"
 ok "Discovery queue written to $DISCOVERY_QUEUE"
 
 # ── Generate launchd plists ───────────────────────────────────

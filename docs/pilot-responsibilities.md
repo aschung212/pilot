@@ -68,8 +68,8 @@ updated: 2026-05-08
 ## What's Fully Automated
 
 - Decomposed pipeline — 6 independent services, each with own launchd plist:
-  - Discovery (Sun/Tue/Thu 10 PM): finds improvements, creates Linear issues (Gemini + Claude)
-  - Triage (Sun/Tue/Thu 10:30 PM): reviews issues, adds implementation plans (Gemini, Claude fallback)
+  - Discovery (Sun/Tue/Thu 10 PM): finds improvements, creates GitHub issues (Gemini + Claude). **GA-readiness mode since 2026-08-21:** rotation covers only bug-hunt, performance, ux-polish, accessibility, pwa-reliability, security-deps — no feature research, no test-coverage hunting.
+  - Triage (Sun/Tue/Thu 10:30 PM): reviews issues, adds implementation plans (Gemini, Claude fallback). **GA gate:** net-new features and test-only issues are SKIPped ("deferred until post-GA"); only bug/perf/UX-polish/a11y/security work reaches the builder.
   - Builder (Mon-Fri 11 PM): implements per-issue branches (`enhance/LIFT-{id}-{date}`), per-issue PRs with Claude Sonnet adversarial review (post-commit hook, single model) + auto-fix cycle, CI check. Uses git worktree for isolation. Failed PRs (`ci:failed`) auto-retried next night.
   - Cleanup: runs at end of builder — archives completed/canceled, deduplicates backlog
   - Budget Tuner (Sunday 9 PM): adjusts iteration/token caps based on week's data
@@ -170,6 +170,20 @@ If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/T
 ---
 
 ## Changelog
+
+### 2026-08-21 — GA-readiness shift: Pilot re-aimed from feature discovery to stabilization
+
+Lift's build-out is treated as a completed beta; the pipeline now works toward a general-availability release. Full technical detail in the [architecture doc changelog](pilot-architecture.md#changelog). Merged to main 2026-08-26 (PR #20).
+
+- **Discovery** rotation replaced: `bug-hunt` ×5, `performance` ×4, `ux-polish` ×4, `accessibility` ×3, `pwa-reliability` ×2, `security-deps` ×2. Feature-research focuses (competitors, ui-trends, monetization, marketing, growth, seo-aso, onboarding, data-viz, dx-cicd, testing, pwa-patterns) retired from rotation (still runnable manually). Discovery output capped at 2–6 findings, each must cite a code location; no feature or test-only issues.
+- **Triage** enforces the GA gate (features/tests SKIPped as "deferred until post-GA") and gained a one-shot `--re-triage` sweep to re-baseline the existing backlog under the new policy.
+- **Builder** pre-pick prefers bug fixes > perf > UX/a11y polish at equal priority; its inline discovery no longer files feature or test-coverage issues.
+- **Architect** swapped the `test-architecture` axis for `error-resilience` (failure paths, silent data loss, recovery) and deprioritizes purely structural refactors.
+
+**New/changed responsibilities for Aaron:**
+1. ~~One-time, after merging: run `triage.sh --re-triage`~~ — ✅ done 2026-08-26 at merge time (Claude ran the sweep; results in #lift-automation). Re-run only if triage policy changes again.
+2. Expect morning PRs to be fixes/polish rather than features. SKIP verdicts on feature ideas are deferrals, not rejections — overridable per issue by flipping state back to `state:unstarted` after editing.
+3. Optionally mirror the GA policy in `Lift - Product Decisions.md` (vault) so manual issue writing stays consistent with what triage will pass.
 
 ### 2026-08-17 — Lift: PWA boot path hardened against the standalone crash loop (issue #1155, PR #1157)
 

@@ -214,3 +214,57 @@ OPTION_3_CONS: con c"
     ! grep -q "comment add" "$TEST_TMPDIR/mock_calls/linear"
   fi
 }
+
+# ── GA re-triage sweep ───────────────────────────────────────────────────────
+
+# bats test_tags=fast
+@test "triage: argument parsing accepts --re-triage and --dry-run, rejects unknown" {
+  # Mirror the arg-parse loop from triage.sh
+  parse_args() {
+    DRY_RUN=""
+    RETRIAGE=""
+    for arg in "$@"; do
+      case "$arg" in
+        --dry-run)   DRY_RUN="--dry-run" ;;
+        --re-triage) RETRIAGE="1" ;;
+        *) return 1 ;;
+      esac
+    done
+    return 0
+  }
+
+  parse_args --dry-run
+  [ "$DRY_RUN" = "--dry-run" ] && [ -z "$RETRIAGE" ]
+
+  parse_args --re-triage --dry-run
+  [ "$DRY_RUN" = "--dry-run" ] && [ "$RETRIAGE" = "1" ]
+
+  run parse_args --bogus
+  [ "$status" -eq 1 ]
+}
+
+# bats test_tags=fast
+@test "triage: re-triage marker satisfies the nightly idempotency grep" {
+  # A "Re-triaged by" comment must count as triaged so nightly runs skip it,
+  # and re-triage sweeps must be recorded distinctly from first-pass triage.
+  COMMENTS="**Re-triaged by gemini-2.5-flash** (2026-08-21) — ⏭️ SKIP deferred until post-GA"
+  echo "$COMMENTS" | grep -q "Triaged by\|Re-triaged by"
+
+  COMMENTS="**Triaged by gemini-2.5-flash** (2026-05-01) — ✅ APPROVED"
+  echo "$COMMENTS" | grep -q "Triaged by\|Re-triaged by"
+
+  # An untriaged issue matches neither marker
+  ! echo "just a human comment" | grep -q "Triaged by\|Re-triaged by"
+}
+
+# bats test_tags=fast
+@test "triage: re-triage dry-run reviews already-triaged issues without writes" {
+  export MOCK_CURL_OUTPUT='{"candidates":[{"content":{"parts":[{"text":"VERDICT: SKIP\nCONFIDENCE: 9\nREASON: deferred until post-GA\nCOMPLEXITY: small\nSUGGESTED_PRIORITY: 4"}]}}]}'
+  run bash "$TRIAGE" --re-triage --dry-run
+  [ "$status" -eq 0 ]
+  # Re-triage sweep header appears
+  [[ "$output" == *"re-triage sweep"* ]]
+  if [ -f "$TEST_TMPDIR/mock_calls/linear" ]; then
+    ! grep -q "comment add" "$TEST_TMPDIR/mock_calls/linear"
+  fi
+}
