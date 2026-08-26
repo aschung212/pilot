@@ -261,12 +261,15 @@ $PREVIOUS_SEARCHES
 
 ## Output format
 
+CRITICAL — the pipeline parses ONLY your FINAL message. Text from earlier turns in this session is invisible to it: an ISSUE_DISCOVER line emitted mid-session, or a summary saying findings were "filed above", produces ZERO issues and the entire run is wasted (this happened on 2026-08-26 — six verified bugs were lost). Your final message MUST itself contain the complete structured output below, with every ISSUE_DISCOVER line in full, even if you already wrote them earlier while working. Do not summarize or reference them — restate them.
+
 ## Search Summary
 What you searched for and key findings (3-5 sentences)
 
 ## Discoveries
 For each finding, output:
 ISSUE_DISCOVER:priority:title|description with source URL or reasoning
+(If nothing met the bar, write "No discoveries met the bar this run" here instead — that is a valid result.)
 
 Example:
 ISSUE_DISCOVER:2:Fix lost set data when app is backgrounded mid-rest-timer|WorkoutView.vue persists the active session only on explicit save; iOS kills backgrounded PWAs after ~30s, so sets logged before a rest timer are lost. Repro: log set, background app during timer, reopen. Fix: persist activeWorkout to localStorage on every mutation.
@@ -438,6 +441,21 @@ fi
 DISCOVER_COUNT=$({ grep -oE 'ISSUE_DISCOVER:[1-4]:' "$RUN_LOG" 2>/dev/null || true; } | wc -l | tr -d ' ')
 DISCOVER_PRIORITIES=$({ grep -oE 'ISSUE_DISCOVER:[1-4]:' "$RUN_LOG" 2>/dev/null || true; } | grep -oE '[1-4]' | sort | tr '\n' '/' | sed 's/$//')
 echo "$DATE,$FOCUS,$DISCOVER_COUNT,$DISCOVER_PRIORITIES,$DISCOVER_DURATION" >> "$DISCOVERY_METRICS"
+
+# Fail loud on lost findings. A zero-discovery run is only legitimate when the
+# final message carries the explicit "nothing met the bar" sentinel (see the
+# prompt). Zero parsed ISSUE_DISCOVER lines + zero inline-created issues +
+# no sentinel means the model emitted findings mid-session where the pipeline
+# cannot see them (2026-08-26: six verified bugs lost this way, salvaged by
+# hand). Alert so the run gets salvaged from the log instead of silently
+# reading as "nothing found".
+if [ "$DISCOVER_COUNT" -eq 0 ] && [ "${CLAUDE_CREATED:-0}" -eq 0 ] \
+   && ! grep -qi "No discoveries met the bar" "$RUN_LOG" 2>/dev/null; then
+  echo "  ⚠️ 0 discoveries parsed and no 'nothing met the bar' sentinel — findings may be stranded mid-session. Check $RUN_LOG." | tee -a "$RUN_LOG"
+  slack_send "⚠️ *Discovery — possible lost findings*
+Focus: $FOCUS | Date: $DATE
+0 ISSUE_DISCOVER lines parsed, 0 issues created inline, and the run did not declare 'no discoveries met the bar'. The model likely emitted findings mid-session where the pipeline cannot parse them. Salvage manually from lift-discover-$DATE.md." || true
+fi
 
 # Append searches to the search log for deduplication
 { grep -oE 'SEARCH:.*' "$RUN_LOG" 2>/dev/null || true; } | while read -r line; do

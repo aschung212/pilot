@@ -161,3 +161,36 @@ LOG
   fi
   [ "$FOCUS" = "security-deps" ]
 }
+
+# bats test_tags=fast
+@test "discover: lost-findings guard fires only without the zero-sentinel" {
+  # Mirror the fail-loud check from discover.sh (2026-08-26): zero parsed
+  # discoveries + zero inline-created issues is only OK when the final message
+  # declares "No discoveries met the bar".
+  check_lost() { # $1=run log file, $2=count, $3=created — returns 0 if alert should fire
+    [ "$2" -eq 0 ] && [ "${3:-0}" -eq 0 ] \
+      && ! grep -qi "No discoveries met the bar" "$1" 2>/dev/null
+  }
+
+  RUN_LOG="$TEST_TMPDIR/run.md"
+
+  # Stranded-findings run: prose only, no sentinel → alert
+  echo "Six verified bugs filed as discoveries above." > "$RUN_LOG"
+  run check_lost "$RUN_LOG" 0 0
+  [ "$status" -eq 0 ]
+
+  # Legitimate empty run: sentinel present → no alert
+  echo "No discoveries met the bar this run" > "$RUN_LOG"
+  run check_lost "$RUN_LOG" 0 0
+  [ "$status" -eq 1 ]
+
+  # Findings parsed → no alert regardless of sentinel
+  echo "ISSUE_DISCOVER:2:Fix thing|details" > "$RUN_LOG"
+  run check_lost "$RUN_LOG" 1 0
+  [ "$status" -eq 1 ]
+
+  # Issues created inline (gh URLs) → no alert
+  echo "created https://github.com/o/r/issues/12" > "$RUN_LOG"
+  run check_lost "$RUN_LOG" 0 1
+  [ "$status" -eq 1 ]
+}
