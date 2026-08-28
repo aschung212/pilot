@@ -168,6 +168,7 @@ pilot/
     triage.sh                # Triage agent
     builder.sh               # Overnight builder
     cleanup.sh               # Issue tracker cleanup
+    stale-pr-audit.sh        # On-demand: open PRs whose work already shipped
     tune-budget.sh           # Budget auto-tuner
     health-report.sh         # Weekly health dashboard
     digest.sh                # Morning digest

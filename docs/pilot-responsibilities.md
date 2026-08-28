@@ -171,6 +171,36 @@ If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/T
 
 ## Changelog
 
+### 2026-08-28 — Why the pipeline built the same change twice (LIFT-783 / LIFT-1039), and the three defects behind it
+
+**Symptom.** Resolving PR #1041 surfaced that the pipeline had shipped the same work twice: LIFT-783 (PR #1032, merged 2026-08-04) and LIFT-1039 — "Split from LIFT-783" — (PR #1041, opened 2026-07-29). Same migration, same always-send upsert field, same setter. #1041 sat open a month and merged with **zero schema delta**; the only thing worth keeping was an unrelated `syncQueue` bug it found on the way.
+
+**Root cause — a lost state flip, not a dedupe gap.** Every dedupe layer worked as designed; they are all keyed on *issue identity*, and the work had been laundered into a new identity. The chain:
+
+1. `2026-07-27` run 3's pre-pick produced no parseable `ISSUE_PICKED` marker. The run log says it plainly: *"state-flip-on-pick is skipped this iteration."* Stage 2 still ran, picked LIFT-783 on its own, and opened PR #1032.
+2. Neither fallback flip fired. The commit-driven one skips any issue that has an `ISSUE_DONE:` marker; the handler it defers to required a **pipe** separator (`ISSUE_DONE:LIFT-N|summary`) that the builder has never once emitted — **0 of 96** recorded runs use it; every run uses the colon form. That handler had been dead code since it was written, taking the state flip, the "Implementation complete" comment, the PR-title fallback, and the Slack digest links with it.
+3. So LIFT-783 sat at `state:unstarted` with an open PR.
+4. Triage — the only stage that never looked at pull requests — treated it as fresh backlog, returned RESCOPE, created LIFT-1039, and canceled the parent.
+5. The builder picked LIFT-1039. New number, no open PR references it, every guard passes. PR #1041.
+
+**On the three hypotheses in the original write-up:** (1) parent/child splits leaving both buildable — **not what happened**; triage canceled the parent six seconds after creating the child. (2) a pre-build freshness check against the codebase — **would not have prevented this**; at #1041's creation `plate_count_mode` was not in master, only in the still-open #1032, and master stayed clean for six more days. (3) PR queue depth — **right instinct**; depth is why the waste went unnoticed for a month, though the duplicate was created within 22 hours, so depth amplified the cost rather than causing it.
+
+**Fixes.**
+- **`lib/builder-utils.sh` / `scripts/builder.sh`** — new `_marker_lines` accepts every separator the agent actually emits (`:`, `|`, em dash, bare) and normalizes to one form. Resurrects four parsers.
+- **`scripts/triage.sh`** — defers any issue with an open PR. A **deferral, not a skip**: the issue is untouched and comes back into scope when the PR merges or closes, so a false positive costs one cycle and can never drop real work. Fails open; every deferral is logged and posted to the triage Slack thread.
+- **`adapters/tracker.sh`** — open-issue queries now share `GH_OPEN_LIMIT` (**200 → 1000**) plus a truncation warning. Found while verifying the above: with 265 open issues, the 200 cap was hiding **8 of 10** triageable issues and **3 of 5** pickable ones. The builder had been choosing from a pool of 2.
+- **`scripts/stale-pr-audit.sh`** (new) — flags open PRs whose work already shipped: no-op merges, migrations duplicating a master column, and two open PRs adding the same column.
+
+**Backlog audit (your "worth checking" ask).** Ran the audit over the open-PR set: **no other duplicates**. No no-op PRs, no migration duplicating master, no two PRs colliding on a column. #1041 was a one-off, not the tip of a pile.
+
+**Verification.** `bash -n` clean across all scripts; full bats suite **234 passing, 0 failures** (up from 199 — 7 new marker tests, 4 new triage-deferral tests, 7 new audit tests). `triage.sh --dry-run` against the live backlog now prints `🔒 Deferred 1 issue(s) with an open PR — LIFT-616` — a **live recurrence** of the exact #783 configuration, caught. The audit's cross-PR check was retro-validated against the incident: it reports `exercises.plate_count_mode added by PRs [1032, 1041]` on the day #1041 was opened, a month before it was found by hand.
+
+**⚠️ New for Aaron:**
+1. **`stale-pr-audit.sh` is NOT wired into the nightly chain** — you asked to see it first. Run it on demand with `./scripts/stale-pr-audit.sh` (add `--notify` to post to Slack). Say the word and I'll add it to the overnight chain after cleanup.
+2. **I did not run `builder.sh 1`.** The Infrastructure Change Protocol calls for it, but it opens a real PR against Lift and spends budget, so I verified the exact tracker/triage queries the builder depends on instead. Worth doing before the next unattended run.
+3. **LIFT-616 is the live recurrence** — `state:unstarted` with open PR #1065 (28 days). Triage now defers it, so it can't be forked, but the PR still needs landing or closing.
+4. **The picking pool just tripled** (2 → 5 pickable) now that truncation is fixed. Expect the builder to have more to choose from tonight.
+
 ### 2026-08-28 — Lift: exercise-first gyms + tags manager (#1252, PR #1253); master CI found red (#1254)
 
 - **What.** New **Settings › Exercises › "Manage Exercises"** — the inverse of Manage Gyms. Every exercise in one alphabetical, searchable list; each row expands to a Gyms and a Tags chip picker, toggles applying immediately. Collapsed rows carry a gym summary line ("Gold's Gym · Home Garage", or "All gyms" when unassigned) so membership gaps are scannable without tapping in; archived exercises sink to the bottom with an "Archived" prefix.

@@ -104,6 +104,8 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
 
 **GA-readiness gate (since 2026-08-21):** the triage prompt carries a standing policy — Lift is stabilizing for GA, so only bug fixes, performance, UX refinement, accessibility, and security work passes. Net-new features and monetization/growth/marketing issues get SKIP with "deferred until post-GA"; test-only additions get SKIP (tests ship only as regression proof inside bug fixes); refactors pass only when they unblock a fix.
 
+**In-flight deferral (since 2026-08-28):** before reviewing anything, triage drops every issue that already has an **open PR**. Triage was the last stage that never consulted pull requests — `triageable` is label-based and excludes only `{started, blocked, needs-input, canceled}`, so an issue whose PR was open but whose state label had never been flipped to `state:started` looked like untouched backlog. A RESCOPE verdict then forked live, already-implemented work into brand-new issue numbers that every issue-identity-keyed dedupe downstream waved through. This is a **deferral, not a skip**: the issue is left completely untouched and returns to triage scope the moment its PR merges or closes, so a false positive costs one triage cycle and can never drop an issue. The check fails open — if the `gh` call errors, nothing is deferred. Deferrals are printed to the triage log and posted to the run's Slack thread.
+
 **Re-triage sweep:** `triage.sh --re-triage` re-reviews ALL triageable issues (including already-triaged ones) under the current policy — a one-shot re-baseline for policy changes like the GA shift. Comments are marked "Re-triaged by …", which the nightly idempotency grep already accepts, so swept issues aren't re-reviewed every night. Parked issues (needs-input / blocked / started) are untouched. Combinable with `--dry-run`.
 
 **Why it matters:** The builder (Opus) reads these comments before implementing. Better plans = stronger implementations. Aaron spends less time triaging raw issues.
@@ -126,7 +128,7 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
 - Creates a PR per issue with structured description: issue links, test results, review status
 - PRs labeled by type (type:a11y, type:test, type:bugfix, type:feature, etc.)
 - Failed PR retry: PRs labeled `ci:failed` from previous nights are auto-retried
-- Updates issue tracker (marks issues In Progress/Blocked; closure deferred to PR merge via "Closes #N")
+- Updates issue tracker (marks issues In Progress/Blocked; closure deferred to PR merge via "Closes #N"). Post-run marker parsing goes through `_marker_lines` in `builder-utils.sh`, which accepts every separator the agent actually emits (`ISSUE_DONE:LIFT-N:summary`, `|`, em dash, or a bare marker) and normalizes them to a single pipe. The parsers previously required the pipe form the prompt asks for, which the agent had never once emitted — see the 2026-08-28 changelog entry.
 - Repeats for up to 12 iterations or 500K output tokens
 
 **Controls** (auto-tuned nightly by `lift-tune-budget.sh`):
@@ -196,13 +198,13 @@ The rule is deliberately conservative: only the "no PR ever" case is unambiguous
 
 Recycled counts are appended to `data/lift-cleanup-metrics.csv` as a fourth `recycled` column. Rows written before 2026-07-27 have three fields, so parsers must tolerate both widths.
 
-> **Adapter query limits.** `tracker.sh list <state>` fetches `--limit 200` (raised from 100 on 2026-07-27 to match the `pickable` query). Truncation here fails *silently* — `gh issue list` just returns a short list with no error — so a stale limit silently hides issues from every consumer, including the builder's do-not-pick list and this recycle step. Keep the limit comfortably above the real open-issue count.
+> **Adapter query limits.** Every open-issue query in `tracker.sh` shares a single cap, `GH_OPEN_LIMIT` (default **1000**, overridable by env). Truncation here fails *silently* — `gh issue list` just returns a short list with no error — so a stale cap hides issues from every consumer at once. This has bitten twice: `list <state>` was capped at 100 until 2026-07-27, hiding 31 `state:started` issues from the recycler; the 200 cap that replaced it was found on 2026-08-28 hiding **8 of 10** triageable issues and **3 of 5** pickable ones behind 265 open issues, leaving the builder to choose from a pool of 2. `gh_list` now also warns on stderr when an open-issue query comes back at exactly the cap, which is the only externally visible symptom of truncation. Keep `GH_OPEN_LIMIT` comfortably above the real open-issue count.
 
 ---
 
 ## Testing Infrastructure
 
-The pipeline has a bats-core test suite with **199 tests across 22 test files** in `~/development/pilot/tests/`. Tests use two-tier execution to balance speed with thoroughness:
+The pipeline has a bats-core test suite with **234 tests across 21 test files** in `~/development/pilot/tests/`. Tests use two-tier execution to balance speed with thoroughness:
 
 **Fast tier (196 tests) — pre-commit hook:**
 - Runs before every commit via `.githooks/pre-commit`
@@ -211,7 +213,7 @@ The pipeline has a bats-core test suite with **199 tests across 22 test files** 
 - Parallel execution via GNU parallel (`bats -j 8`)
 - Blocks commit if any test fails
 
-**Full tier (199 tests) — GitHub Actions CI:**
+**Full tier (234 tests) — GitHub Actions CI:**
 - Runs on every push via `.github/workflows/test.yml`
 - Includes everything in the fast tier plus integration-level tests (CSV analysis, full script invocations)
 - Test paths resolve dynamically (no hardcoded local paths) for CI runner compatibility
@@ -312,7 +314,8 @@ Feedback loop → Aaron's corrections improve future reviews + discovery
 | `~/development/pilot/adapters/` | Swappable tool adapters (tracker, notify, ai-code, ai-research) |
 | `~/development/pilot/lib/log.sh` | Shared structured logging library |
 | `~/development/pilot/config/budget.conf` | Budget config (auto-tuned) |
-| `~/development/pilot/tests/` | bats-core test suite (199 tests, 22 files, two-tier execution) |
+| `~/development/pilot/scripts/stale-pr-audit.sh` | On-demand audit: open PRs whose work has already shipped (no-op merges, duplicate/colliding migrations) |
+| `~/development/pilot/tests/` | bats-core test suite (234 tests, 21 files, two-tier execution) |
 | `~/development/pilot/.github/workflows/test.yml` | GitHub Actions CI — full test suite on push |
 | `~/development/pilot/.githooks/pre-commit` | Pre-commit hook — fast test tier on every commit |
 | `~/development/pilot/project.env` | Lift-specific configuration (git-ignored) |
@@ -325,6 +328,26 @@ See [Pilot Responsibilities](pilot-responsibilities.md) for the complete list of
 ---
 
 ## Changelog
+
+### 2026-08-28 — Duplicate-build root cause: a lost state flip, and triage forking in-flight work
+
+**Incident.** LIFT-783 and LIFT-1039 ("Split from LIFT-783") were built independently as PR #1032 and PR #1041 — the same migration, the same always-send upsert field, the same setter. #1041 sat open for a month and merged with zero schema delta.
+
+**Chain of causes** (each verified against the run logs and the GitHub timeline):
+
+1. `2026-07-27` run 3's pre-pick emitted no parseable `ISSUE_PICKED` marker, so the deterministic `state:started` flip was skipped — the run log says so outright: *"state-flip-on-pick is skipped this iteration."* Stage 2 ran anyway, picked LIFT-783 itself, and opened PR #1032.
+2. Both fallback flips then failed. The commit-driven flip skips any issue with an `ISSUE_DONE:` marker (its guard has no separator requirement, so it matched), and the `ISSUE_DONE` handler it defers to required a **pipe** separator that the builder agent has never emitted — **0 of 96** recorded runs use the pipe form; all use `ISSUE_DONE:LIFT-N:summary`. That handler had never executed. Its state flip, its "Implementation complete" comment, the PR title fallback, and the Slack digest links were all dead code.
+3. LIFT-783 therefore kept `state:unstarted` while its PR was open.
+4. `triage.sh` — the only stage that never consulted pull requests — saw it as untriaged, in-scope backlog, returned RESCOPE, created LIFT-1039, and canceled the parent. (The split itself was clean: the parent was canceled six seconds after the child was created. Parent/child leakage was **not** the bug.)
+5. The builder picked LIFT-1039 the same night. A brand-new issue number has no open PR referencing it, so all three existing dedupe layers — discovery's do-not-duplicate lists, the builder's picking-time open-PR filter, the pre-PR guard — passed cleanly. Every one of them is keyed on *issue identity*, and the work had been laundered into a new identity.
+
+**Fixes.**
+- **`lib/builder-utils.sh`** — new `_marker_lines` normalizes `|`, `:`, em dash, and bare markers to a single pipe. The four `ISSUE_DONE`/`ISSUE_PROGRESS` parsers in `builder.sh` now call it, restoring the state flip and the three other consumers.
+- **`scripts/triage.sh`** — defers any issue with an open PR before review. A deferral, not a skip: the issue is untouched and returns to scope when the PR resolves. Fails open; logged to the triage log and the Slack thread.
+- **`adapters/tracker.sh`** — all open-issue queries share `GH_OPEN_LIMIT` (200 → **1000**), plus a stderr warning when a query returns exactly at the cap. Found while verifying the triage guard: with 265 open issues the 200 cap was hiding **8 of 10** triageable and **3 of 5** pickable issues.
+- **`scripts/stale-pr-audit.sh`** (new, on-demand) — asks the question issue identity cannot: does merging this PR still change anything? Flags no-op merges (`git merge-tree` against master), migrations duplicating a column already in master, and two open PRs adding the same column.
+
+**Why not a pre-build freshness check against master.** Verified as ineffective for this incident: when PR #1041 was opened, `plate_count_mode` was **not** in master — it lived only in the still-open PR #1032, and master stayed clean for six more days. Checking the codebase at build time would have found nothing. The duplicate was visible only in the *open-PR set*, which is why the audit's cross-PR collision check is the one that fires (retro-validated: it flags `exercises.plate_count_mode added by PRs [1032, 1041]` at #1041's creation).
 
 ### 2026-08-21 — GA-readiness shift: pipeline re-aimed from feature discovery to stabilization
 

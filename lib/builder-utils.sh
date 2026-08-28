@@ -252,3 +252,28 @@ run_with_timeout() {
   [ -n "$timed_out" ] && return 124
   return "$rc"
 }
+
+# ── Marker parsing ────────────────────────────────────────────────────────
+# The prompt template asks for `ISSUE_DONE:LIFT-N|summary` (pipe), but the
+# builder agent has emitted the colon form `ISSUE_DONE:LIFT-N:summary` in
+# 96 of 96 recorded runs — the pipe form has never once appeared. Every
+# downstream parser used to require the pipe, so all of them silently
+# no-opped: the state flip to In Progress, the "Implementation complete"
+# comment, the PR title, and the Slack digest links.
+#
+# That is what stranded LIFT-783 on 2026-07-28. Its pre-pick emitted no
+# parseable ISSUE_PICKED marker, so state-flip-on-pick was skipped; the
+# commit-driven fallback then skipped it too (its guard matches the colon
+# form), and this handler never fired. #783 kept state:unstarted while
+# PR #1032 was open, triage saw a live issue as fair game, rescoped it into
+# #1039, and the builder rebuilt the same work as PR #1041.
+#
+# Normalize every accepted separator (`|`, `:`, em dash, or none at all)
+# to a single pipe so the existing `IFS='|' read -r marker summary` parsing
+# keeps working unchanged.
+_marker_lines() {
+  local kind="$1" log="$2"
+  { grep -oE "${kind}:${ISSUE_PREFIX}-[0-9]+[^\"]*" "$log" 2>/dev/null || true; } \
+    | sed -E "s/^(${kind}:${ISSUE_PREFIX}-[0-9]+)([[:space:]]*(\||:|—)[[:space:]]*)?/\1|/" \
+    | sort -u
+}

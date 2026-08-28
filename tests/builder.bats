@@ -269,3 +269,69 @@ EOF
   sleep 3
   [ ! -e "$marker" ]
 }
+
+# ── _marker_lines (ISSUE_DONE / ISSUE_PROGRESS separator normalization) ──────
+# Regression cover for the 2026-07-28 LIFT-783 duplicate-build incident: the
+# prompt asks for `ISSUE_DONE:LIFT-N|summary` but the agent has only ever
+# emitted the colon form, so every pipe-only parser silently no-opped and the
+# issue was never flipped to state:started while its PR was open.
+
+# bats test_tags=fast
+@test "builder: _marker_lines parses the colon form the agent actually emits" {
+  export ISSUE_PREFIX=LIFT
+  echo 'ISSUE_DONE:LIFT-783:Synced plateCountMode via a new column' > "$TEST_TMPDIR/run.md"
+  run _marker_lines ISSUE_DONE "$TEST_TMPDIR/run.md"
+  [ "$status" -eq 0 ]
+  [ "$output" = "ISSUE_DONE:LIFT-783|Synced plateCountMode via a new column" ]
+}
+
+# bats test_tags=fast
+@test "builder: _marker_lines still parses the documented pipe form" {
+  export ISSUE_PREFIX=LIFT
+  echo 'ISSUE_DONE:LIFT-42|Did the thing' > "$TEST_TMPDIR/run.md"
+  run _marker_lines ISSUE_DONE "$TEST_TMPDIR/run.md"
+  [ "$output" = "ISSUE_DONE:LIFT-42|Did the thing" ]
+}
+
+# bats test_tags=fast
+@test "builder: _marker_lines parses the em-dash form" {
+  export ISSUE_PREFIX=LIFT
+  echo 'ISSUE_DONE:LIFT-7 — Did the thing' > "$TEST_TMPDIR/run.md"
+  run _marker_lines ISSUE_DONE "$TEST_TMPDIR/run.md"
+  [ "$output" = "ISSUE_DONE:LIFT-7|Did the thing" ]
+}
+
+# bats test_tags=fast
+@test "builder: _marker_lines emits a bare marker with an empty summary" {
+  export ISSUE_PREFIX=LIFT
+  echo 'ISSUE_DONE:LIFT-9' > "$TEST_TMPDIR/run.md"
+  run _marker_lines ISSUE_DONE "$TEST_TMPDIR/run.md"
+  [ "$output" = "ISSUE_DONE:LIFT-9|" ]
+}
+
+# bats test_tags=fast
+@test "builder: _marker_lines splits id from summary under IFS=|" {
+  export ISSUE_PREFIX=LIFT
+  echo 'ISSUE_DONE:LIFT-783:Synced plateCountMode' > "$TEST_TMPDIR/run.md"
+  _marker_lines ISSUE_DONE "$TEST_TMPDIR/run.md" | while IFS='|' read -r marker summary; do
+    [ "$marker" = "ISSUE_DONE:LIFT-783" ]
+    [ "$summary" = "Synced plateCountMode" ]
+  done
+}
+
+# bats test_tags=fast
+@test "builder: _marker_lines keeps ISSUE_PROGRESS separate from ISSUE_DONE" {
+  export ISSUE_PREFIX=LIFT
+  printf 'ISSUE_DONE:LIFT-1:done thing\nISSUE_PROGRESS:LIFT-2:progress thing\n' > "$TEST_TMPDIR/run.md"
+  run _marker_lines ISSUE_PROGRESS "$TEST_TMPDIR/run.md"
+  [ "$output" = "ISSUE_PROGRESS:LIFT-2|progress thing" ]
+}
+
+# bats test_tags=fast
+@test "builder: _marker_lines returns nothing when no markers are present" {
+  export ISSUE_PREFIX=LIFT
+  echo 'no markers here' > "$TEST_TMPDIR/run.md"
+  run _marker_lines ISSUE_DONE "$TEST_TMPDIR/run.md"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
