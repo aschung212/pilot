@@ -73,3 +73,60 @@ load test_helper
     false
   fi
 }
+
+# ── launchd plists ──────────────────────────────────────────────────────────
+# A malformed or mis-pointed plist fails SILENTLY: launchd refuses to load it
+# and the service simply never runs. That is the same invisible-failure family
+# as the 2026-08-28 marker-format and list-truncation bugs, so it gets a guard.
+#
+# Plists carry absolute paths tied to Aaron's machine (/Users/aaron/...), which
+# do not exist in CI. The path check therefore rebases any `.../pilot/scripts/X.sh`
+# argument onto this checkout's own scripts/ directory — that catches typos,
+# renames, and deletions without depending on where the repo lives.
+
+# bats test_tags=fast
+@test "smoke: every launchd plist is valid and well-formed" {
+  bad=""
+  for plist in "$PILOT_DIR"/launchd/*.plist; do
+    plutil -lint "$plist" >/dev/null 2>&1 || bad+="  $(basename "$plist") — malformed\n"
+  done
+  if [ -n "$bad" ]; then echo -e "$bad" >&2; false; fi
+}
+
+# bats test_tags=fast
+@test "smoke: every launchd plist points at a script this repo actually has" {
+  run python3 - "$PILOT_DIR" <<'PYEOF'
+import sys, os, glob, plistlib
+root = sys.argv[1]
+bad = []
+for f in sorted(glob.glob(os.path.join(root, "launchd", "*.plist"))):
+    with open(f, "rb") as fh:
+        d = plistlib.load(fh)
+    for arg in d.get("ProgramArguments", []):
+        if not isinstance(arg, str) or not arg.endswith(".sh"):
+            continue
+        marker = "/pilot/scripts/"
+        if marker in arg:
+            local = os.path.join(root, "scripts", arg.split(marker, 1)[1])
+            if not os.path.exists(local):
+                bad.append(f"{os.path.basename(f)} -> {arg} (no {local})")
+for b in bad:
+    print(b)
+sys.exit(1 if bad else 0)
+PYEOF
+  [ "$status" -eq 0 ] || { echo "$output" >&2; false; }
+}
+
+# bats test_tags=fast
+@test "smoke: every launchd plist declares a Label and a schedule" {
+  bad=""
+  for plist in "$PILOT_DIR"/launchd/*.plist; do
+    plutil -extract Label raw -o - "$plist" >/dev/null 2>&1 \
+      || bad+="  $(basename "$plist") — no Label\n"
+    if ! plutil -extract StartCalendarInterval raw -o - "$plist" >/dev/null 2>&1 \
+       && ! plutil -extract StartInterval raw -o - "$plist" >/dev/null 2>&1; then
+      bad+="  $(basename "$plist") — no StartCalendarInterval/StartInterval\n"
+    fi
+  done
+  if [ -n "$bad" ]; then echo -e "$bad" >&2; false; fi
+}

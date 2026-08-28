@@ -983,7 +983,7 @@ Fix the failing build/tests. Do NOT revert the feature — fix the actual issue.
         # PR is still open while the issue shows Closed — orphaned state.
         # Builder requires Claude to include "Closes #N" in commit bodies so
         # the GitHub merge mechanism is the single source of truth.
-        { grep -oE "ISSUE_DONE:${ISSUE_PREFIX}-[0-9]+\|[^\"]*" "$RUN_LOG" 2>/dev/null || true; } | sort -u | while IFS='|' read -r marker summary; do
+        _marker_lines ISSUE_DONE "$RUN_LOG" | sort -u | while IFS='|' read -r marker summary; do
           issue_id=$(echo "$marker" | sed 's/ISSUE_DONE://')
           summary=${summary:-No details provided}
           echo "  Marking $issue_id as In Progress (closes on PR merge)" | tee -a "$RUN_LOG"
@@ -996,7 +996,7 @@ $summary
 
 This issue will close automatically when the PR merges." 2>&1 | tee -a "$RUN_LOG"
         done
-        { grep -oE "ISSUE_PROGRESS:${ISSUE_PREFIX}-[0-9]+\|[^\"]*" "$RUN_LOG" 2>/dev/null || true; } | sort -u | while IFS='|' read -r marker summary; do
+        _marker_lines ISSUE_PROGRESS "$RUN_LOG" | sort -u | while IFS='|' read -r marker summary; do
           issue_id=$(echo "$marker" | sed 's/ISSUE_PROGRESS://')
           summary=${summary:-No details provided}
           echo "  Marking $issue_id as In Progress" | tee -a "$RUN_LOG"
@@ -1005,9 +1005,9 @@ This issue will close automatically when the PR merges." 2>&1 | tee -a "$RUN_LOG
         done
 
         # Build structured PR description
-        ISSUE_TITLE=$(grep -oE "ISSUE_DONE:${ISSUE_PREFIX}-[0-9]+\|.*" "$RUN_LOG" 2>/dev/null | head -1 | sed "s/ISSUE_DONE:${ISSUE_PREFIX}-[0-9]*|//" || echo "")
+        ISSUE_TITLE=$(_marker_lines ISSUE_DONE "$RUN_LOG" | head -1 | sed "s/ISSUE_DONE:${ISSUE_PREFIX}-[0-9]*|//" || echo "")
         if [ -z "$ISSUE_TITLE" ]; then
-          ISSUE_TITLE=$(grep -oE "ISSUE_PROGRESS:${ISSUE_PREFIX}-[0-9]+\|.*" "$RUN_LOG" 2>/dev/null | head -1 | sed "s/ISSUE_PROGRESS:${ISSUE_PREFIX}-[0-9]*|//" || echo "Improvements")
+          ISSUE_TITLE=$(_marker_lines ISSUE_PROGRESS "$RUN_LOG" | head -1 | sed "s/ISSUE_PROGRESS:${ISSUE_PREFIX}-[0-9]*|//" || echo "Improvements")
         fi
         ISSUE_URL=""
         [ -n "$PRIMARY_ISSUE" ] && ISSUE_URL=$(bash "$TRACKER" issue-url "$PRIMARY_ISSUE")
@@ -1162,7 +1162,7 @@ Test on your phone: $PREVIEW_URL" 2>/dev/null || true
         fi
 
         # ── Slack notification for this iteration ────────────────────────
-        DONE_LINKS=$({ grep -oE "ISSUE_DONE:${ISSUE_PREFIX}-[0-9]+\|[^\"]*" "$RUN_LOG" 2>/dev/null || true; } | sort -u | while IFS='|' read -r marker summary; do
+        DONE_LINKS=$(_marker_lines ISSUE_DONE "$RUN_LOG" | sort -u | while IFS='|' read -r marker summary; do
           id=$(echo "$marker" | sed 's/ISSUE_DONE://')
           title=$(echo "$summary" | head -c 80)
           url=$(bash "$TRACKER" issue-url "$id")

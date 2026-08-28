@@ -86,8 +86,12 @@ Each pipeline stage is an independent service with its own schedule, logs, and f
 | Discovery | Sun/Tue/Thu 22:00 | Researches improvements, creates issues |
 | Triage | Sun/Tue/Thu 22:30 | Reviews issues, adds implementation plans |
 | Builder | Mon-Fri 23:00 | Implements top issues, creates PRs |
+| Auditor | Wednesday 18:00 | Pipeline self-audit |
+| Roadmap Synth | Wednesday 19:00 | Synthesizes the roadmap |
+| Architect | Wednesday 20:00 | Deep architectural review |
 | Budget Tuner | Sunday 21:00 | Adjusts iteration/token caps |
 | Health Report | Sunday 08:00 | Weekly metrics dashboard + log rotation |
+| Stale-PR Audit | Sunday 08:15 | Flags open PRs whose work already shipped |
 
 The builder uses a **git worktree** so it never touches your working directory — you can work on the same repo simultaneously.
 
@@ -168,6 +172,7 @@ pilot/
     triage.sh                # Triage agent
     builder.sh               # Overnight builder
     cleanup.sh               # Issue tracker cleanup
+    stale-pr-audit.sh        # On-demand: open PRs whose work already shipped
     tune-budget.sh           # Budget auto-tuner
     health-report.sh         # Weekly health dashboard
     digest.sh                # Morning digest

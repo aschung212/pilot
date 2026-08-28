@@ -268,3 +268,72 @@ OPTION_3_CONS: con c"
     ! grep -q "comment add" "$TEST_TMPDIR/mock_calls/linear"
   fi
 }
+
+# ── In-flight deferral (issues that already have an open PR) ─────────────────
+# Regression cover for the 2026-07-28 LIFT-783 → LIFT-1039 duplicate build.
+# Triage was the only stage that never consulted pull requests, so an issue
+# whose PR was open but whose state label still read state:unstarted looked
+# like fresh backlog — and a RESCOPE verdict forked live work into a new issue
+# number that every issue-identity-keyed dedupe then waved through.
+#
+# These pin the matching idiom used in triage.sh (same style as the verdict
+# parsing tests above): PR titles → issue refs → whole-line match. The two
+# failure modes they guard are (a) dropping the `#N` → `LIFT-N` normalization,
+# which would miss manually-titled PRs, and (b) losing the whole-line anchor,
+# which would make LIFT-96 match LIFT-966.
+
+_refs_from_titles() {
+  grep -oE "(${ISSUE_PREFIX}-|#)[0-9]+" | sed -E "s/^#/${ISSUE_PREFIX}-/" | sort -u
+}
+
+# bats test_tags=fast
+@test "triage: in-flight refs extracted from both LIFT-N and #N PR titles" {
+  export ISSUE_PREFIX=LIFT
+  run _refs_from_titles <<< "$(printf '%s\n' \
+    'feat(LIFT-1039): sync plateCountMode' \
+    'feat: add superset grouping for exercises (#616)' \
+    'test: unrelated cleanup with no ref')"
+  [ "${lines[0]}" = "LIFT-1039" ]
+  [ "${lines[1]}" = "LIFT-616" ]
+  [ "${#lines[@]}" -eq 2 ]
+}
+
+# bats test_tags=fast
+@test "triage: an issue with an open PR is deferred, others stay triageable" {
+  export ISSUE_PREFIX=LIFT
+  IN_FLIGHT_IDS=$(printf "%s\n" "feat: superset grouping (#616)" "fix(LIFT-751): rest timer" | _refs_from_titles)
+  ISSUE_IDS="LIFT-616 LIFT-580 LIFT-66"
+  deferred=""; kept=""
+  for i in $ISSUE_IDS; do
+    if echo "$IN_FLIGHT_IDS" | grep -qx "$i"; then deferred+="$i "; else kept+="$i "; fi
+  done
+  [ "$(echo "$deferred" | xargs)" = "LIFT-616" ]
+  [ "$(echo "$kept" | xargs)" = "LIFT-580 LIFT-66" ]
+}
+
+# bats test_tags=fast
+@test "triage: deferral anchors whole lines so LIFT-96 does not match LIFT-966" {
+  export ISSUE_PREFIX=LIFT
+  IN_FLIGHT_IDS=$(printf "%s\n" "feat(LIFT-966): something" | _refs_from_titles)
+  run grep -qx "LIFT-96" <<< "LIFT-966"
+  [ "$status" -ne 0 ]
+  echo "$IN_FLIGHT_IDS" | grep -qx "LIFT-966"
+}
+
+# bats test_tags=fast
+@test "triage: deferral fails open when no PRs are returned" {
+  export ISSUE_PREFIX=LIFT
+  IN_FLIGHT_IDS=""
+  ISSUE_IDS="LIFT-616 LIFT-580"
+  deferred=""; kept=""
+  if [ -n "$IN_FLIGHT_IDS" ]; then
+    for i in $ISSUE_IDS; do
+      if echo "$IN_FLIGHT_IDS" | grep -qx "$i"; then deferred+="$i "; else kept+="$i "; fi
+    done
+  else
+    kept="$ISSUE_IDS"
+  fi
+  # Nothing deferred: an unavailable PR list must never silently drop issues.
+  [ -z "$deferred" ]
+  [ "$(echo "$kept" | xargs)" = "LIFT-616 LIFT-580" ]
+}

@@ -56,6 +56,28 @@ gh_number() {
 
 # ── GitHub Backend ───────────────────────────────────────────────────────
 
+# Row cap for every open-issue query below. `gh issue list` silently returns
+# only the first --limit rows — no error, just a short list — so a cap under
+# the real open-issue count makes issues vanish from the pipeline entirely.
+#
+# This has now bitten twice. The `*)` branch was 100 until 2026-07-27, which
+# hid 31 state:started issues from cleanup.sh's recycler. On 2026-08-28 the
+# 200 cap was found hiding 8 of 10 triageable issues and 3 of 5 pickable ones
+# behind 265 open issues — the builder was choosing from a pool of 2.
+#
+# Keep this comfortably above the open-issue count, and heed the truncation
+# warning below rather than raising it only after something goes missing.
+GH_OPEN_LIMIT="${GH_OPEN_LIMIT:-1000}"
+
+# Warn loudly when a query comes back exactly at the cap, which is the only
+# externally visible symptom of truncation.
+_warn_if_truncated() {
+  local n="$1" what="$2"
+  if [ "$n" -ge "$GH_OPEN_LIMIT" ] 2>/dev/null; then
+    echo "⚠️  tracker: '$what' returned $n rows at the ${GH_OPEN_LIMIT} cap — list is probably TRUNCATED. Raise GH_OPEN_LIMIT." >&2
+  fi
+}
+
 gh_list() {
   # Args: state1 [state2 ...]
   # gh issue list ANDs labels, so we query per state and combine.
@@ -66,6 +88,18 @@ gh_list() {
   # 2026-05-08) still count as pickable. The builder uses this to decide what
   # to work on next; a single label-omitting agent does not silently remove
   # issues from the picking pool.
+  # Truncation guard. `gh issue list` caps silently, so a run where the open
+  # issue count reaches GH_OPEN_LIMIT is one where the pipeline may be blind
+  # to part of its own backlog. Checked once per call, only for the two
+  # pseudo-states that scan all open issues.
+  case " $* " in
+    *" pickable "*|*" triageable "*)
+      _open_total=$(gh issue list --repo "$GITHUB_ISSUES_REPO" --limit "$GH_OPEN_LIMIT" \
+        --state open --json number -q 'length' 2>/dev/null || echo 0)
+      _warn_if_truncated "${_open_total:-0}" "open issues"
+      ;;
+  esac
+
   for state in "$@"; do
     case "$state" in
       pickable)
@@ -73,7 +107,7 @@ gh_list() {
         # human decision do not get auto-picked. The label is set by triage.sh
         # whenever it emits a FLAG verdict; Aaron clears it (via /unblock or
         # by flipping back to state:unstarted) once he answers the question.
-        gh issue list --repo "$GITHUB_ISSUES_REPO" --limit 200 --state open \
+        gh issue list --repo "$GITHUB_ISSUES_REPO" --limit "$GH_OPEN_LIMIT" --state open \
           --json number,title,labels \
           --jq '.[]
             | select(
@@ -104,7 +138,7 @@ gh_list() {
         # Aaron unblocks by flipping back to state:unstarted, which puts the
         # issue back in scope for both triage (idempotency: skipped via "Triaged
         # by" comment match) and the builder picking pool.
-        gh issue list --repo "$GITHUB_ISSUES_REPO" --limit 200 --state open \
+        gh issue list --repo "$GITHUB_ISSUES_REPO" --limit "$GH_OPEN_LIMIT" --state open \
           --json number,title,labels \
           --jq '.[]
             | select(
@@ -127,14 +161,11 @@ gh_list() {
           --jq '.[] | "'"${ISSUE_PREFIX}"'-\(.number) \(.title)"' 2>/dev/null || true
         ;;
       *)
-        # --limit 200 matches the "pickable" query above. It was 100 until
-        # 2026-07-27, which silently truncated `list started` at exactly 100
-        # rows while 131 issues carried state:started — the extra 31 were
-        # invisible to every consumer, including the builder's do-not-pick
-        # list and cleanup.sh's recycle step. A truncated list here fails
-        # silently (no error, just a short list), so keep this comfortably
-        # above the real open-issue count.
-        gh issue list --repo "$GITHUB_ISSUES_REPO" --limit 200 --label "state:$state" \
+        # Shares GH_OPEN_LIMIT with the pickable/triageable queries above;
+        # see the note there for the two truncation incidents this cap has
+        # already caused. A truncated list fails silently — no error, just a
+        # short list — which is why the cap is generous and guarded.
+        gh issue list --repo "$GITHUB_ISSUES_REPO" --limit "$GH_OPEN_LIMIT" --label "state:$state" \
           --json number,title,labels \
           --jq '.[] | "'"${ISSUE_PREFIX}"'-\(.number) \(.title)"' 2>/dev/null || true
         ;;

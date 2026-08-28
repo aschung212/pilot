@@ -64,6 +64,9 @@ These have happened in production. Watch for them:
 - **Detached HEAD from lint-staged.** The pre-commit hook's stash/unstash can detach HEAD. After committing, verify `git branch --show-current` returns a branch name. If empty, cherry-pick onto the correct branch.
 - **Daytime time check.** The builder's `should_continue` function treats morning hours as "past stop time" for overnight mode. Daytime manual runs must use an explicit iteration count (`builder.sh N`).
 - **`grep -c` with pipes.** Returns trailing whitespace/newlines that break arithmetic comparisons. Always `tr -d ' \n'` before using in `[ ]` tests.
+- **Marker separators the prompt asks for vs. the ones the agent emits.** The builder prompt documents `ISSUE_DONE:LIFT-N|summary`, but the agent has only ever emitted the colon form. Four parsers required the pipe and were dead code for the life of the repo — silently costing the `state:started` flip, the completion comment, the PR title, and the digest links. When you add a marker parser, accept every separator seen in `data/lift-enhance-*.md` (`_marker_lines` in `builder-utils.sh` does this) and never assume the prompt's format is the observed format.
+- **Silent `gh` list truncation.** `gh issue list --limit N` returns a short list with no error when there are more than N. A cap below the real open-issue count removes issues from the builder's picking pool and from triage with no visible symptom. This has bitten twice (100 → 200 in 2026-07, 200 → 1000 in 2026-08). Open-issue queries share `GH_OPEN_LIMIT`; keep it well above the issue count and heed the at-cap warning.
+- **Dedupe keyed only on issue identity.** Discovery's do-not-duplicate lists, the builder's picking-time filter, the pre-PR guard, and the auditor's collision detector all ask "does *this issue* already have a PR?" None of them can see work rebuilt under a *different* issue number — which is exactly how LIFT-1039 duplicated LIFT-783. When work can be re-identified (splits, rescopes, manual re-files), the ground truth is the PR set and the codebase, not the issue ID.
 
 ## Infrastructure Change Protocol
 
@@ -85,3 +88,4 @@ All logs, metrics, queues, and outputs live in `pilot/data/` (gitignored). Key f
 - `lift-metrics.csv` — builder iteration metrics
 - `lift-enhance-YYYY-MM-DD-runN.md` — per-iteration build logs
 - `lift-discover-YYYY-MM-DD.md` — discovery run logs
+- `lift-stale-pr-audit-YYYY-MM-DD.md` — stale-PR audit report (weekly, Sun 08:15)

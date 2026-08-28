@@ -83,6 +83,58 @@ if [ -z "$ISSUE_IDS" ]; then
   exit 0
 fi
 
+# ── Defer issues that already have an open PR ────────────────────────────
+# Triage was the only stage that never looked at pull requests. `triageable`
+# is label-based and excludes only {started, blocked, needs-input, canceled},
+# so an issue whose PR is open but whose state label was never flipped to
+# state:started looks like untouched backlog — and a RESCOPE verdict then
+# forks live, already-implemented work into brand-new issue numbers.
+#
+# That is exactly how LIFT-783 became LIFT-1039 on 2026-07-28. PR #1032 had
+# been open against #783 for 22 hours, but #783 still read state:unstarted
+# (its state flip was lost to the ISSUE_DONE marker-format bug in builder.sh).
+# Triage rescoped it and canceled the parent; the builder then picked #1039 —
+# a fresh number no open PR referenced, so every issue-identity-keyed dedupe
+# in the pipeline passed — and shipped PR #1041, a duplicate of #1032.
+#
+# This is a DEFERRAL, not a skip: the issue is left completely untouched and
+# returns to triage scope the moment its PR merges or closes. Nothing is
+# closed, canceled, or dropped, so a false positive costs one triage cycle,
+# never a lost issue. Fails open — if the `gh` call errors the list is empty
+# and triage proceeds exactly as before.
+IN_FLIGHT_IDS=$(gh pr list --repo "$GITHUB_ISSUES_REPO" --state open --limit 200 \
+  --json title -q '.[].title' 2>/dev/null \
+  | grep -oE "(${ISSUE_PREFIX}-|#)[0-9]+" \
+  | sed -E "s/^#/${ISSUE_PREFIX}-/" \
+  | sort -u || true)
+
+DEFERRED_IN_FLIGHT=""
+if [ -n "$IN_FLIGHT_IDS" ]; then
+  _kept=""
+  for issue_id in $ISSUE_IDS; do
+    if echo "$IN_FLIGHT_IDS" | grep -qx "$issue_id"; then
+      DEFERRED_IN_FLIGHT+="$issue_id "
+    else
+      _kept+="$issue_id "
+    fi
+  done
+  if [ -n "$DEFERRED_IN_FLIGHT" ]; then
+    ISSUE_IDS=$(echo "$_kept" | tr ' ' '\n' | grep -E "${ISSUE_PREFIX}-[0-9]+" || true)
+    _n=$(echo "$DEFERRED_IN_FLIGHT" | wc -w | tr -d ' \n')
+    echo "  🔒 Deferred $_n issue(s) with an open PR — work already in flight, not triageable this cycle:" | tee -a "$TRIAGE_LOG"
+    for _d in $DEFERRED_IN_FLIGHT; do
+      echo "      • $_d" | tee -a "$TRIAGE_LOG"
+    done
+    bash "$NOTIFY" --as triage thread-reply automation "$THREAD_TS" \
+      "🔒 Deferred *$_n* issue(s) with an open PR (already in flight, not re-triaged): $(echo "$DEFERRED_IN_FLIGHT" | xargs)" >/dev/null 2>&1 || true
+  fi
+fi
+
+if [ -z "$ISSUE_IDS" ]; then
+  echo "  No issues to triage (all remaining have open PRs)." | tee -a "$TRIAGE_LOG"
+  exit 0
+fi
+
 # Check which issues have already been triaged (have a "Triaged by" comment).
 # In --re-triage mode, skip the idempotency filter: every triageable issue is
 # re-reviewed under the current policy, prior verdicts notwithstanding.
