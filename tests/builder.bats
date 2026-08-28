@@ -156,6 +156,11 @@ EOF
 }
 
 # bats test_tags=fast
+@test "builder: model_display_name handles the current pinned model" {
+  [ "$(model_display_name 'claude-opus-5[1m]')" = "Claude Opus 5" ]
+}
+
+# bats test_tags=fast
 @test "builder: model_display_name handles plain model id" {
   [ "$(model_display_name 'claude-opus-4-8')" = "Claude Opus 4.8" ]
   [ "$(model_display_name 'claude-sonnet-4-6')" = "Claude Sonnet 4.6" ]

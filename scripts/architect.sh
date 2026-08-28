@@ -75,11 +75,14 @@ echo "" | tee -a "$RUN_LOG"
 PROMPT_FILE=$(mktemp)
 build_architect_prompt "$AXIS" "$REPO" "${PROJECT_NAME:-Lift}" > "$PROMPT_FILE"
 
-# ── Run Claude (read-only Opus) ───────────────────────────────────────────────
+# ── Run Claude (read-only) ────────────────────────────────────────────────────
+# The architect gets its own model knob: weekly cadence + deepest whole-codebase
+# reasoning justify the top-tier model. Falls back to AI_CODE_MODEL when unset.
+ARCHITECT_MODEL="${AI_ARCHITECT_MODEL:-${AI_CODE_MODEL:-claude-opus-5[1m]}}"
 ARCHITECT_JSON="$OUTPUT_DIR/architect-$DATE-output.json"
 ARCHITECT_ALLOWED_TOOLS="Read,Grep,Glob,Bash(git log:*),Bash(git diff:*),Bash(rg:*),Bash(find:*),Bash(wc:*),Bash(ls:*)"
 
-echo "  🧠 Running Claude Opus analysis (axis: $AXIS)..." | tee -a "$RUN_LOG"
+echo "  🧠 Running Claude analysis ($ARCHITECT_MODEL, axis: $AXIS)..." | tee -a "$RUN_LOG"
 CLAUDE_EXIT=0
 if [ -n "${MOCK_CLAUDE_OUTPUT:-}" ]; then
   # Test mode: skip the live Claude call and write the mock JSON directly.
@@ -88,7 +91,7 @@ if [ -n "${MOCK_CLAUDE_OUTPUT:-}" ]; then
 elif ! claude \
     --allowedTools "$ARCHITECT_ALLOWED_TOOLS" \
     --output-format json \
-    --model "${AI_CODE_MODEL:-claude-opus-4-8[1m]}" \
+    --model "$ARCHITECT_MODEL" \
     --effort "${AI_CODE_EFFORT:-max}" \
     --max-turns "${ARCHITECT_MAX_TURNS:-40}" \
     -p "$(cat "$PROMPT_FILE")" \

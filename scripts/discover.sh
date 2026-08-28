@@ -324,7 +324,7 @@ echo "  🧠 Phase 2: Claude analysis and issue creation..." | tee -a "$RUN_LOG"
 DISCOVER_JSON="$OUTPUT_DIR/lift-discover-$DATE-output.json"
 # Discovery allowlist — read-only repo access + issue tracker. No shell, no git push.
 DISCOVER_ALLOWED_TOOLS="Read,Glob,Grep,Bash(gh:*),Bash(git log:*),Bash(git diff:*),Bash(git show:*),Bash(ls:*),Bash(cat:*),Bash(wc:*)"
-if ! claude --allowedTools "$DISCOVER_ALLOWED_TOOLS" --model "${AI_CODE_MODEL:-claude-opus-4-8[1m]}" --effort "${AI_CODE_EFFORT:-max}" --output-format json -p "$(cat "$PROMPT_FILE")" --max-turns "${DISCOVER_MAX_TURNS:-30}" 2>&1 > "$DISCOVER_JSON"; then
+if ! claude --allowedTools "$DISCOVER_ALLOWED_TOOLS" --model "${AI_CODE_MODEL:-claude-opus-5[1m]}" --effort "${AI_CODE_EFFORT:-max}" --output-format json -p "$(cat "$PROMPT_FILE")" --max-turns "${DISCOVER_MAX_TURNS:-30}" 2>&1 > "$DISCOVER_JSON"; then
   echo "  ❌ Claude analysis failed (exit code $?)" | tee -a "$RUN_LOG"
   slack_send "🚨 *Discovery Agent — Claude analysis failed*
 Focus: $FOCUS | Date: $DATE

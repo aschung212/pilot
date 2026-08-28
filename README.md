@@ -121,7 +121,7 @@ Components are swappable via thin adapter scripts:
 |---------|---------|---------|
 | Issue Tracker | Linear | GitHub Issues, Jira |
 | Notifications | Slack | Discord, email |
-| Code Generation | Claude Opus 4.8 (1M, max effort) | — |
+| Code Generation | Claude Opus 5 (1M, max effort) | — |
 | Research | Gemini 2.5 Flash (Gemini API + Google Search grounding) | ChatGPT, Perplexity |
 | Code Review | Claude Sonnet (independent from Opus builder) | — |
 
@@ -152,8 +152,9 @@ REPO_PATH="/path/to/repo"
 GITHUB_REPO="user/repo"
 DEFAULT_BRANCH="main"
 LINEAR_TEAM="ENG"
-AI_CODE_MODEL="claude-opus-4-8[1m]"   # Opus-tier model (builder/discovery/architect)
+AI_CODE_MODEL="claude-opus-5[1m]"   # Opus-tier model (builder/discovery; architect fallback)
 AI_CODE_EFFORT="max"                  # reasoning effort: low|medium|high|max
+AI_ARCHITECT_MODEL="claude-fable-5"   # architect's weekly deep review (top tier; unset = AI_CODE_MODEL)
 DISCOVER_DAYS="0,2,4"     # Sun/Tue/Thu
 BUILDER_DAYS="1,2,3,4,5"  # Mon-Fri
 ```
