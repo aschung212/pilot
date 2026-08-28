@@ -92,3 +92,5 @@ All logs, metrics, queues, and outputs live in `pilot/data/` (gitignored). Key f
 - `lift-discover-YYYY-MM-DD.md` — discovery run logs
 - `lift-stale-pr-audit-YYYY-MM-DD.md` — stale-PR audit report (weekly, Sun 08:15)
 - `lift-doc-drift-YYYY-MM-DD.md` — doc-drift audit report (biweekly, Sun 09:00)
+- `lift-build-learnings.md` — Aaron's closing comments on rejected (closed-unmerged) PRs; harvested by cleanup.sh, injected into the builder prompt
+- `lift-needs-decision.txt` — nightly snapshot of rejected-PR issues awaiting Aaron's decision; read by digest.sh

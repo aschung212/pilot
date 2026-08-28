@@ -65,6 +65,10 @@ MAX_STALLS="${MAX_STALLS:-2}"
 STALLS=0
 MAX_FIX_ATTEMPTS="${MAX_FIX_ATTEMPTS:-1}"
 
+# WIP limit: stop building new work when this many PRs are already open and
+# waiting on Aaron (0 disables). See wip_gate_active in lib/builder-utils.sh.
+MAX_OPEN_PRS="${MAX_OPEN_PRS:-8}"
+
 # Wall-clock timeouts (seconds) for the builder's `claude` calls. A hung call
 # with no timeout silently blocked the launchd builder for 5 days (2026-07-09),
 # because StartCalendarInterval skips scheduled runs while a prior instance is
@@ -196,6 +200,15 @@ if [ -n "$FAILED_PRS" ]; then
   done
 fi
 
+# ── Rejection learnings ─────────────────────────────────────────────────────
+# cleanup.sh harvests the closing comments from PRs Aaron closed WITHOUT merging
+# into data/lift-build-learnings.md. Feeding the most recent entries into every
+# iteration's prompt closes the human-feedback loop that died when the review
+# tuner was removed (2026-05-11): merge/reject decisions were the one signal
+# nothing in the pipeline learned from. tail keeps the newest entries (the file
+# is append-only) and caps prompt cost.
+BUILD_LEARNINGS=$(tail -c 4000 "$OUTPUT_DIR/lift-build-learnings.md" 2>/dev/null || true)
+
 # ══════════════════════════════════════════════════════════════════════════════
 # ── Auth preflight: fail loud, not silent ────────────────────────────────────
 # ══════════════════════════════════════════════════════════════════════════════
@@ -246,6 +259,22 @@ while should_continue; do
   cd "$REPO"
   git checkout "${DEFAULT_BRANCH:-master}" 2>/dev/null || true
   git pull --ff-only origin "${DEFAULT_BRANCH:-master}" 2>/dev/null || true
+
+  # ── WIP limit: gate the night when the review queue is saturated ──────────
+  # Every PR the builder opens lands on Aaron's morning review queue. Once
+  # MAX_OPEN_PRS are already open, building more just ages the queue and
+  # multiplies rebase conflicts as earlier PRs merge — so stop for the night
+  # and say so. Retry iterations are exempt (RETRY_ISSUES non-empty): their
+  # failed PRs were closed at startup, so they don't grow the queue.
+  OPEN_PR_COUNT=$(cd "$REPO" && gh pr list --state open --json number --jq 'length' 2>/dev/null | head -1 | tr -d ' \n' || true)
+  case "$OPEN_PR_COUNT" in ''|*[!0-9]*) OPEN_PR_COUNT=0 ;; esac
+  if wip_gate_active "$OPEN_PR_COUNT" "$MAX_OPEN_PRS" "$RETRY_ISSUES"; then
+    RUN=$((RUN - 1))
+    echo "🚧 WIP limit: $OPEN_PR_COUNT open PRs ≥ MAX_OPEN_PRS=$MAX_OPEN_PRS — no new work tonight until the review queue drains."
+    log_info "WIP limit reached ($OPEN_PR_COUNT open PRs >= $MAX_OPEN_PRS) — night gated"
+    thread_send "🚧 *WIP limit reached* — $OPEN_PR_COUNT PRs are already open (cap: $MAX_OPEN_PRS). No new work tonight; merge or close PRs to release the builder. Override: MAX_OPEN_PRS in project.env (0 disables)."
+    break
+  fi
 
   # Snapshot state before this iteration.
   # `head -1` guards against pipefail: if `npm test` exits non-zero (e.g. a broken
@@ -596,6 +625,12 @@ ${OPEN_PR_ISSUES:-None}
 
 ${NIGHTLY_ATTEMPTED_ISSUES:-None}
 
+${BUILD_LEARNINGS:+## Learnings from PRs Aaron rejected (closed unmerged)
+
+These are the reasons Aaron gave when closing previous builder PRs without merging. Treat them like product decisions — do NOT repeat a rejected approach:
+
+$BUILD_LEARNINGS
+}
 $ASSIGNED_BLOCK
 
 ## Your job (this iteration)
@@ -648,6 +683,7 @@ After your final push completes, you MUST emit the full structured response belo
 - Do NOT redo work from previous iterations — if tests exist, don't rewrite them
 - Do NOT break existing functionality — run tests after each change
 - Quality over quantity — fully implement the issue rather than doing it halfway
+- If the triage comment on your issue lists **Acceptance criteria**, treat them as the definition of done: verify each criterion before you push, and confirm each one explicitly in the Verification section below.
 - If you cannot find anything meaningful to improve, output ONLY the line "NO_IMPROVEMENTS_REMAINING" and exit
 - Commit with clear conventional commit messages (feat/fix/a11y/test/perf/style/refactor/chore prefix)
 - End every commit body with exactly this trailer (see "Commit author attribution" above): \`$COAUTHOR_TRAILER\`. Do not self-report a different model version.

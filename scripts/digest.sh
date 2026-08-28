@@ -54,6 +54,23 @@ LIFT_ALL=$(fetch_issues "Lift" "triage backlog unstarted started")
 LIFT_ACTIVE_COUNT=$(count_lift_lines "$LIFT_ACTIVE")
 LIFT_BACKLOG_COUNT=$(count_lift_lines "$LIFT_BACKLOG")
 
+# --- Blockers waiting on a human ---
+# state:needs-input = triage FLAGged the issue and parked it until Aaron
+# answers. These rot silently unless surfaced daily — by 2026-05-12 eight
+# issues had been sitting in this state with nothing pointing at them. The
+# digest is the standup, and blockers belong in the standup.
+# (Formatting happens further down, after format_top is defined.)
+LIFT_BLOCKED=$(fetch_issues "Lift" "needs-input")
+LIFT_BLOCKED_COUNT=$(count_lift_lines "$LIFT_BLOCKED")
+
+# Rejected-PR issues cleanup refuses to auto-recycle (their PR was closed
+# unmerged — could be a deliberate rejection, so a human must decide: recycle
+# to state:unstarted or close as not planned). cleanup.sh snapshots the
+# current set to this file every night.
+NEEDS_DECISION_FILE="${OUTPUT_DIR:-${PILOT_DIR:-}/data}/lift-needs-decision.txt"
+NEEDS_DECISION_IDS=$(grep -oE "${ISSUE_PREFIX}-[0-9]+" "$NEEDS_DECISION_FILE" 2>/dev/null | head -10 | tr '\n' ' ' || true)
+NEEDS_DECISION_COUNT=$({ echo "$NEEDS_DECISION_IDS" | tr ' ' '\n' | grep -c "${ISSUE_PREFIX}-" 2>/dev/null || echo "0"; } | head -1)
+
 # --- Technical Prep ---
 PREP_ACTIVE=$(fetch_issues "Technical Prep" "started")
 PREP_BACKLOG=$(fetch_issues "Technical Prep" "backlog unstarted")
@@ -93,8 +110,23 @@ format_top() {
 
 LIFT_ACTIVE_TOP=$(format_top "$LIFT_ACTIVE" 3 lift)
 LIFT_BACKLOG_TOP=$(format_top "$LIFT_BACKLOG" 5 lift)
+LIFT_BLOCKED_TOP=$(format_top "$LIFT_BLOCKED" 5 lift)
 PREP_TOP=$(format_top "$PREP_ACTIVE$PREP_BACKLOG" 3 linear)
 APPS_TOP=$(format_top "$APPS_ACTIVE" 3 linear)
+
+# Blockers section — rendered only when something is actually waiting.
+WAITING_BLOCK=""
+if [ "${LIFT_BLOCKED_COUNT:-0}" -gt 0 ] 2>/dev/null; then
+  WAITING_BLOCK+="
+⏳ *Waiting on you* — ${LIFT_BLOCKED_COUNT} issue(s) parked on \`state:needs-input\` (answer, then flip to \`state:unstarted\`):
+${LIFT_BLOCKED_TOP}
+"
+fi
+if [ "${NEEDS_DECISION_COUNT:-0}" -gt 0 ] 2>/dev/null; then
+  WAITING_BLOCK+="
+⚖️ *Needs your call* — ${NEEDS_DECISION_COUNT} issue(s) whose PR was closed unmerged (recycle or close): ${NEEDS_DECISION_IDS}
+"
+fi
 
 # Build message
 MSG="*📋 Issue Digest — ${DAY_NAME}, ${DATE}*
@@ -104,7 +136,7 @@ ${LIFT_ACTIVE_TOP:+_In Progress:_
 ${LIFT_ACTIVE_TOP}
 }${LIFT_BACKLOG_TOP:+_Backlog:_
 ${LIFT_BACKLOG_TOP}}
-
+${WAITING_BLOCK}
 *Technical Prep* — ${PREP_ACTIVE_COUNT} in progress, ${PREP_BACKLOG_COUNT} backlog
 ${PREP_TOP}
 

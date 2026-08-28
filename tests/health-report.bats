@@ -175,3 +175,68 @@ print(anomalies[0] if anomalies else 'none')
   [ "$status" -eq 0 ]
   [[ "$output" != *"has not run in"* ]]
 }
+
+# ── Delivery / flow metrics + GA burndown ────────────────────────────────────
+
+# bats test_tags=slow
+@test "health-report: report includes Delivery and GA Burndown, degrading to zeros without gh data" {
+  echo "date,run,input_tokens,output_tokens,cache_read_tokens,cache_create_tokens,nightly_output_total,duration_sec" > "$OUTPUT_DIR/lift-usage-tracking.csv"
+  echo "$METRICS_HEADER" > "$OUTPUT_DIR/lift-metrics.csv"
+  echo "date,iterations_before,iterations_after,tokens_before,tokens_after,cooldown_before,cooldown_after,reasons" > "$OUTPUT_DIR/lift-tune-log.csv"
+  echo "date,focus,discoveries_count,priorities,duration_sec" > "$OUTPUT_DIR/lift-discovery-metrics.csv"
+
+  HEALTH="$PILOT_DIR/scripts/health-report.sh"
+  run bash "$HEALTH" --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"## Delivery"* ]]
+  [[ "$output" == *"PRs merged (7d):"* ]]
+  [[ "$output" == *"## GA Burndown"* ]]
+  # The stock gh mock returns non-JSON, so flow metrics must degrade to zeros
+  # and the burndown line must fall back to the create-the-milestone hint.
+  [[ "$output" == *"Tokens per merged PR"* || "$output" == *"Output tokens per merged PR"* ]]
+  [[ "$output" == *"not found"* ]]
+}
+
+# bats test_tags=slow
+@test "health-report: flow metrics computed from PR history, aging queue flagged" {
+  echo "date,run,input_tokens,output_tokens,cache_read_tokens,cache_create_tokens,nightly_output_total,duration_sec" > "$OUTPUT_DIR/lift-usage-tracking.csv"
+  echo "$METRICS_HEADER" > "$OUTPUT_DIR/lift-metrics.csv"
+  echo "date,iterations_before,iterations_after,tokens_before,tokens_after,cooldown_before,cooldown_after,reasons" > "$OUTPUT_DIR/lift-tune-log.csv"
+  echo "date,focus,discoveries_count,priorities,duration_sec" > "$OUTPUT_DIR/lift-discovery-metrics.csv"
+
+  # One PR merged 2d ago (created 3d ago → 24h to merge), one closed unmerged
+  # 1d ago, one still open and 10 days old (should trip the aging anomaly).
+  D_CREATED=$(python3 -c 'from datetime import datetime,timezone,timedelta; print((datetime.now(timezone.utc)-timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%SZ"))')
+  D_MERGED=$(python3 -c 'from datetime import datetime,timezone,timedelta; print((datetime.now(timezone.utc)-timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ"))')
+  D_CLOSED=$(python3 -c 'from datetime import datetime,timezone,timedelta; print((datetime.now(timezone.utc)-timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ"))')
+  D_OLD=$(python3 -c 'from datetime import datetime,timezone,timedelta; print((datetime.now(timezone.utc)-timedelta(days=10)).strftime("%Y-%m-%dT%H:%M:%SZ"))')
+  cat > "$TEST_TMPDIR/prs.json" <<JSON
+[
+  {"number": 1, "createdAt": "$D_CREATED", "closedAt": "$D_MERGED", "mergedAt": "$D_MERGED", "state": "MERGED"},
+  {"number": 2, "createdAt": "$D_CREATED", "closedAt": "$D_CLOSED", "mergedAt": null, "state": "CLOSED"},
+  {"number": 3, "createdAt": "$D_OLD", "closedAt": null, "mergedAt": null, "state": "OPEN"}
+]
+JSON
+  echo '[{"title": "GA", "open_issues": 3, "closed_issues": 9}]' > "$TEST_TMPDIR/milestones.json"
+  mkdir -p "$TEST_TMPDIR/bin"
+  cat > "$TEST_TMPDIR/bin/gh" <<GHEOF
+#!/bin/bash
+case "\$*" in
+  *mergedAt*) cat "$TEST_TMPDIR/prs.json" ;;
+  *milestones*) cat "$TEST_TMPDIR/milestones.json" ;;
+  *) echo "" ;;
+esac
+GHEOF
+  chmod +x "$TEST_TMPDIR/bin/gh"
+  export PATH="$TEST_TMPDIR/bin:$PATH"
+
+  HEALTH="$PILOT_DIR/scripts/health-report.sh"
+  run bash "$HEALTH" --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PRs merged (7d):** 1"* ]]
+  [[ "$output" == *"Merge rate:** 50%"* ]]
+  [[ "$output" == *"Avg time-to-merge:** 24"* ]]
+  [[ "$output" == *"oldest: 10d"* ]]
+  [[ "$output" == *"Review queue aging"* ]]
+  [[ "$output" == *"9/12 closed (75%)"* ]]
+}

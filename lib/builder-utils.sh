@@ -111,6 +111,27 @@ is_auth_failure() {
   echo "$output" | grep -qiE 'authentication_error|Invalid authentication|Not logged in|Please run /login|API Error: 401'
 }
 
+# ── wip_gate_active ───────────────────────────────────────────────────────────
+# Kanban-style WIP limit on the human review queue. Aaron is the merge
+# bottleneck: when open PRs pile up unreviewed, more overnight PRs just age,
+# conflict with each other, and rebase-churn as earlier ones merge. When the
+# open-PR count reaches MAX_OPEN_PRS, the builder gates the night instead of
+# adding to the pile — the same backpressure idea as the builder→discovery
+# backlog-low signal, pointed at the human constraint.
+# Input: $1 = current open PR count
+#        $2 = MAX_OPEN_PRS cap (0 or non-numeric disables the gate)
+#        $3 = RETRY_ISSUES — non-empty means this iteration re-works failed PRs
+#             whose old PRs were closed at startup, so it does not grow the queue
+# Returns: 0 if the builder should gate (stop the night), 1 otherwise
+wip_gate_active() {
+  local open_count="${1:-0}" max="${2:-0}" retry_issues="${3:-}"
+  [[ "$max" =~ ^[0-9]+$ ]] || return 1
+  [ "$max" -eq 0 ] && return 1
+  [[ "$open_count" =~ ^[0-9]+$ ]] || return 1
+  [ -n "$retry_issues" ] && return 1
+  [ "$open_count" -ge "$max" ]
+}
+
 # ── parse_stop_time ──────────────────────────────────────────────────────────
 # Parse the CLI argument: if numeric, treat as iteration count; if time, use as stop time.
 # Input: $1 = CLI arg (e.g. "06:00" or "5"), $2 = default stop time

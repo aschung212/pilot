@@ -4,8 +4,13 @@
 #
 # What it does:
 #   1. Closes all completed and canceled issues (via tracker.sh)
-#   2. Detects and closes duplicate issues (same title, keeps oldest)
-#   3. Reports what was cleaned up
+#   2. Recycles abandoned in-progress issues (claimed but no PR ever opened)
+#   2b. Snapshots rejected-PR issues for the morning digest and harvests
+#       Aaron's closing comments on unmerged PRs into lift-build-learnings.md
+#       (the builder feeds these back into its prompt)
+#   3. Detects and closes duplicate issues (same title, keeps oldest)
+#   4. Expires stale priority-4 backlog issues (untouched > BACKLOG_EXPIRY_DAYS)
+#   5. Reports what was cleaned up
 #
 # Usage:
 #   ./cleanup.sh              # run cleanup
@@ -85,6 +90,7 @@ DONE_AWAITING_CLOSE=0
 IN_FLIGHT=0
 REJECTED_PR=0
 REJECTED_PR_LIST=""
+REJECTED_PR_IDS=""
 
 # Two API calls for every PR title, rather than a per-issue search (~145
 # calls). Builder PR titles always embed the issue as `type(LIFT-N): ...`,
@@ -118,6 +124,8 @@ for issue_id in $STARTED_IDS; do
     # deliberate rejection — report, never auto-recycle.
     REJECTED_PR=$((REJECTED_PR + 1))
     REJECTED_PR_LIST+="  • ${issue_id}\n"
+    REJECTED_PR_IDS+="${issue_id}
+"
     continue
   fi
   if [ "$DRY_RUN" = "--dry-run" ]; then
@@ -129,6 +137,93 @@ for issue_id in $STARTED_IDS; do
     RECYCLED_LIST+="  • ${issue_id}\n"
   fi
 done
+
+# ── Step 2b: Needs-decision snapshot + rejection-learnings harvest ────────
+# Two consumers outside this run need the rejected-PR signal:
+#   • digest.sh surfaces the "needs your call" list in the morning digest —
+#     blockers belong in the daily standup, not buried in an overnight log.
+#   • builder.sh reads lift-build-learnings.md (Aaron's closing comments on
+#     PRs he closed unmerged) at the top of every night, so future iterations
+#     stop repeating rejected approaches. This restores the human-feedback
+#     loop that died when the review tuner was removed (2026-05-11) — Aaron's
+#     merge/reject decisions were the one signal nothing learned from.
+NEEDS_DECISION_FILE="$OUTPUT_DIR/lift-needs-decision.txt"
+LEARNINGS_FILE="$OUTPUT_DIR/lift-build-learnings.md"
+HARVESTED=0
+if [ "$DRY_RUN" = "--dry-run" ]; then
+  echo "  [dry-run] Would refresh $(basename "$NEEDS_DECISION_FILE") snapshot and harvest rejection learnings"
+else
+  # Snapshot (overwrite, not append — it mirrors the current rejected set).
+  printf '%s' "$REJECTED_PR_IDS" > "$NEEDS_DECISION_FILE"
+
+  if [ ! -f "$LEARNINGS_FILE" ]; then
+    printf '# Build learnings — why Aaron rejected builder PRs\n# Harvested nightly by cleanup.sh from closing comments on PRs closed without merging.\n# builder.sh injects the tail of this file into every iteration prompt.\n' > "$LEARNINGS_FILE"
+  fi
+
+  # Every PR closed without merging in the last 14 days gets one entry, keyed
+  # by "## PR #N " so re-runs are idempotent. The reason is the last human
+  # comment on the PR (the repo owner's comment wins over other commenters);
+  # a missing comment is recorded too, as a nudge to leave one next time.
+  REPO_OWNER="${GITHUB_ISSUES_REPO:-}"
+  REPO_OWNER="${REPO_OWNER%%/*}"
+  NEW_LEARNINGS=$(gh pr list --repo "${GITHUB_ISSUES_REPO:-}" --state closed --limit 100 \
+    --json number,title,closedAt,mergedAt,comments 2>/dev/null \
+    | python3 -c "
+import json, sys
+from datetime import datetime, timezone, timedelta
+
+learnings_path, owner = sys.argv[1], sys.argv[2]
+try:
+    prs = json.load(sys.stdin)
+    assert isinstance(prs, list)
+except Exception:
+    sys.exit(0)   # gh unavailable / non-JSON output — harvest nothing
+try:
+    with open(learnings_path) as f:
+        existing = f.read()
+except OSError:
+    existing = ''
+cutoff = datetime.now(timezone.utc) - timedelta(days=14)
+
+def ts(s):
+    try:
+        return datetime.fromisoformat(str(s).replace('Z', '+00:00'))
+    except Exception:
+        return None
+
+for pr in prs:
+    if not isinstance(pr, dict) or pr.get('mergedAt'):
+        continue
+    closed = ts(pr.get('closedAt'))
+    if not closed or closed < cutoff:
+        continue
+    num = pr.get('number')
+    if not num or f'## PR #{num} ' in existing:
+        continue
+    reason = ''
+    for c in pr.get('comments') or []:
+        login = ((c.get('author') or {}).get('login') or '')
+        if 'bot' in login.lower() or login == 'github-actions':
+            continue
+        body = (c.get('body') or '').strip()
+        if not body:
+            continue
+        if owner and login == owner:
+            reason = body            # last owner comment wins
+        elif not reason:
+            reason = body            # any human comment beats nothing
+    if not reason:
+        reason = '(no close comment — leave one when rejecting so the builder can learn from it)'
+    if len(reason) > 600:
+        reason = reason[:600] + '…'
+    title = (pr.get('title') or '').strip()
+    print(f\"\n## PR #{num} — {title} (closed unmerged {closed.strftime('%Y-%m-%d')})\n{reason}\")
+" "$LEARNINGS_FILE" "$REPO_OWNER" 2>/dev/null || true)
+  if [ -n "$NEW_LEARNINGS" ]; then
+    printf '%s\n' "$NEW_LEARNINGS" >> "$LEARNINGS_FILE"
+    HARVESTED=$({ printf '%s\n' "$NEW_LEARNINGS" | grep -c '^## PR #' || echo "0"; } | head -1)
+  fi
+fi
 
 # ── Step 3: Deduplicate issues (same title, close newer ones) ────────────
 ALL_ISSUES=$(bash "$TRACKER" list backlog unstarted started triage || true)
@@ -169,18 +264,76 @@ for title, ids in by_title.items():
   fi
 done
 
+# ── Step 4: Expire stale priority-4 backlog issues ───────────────────────
+# Triage SKIP demotes issues to priority:4-low and nothing ever looked at them
+# again — they accumulate forever, inflate every prompt's backlog list, and
+# push the adapter toward its silent `--limit 200` truncation cliff. The
+# backlog is not a museum: anything P4 and untouched for BACKLOG_EXPIRY_DAYS
+# (default 56 ≈ 8 weeks; 0 disables) is closed as not planned with a reopen
+# invitation. Parked issues (started/blocked/needs-input) are never expired —
+# those are waiting on a human, not forgotten. Filtering is client-side in
+# python because gh's date-search qualifier cannot also exclude labels.
+BACKLOG_EXPIRY_DAYS="${BACKLOG_EXPIRY_DAYS:-56}"
+EXPIRED=0
+EXPIRED_LIST=""
+if [ "$BACKLOG_EXPIRY_DAYS" -gt 0 ] 2>/dev/null && [ -n "${GITHUB_ISSUES_REPO:-}" ]; then
+  STALE_NUMS=$(gh issue list --repo "$GITHUB_ISSUES_REPO" --state open \
+    --label "priority:4-low" --limit "${GH_OPEN_LIMIT:-1000}" --json number,updatedAt,labels 2>/dev/null \
+    | python3 -c "
+import json, sys
+from datetime import datetime, timezone, timedelta
+days = int(sys.argv[1])
+try:
+    issues = json.load(sys.stdin)
+    assert isinstance(issues, list)
+except Exception:
+    sys.exit(0)   # gh unavailable / non-JSON output — expire nothing
+cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+PARKED = {'state:started', 'state:blocked', 'state:needs-input'}
+for i in issues:
+    if not isinstance(i, dict) or not i.get('number'):
+        continue
+    labels = {l.get('name') for l in (i.get('labels') or []) if isinstance(l, dict)}
+    if labels & PARKED:
+        continue
+    try:
+        upd = datetime.fromisoformat(str(i.get('updatedAt')).replace('Z', '+00:00'))
+    except Exception:
+        continue
+    if upd < cutoff:
+        print(i['number'])
+" "$BACKLOG_EXPIRY_DAYS" 2>/dev/null || true)
+  for num in $STALE_NUMS; do
+    issue_id="${ISSUE_PREFIX}-${num}"
+    if [ "$DRY_RUN" = "--dry-run" ]; then
+      echo "  [dry-run] Would expire $issue_id (priority:4-low, untouched ≥ ${BACKLOG_EXPIRY_DAYS}d)"
+      EXPIRED=$((EXPIRED + 1))
+    else
+      bash "$TRACKER" comment-add "$issue_id" "Auto-closed as stale: priority 4 and untouched for ${BACKLOG_EXPIRY_DAYS}+ days. The backlog only keeps work still worth doing — reopen (and bump priority) if this is still relevant." 2>/dev/null || true
+      bash "$TRACKER" close "$issue_id" "not_planned" 2>/dev/null || true
+      EXPIRED=$((EXPIRED + 1))
+      EXPIRED_LIST+="  • ${issue_id}\n"
+    fi
+  done
+fi
+
 # Cleanup metrics CSV
-# `recycled` was appended as a 4th column on 2026-07-27; rows written before
-# that date have 3 fields. Anything parsing this file must tolerate both.
+# Column history: `recycled` appended as a 4th column 2026-07-27, `expired` as
+# a 5th on 2026-08-28. Rows written earlier have 3 or 4 fields — anything
+# parsing this file must tolerate all widths.
 CLEANUP_METRICS_CSV="$OUTPUT_DIR/lift-cleanup-metrics.csv"
 if [ ! -f "$CLEANUP_METRICS_CSV" ]; then
-  echo "date,closed,deduped,recycled" > "$CLEANUP_METRICS_CSV"
+  echo "date,closed,deduped,recycled,expired" > "$CLEANUP_METRICS_CSV"
 fi
 
 if [ "$DRY_RUN" != "--dry-run" ]; then
-  echo "$DATE,$CLOSED,$DEDUPED,$RECYCLED" >> "$CLEANUP_METRICS_CSV"
-  log_info "Cleanup: $CLOSED closed, $DEDUPED deduped, $RECYCLED recycled ($ALREADY_CLOSED already closed, skipped)"
-  echo "  ✅ Cleanup: $CLOSED closed, $DEDUPED deduped, $RECYCLED recycled ($ALREADY_CLOSED already closed, skipped)"
+  echo "$DATE,$CLOSED,$DEDUPED,$RECYCLED,$EXPIRED" >> "$CLEANUP_METRICS_CSV"
+  log_info "Cleanup: $CLOSED closed, $DEDUPED deduped, $RECYCLED recycled, $EXPIRED expired, $HARVESTED learnings harvested ($ALREADY_CLOSED already closed, skipped)"
+  echo "  ✅ Cleanup: $CLOSED closed, $DEDUPED deduped, $RECYCLED recycled, $EXPIRED expired, $HARVESTED learnings harvested ($ALREADY_CLOSED already closed, skipped)"
+  if [ "$EXPIRED" -gt 0 ] && [ -n "$EXPIRED_LIST" ]; then
+    echo "  🗑  Expired stale P4 issues (reopen if still relevant):"
+    echo -e "$EXPIRED_LIST"
+  fi
   if [ -n "$CLOSED_LIST" ]; then
     echo "  Closed issues:"
     echo -e "$CLOSED_LIST"

@@ -219,6 +219,7 @@ VERDICT: APPROVE or ENHANCE or SKIP or FLAG or RESCOPE
 CONFIDENCE: 1-10
 REASON: 1-2 sentences
 IMPLEMENTATION_PLAN: (if APPROVE/ENHANCE) 3 bullet points with specific files and changes
+ACCEPTANCE_CRITERIA: (if APPROVE/ENHANCE) 2-4 testable criteria separated by \" | \" — each a concrete, observable behavior a reviewer can verify on the running app (what the user sees or does), not an implementation detail. Example: \"deleting the last set removes the exercise card | the undo toast appears for 5s and restores the set when tapped\". These become the definition of done: the builder must satisfy every criterion before opening the PR.
 COMPLEXITY: small/medium/large
 SUGGESTED_PRIORITY: 1-4
 
@@ -301,14 +302,22 @@ Falling back to Claude Sonnet for triage this run (higher token cost). Check GEM
   case "$VERDICT" in
     APPROVE)
       APPROVED=$((APPROVED + 1))
-      IMPL_PLAN=$(echo "$TRIAGE_RESULT" | sed -n '/IMPLEMENTATION_PLAN:/,/COMPLEXITY:\|SUGGESTED_PRIORITY:\|$/p' | head -10)
+      IMPL_PLAN=$(echo "$TRIAGE_RESULT" | sed -n '/IMPLEMENTATION_PLAN:/,/ACCEPTANCE_CRITERIA:\|COMPLEXITY:\|SUGGESTED_PRIORITY:\|$/p' | head -10)
       CONFIDENCE=$(echo "$TRIAGE_RESULT" | grep -oE 'CONFIDENCE: [0-9]+' | head -1 | grep -oE '[0-9]+' || echo "?")
       COMPLEXITY=$(echo "$TRIAGE_RESULT" | grep -oE 'COMPLEXITY: [a-z]+' | head -1 | sed 's/COMPLEXITY: //' || echo "?")
+      # Acceptance criteria: pipe-separated in the model output, rendered as a
+      # checklist. This is the definition of done — the builder verifies each
+      # criterion before pushing, and the human reviewer checks them on the PR.
+      ACCEPTANCE=$(echo "$TRIAGE_RESULT" | grep -oE 'ACCEPTANCE_CRITERIA: .*' | head -1 | sed 's/ACCEPTANCE_CRITERIA: //')
+      ACCEPTANCE_BULLETS=$(echo "$ACCEPTANCE" | tr '|' '\n' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//; /^$/d; s/^/- [ ] /')
       bash "$TRACKER" comment-add "$issue_id" "**$TRIAGE_MARKER $TRIAGE_MODEL** ($DATE) — ✅ APPROVED
 
 $IMPL_PLAN
 
----
+${ACCEPTANCE_BULLETS:+**Acceptance criteria** (definition of done — builder verifies each before opening the PR):
+$ACCEPTANCE_BULLETS
+
+}---
 _Automated triage — suggested starting point, not a mandate. Read the codebase and deviate if you find a better approach._" || true
       bash "$TRACKER" update "$issue_id" --state unstarted || true
       RESULTS+="  • ✅ <${ISSUE_URL}|${issue_id}>: ${ISSUE_TITLE} _(${COMPLEXITY}, confidence ${CONFIDENCE}/10)_\n"
@@ -316,9 +325,11 @@ _Automated triage — suggested starting point, not a mandate. Read the codebase
     ENHANCE)
       ENHANCED=$((ENHANCED + 1))
       ENHANCED_DESC=$(echo "$TRIAGE_RESULT" | sed -n '/ENHANCED_DESCRIPTION:/,/IMPLEMENTATION_PLAN:\|$/p' | head -5 | sed 's/ENHANCED_DESCRIPTION: //')
-      IMPL_PLAN=$(echo "$TRIAGE_RESULT" | sed -n '/IMPLEMENTATION_PLAN:/,/COMPLEXITY:\|SUGGESTED_PRIORITY:\|$/p' | head -10)
+      IMPL_PLAN=$(echo "$TRIAGE_RESULT" | sed -n '/IMPLEMENTATION_PLAN:/,/ACCEPTANCE_CRITERIA:\|COMPLEXITY:\|SUGGESTED_PRIORITY:\|$/p' | head -10)
       CONFIDENCE=$(echo "$TRIAGE_RESULT" | grep -oE 'CONFIDENCE: [0-9]+' | head -1 | grep -oE '[0-9]+' || echo "?")
       COMPLEXITY=$(echo "$TRIAGE_RESULT" | grep -oE 'COMPLEXITY: [a-z]+' | head -1 | sed 's/COMPLEXITY: //' || echo "?")
+      ACCEPTANCE=$(echo "$TRIAGE_RESULT" | grep -oE 'ACCEPTANCE_CRITERIA: .*' | head -1 | sed 's/ACCEPTANCE_CRITERIA: //')
+      ACCEPTANCE_BULLETS=$(echo "$ACCEPTANCE" | tr '|' '\n' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//; /^$/d; s/^/- [ ] /')
       bash "$TRACKER" comment-add "$issue_id" "**$TRIAGE_MARKER $TRIAGE_MODEL** ($DATE) — ✨ ENHANCED
 
 **Refined scope:**
@@ -326,7 +337,10 @@ $ENHANCED_DESC
 
 $IMPL_PLAN
 
----
+${ACCEPTANCE_BULLETS:+**Acceptance criteria** (definition of done — builder verifies each before opening the PR):
+$ACCEPTANCE_BULLETS
+
+}---
 _Automated triage — suggested starting point, not a mandate. Read the codebase and deviate if you find a better approach._" || true
       SUGGESTED_P=$(echo "$TRIAGE_RESULT" | grep -oE 'SUGGESTED_PRIORITY: [1-4]' | grep -oE '[1-4]' || true)
       if [ -n "$SUGGESTED_P" ]; then

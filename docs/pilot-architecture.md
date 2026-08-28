@@ -108,6 +108,8 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
 
 **Re-triage sweep:** `triage.sh --re-triage` re-reviews ALL triageable issues (including already-triaged ones) under the current policy — a one-shot re-baseline for policy changes like the GA shift. Comments are marked "Re-triaged by …", which the nightly idempotency grep already accepts, so swept issues aren't re-reviewed every night. Parked issues (needs-input / blocked / started) are untouched. Combinable with `--dry-run`.
 
+**Acceptance criteria (since 2026-08-28):** APPROVE/ENHANCE verdicts also emit `ACCEPTANCE_CRITERIA` — 2–4 testable, user-observable criteria (pipe-separated in the model output), rendered into the triage comment as a definition-of-done checklist. The builder treats them as binding: each criterion is verified before push and confirmed explicitly in the PR's Verification section. This gives every issue an explicit Definition of Ready/Done instead of an implied one.
+
 **Why it matters:** The builder (Opus) reads these comments before implementing. Better plans = stronger implementations. Aaron spends less time triaging raw issues.
 
 ### 3. Overnight Builder
@@ -118,6 +120,8 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
 
 **What it does:**
 - **Auth preflight (before the loop):** one cheap `claude` probe down the real code path. If the keychain OAuth token is expired/logged-out, every iteration would 401; rather than burn the loop silently, the builder aborts immediately and alerts #lift-automation. Auth failures are classified by `is_auth_failure()` in `builder-utils.sh`; transient/network errors are *not* auth signatures and fall through to normal per-iteration handling. Skippable with `SKIP_AUTH_PREFLIGHT=1`. (Added 2026-06-23 after two silent zero-PR nights.)
+- **WIP limit (since 2026-08-28):** before each iteration the loop counts open PRs; at `MAX_OPEN_PRS` (default 8, `0` disables) it stops for the night with a Slack notice instead of growing Aaron's review queue — Kanban backpressure pointed at the human constraint. Retry iterations for `ci:failed` PRs are exempt (their old PR is closed at startup, so they don't grow the queue). Decision logic: `wip_gate_active` in `lib/builder-utils.sh`.
+- **Rejection learnings (since 2026-08-28):** every iteration's prompt carries the tail of `data/lift-build-learnings.md` — Aaron's closing comments on PRs he closed unmerged, harvested nightly by cleanup — as binding do-not-repeat guidance. This restores the human-feedback loop that died with the review tuner (2026-05-11).
 - Picks the highest-priority triaged issue from the backlog (GA tie-break since 2026-08-21: at equal priority, user-facing bug fixes > performance/reliability > UX/a11y polish; refactors, test-only work, and feature-shaped issues last). The per-iteration inline discovery follows the same GA rules — defects and refinements only, no feature or test-coverage issues.
 - Reads the triage agent's implementation plan from comments
 - Creates a dedicated branch per issue: `enhance/LIFT-{id}-{date}`
@@ -222,9 +226,11 @@ This does that mechanically. It is a **reporter, never an editor**: every findin
 **What it does:**
 - Closes completed/canceled issues that are still open on GitHub via the tracker adapter — issues already closed in a prior session are skipped (checked via `tracker.sh state`), so no redundant `gh issue close` writes are fired
 - **Recycles abandoned in-progress issues** (added 2026-07-27) — see below
+- **Snapshots the needs-your-call list + harvests rejection learnings** (step 2b, added 2026-08-28) — see below
 - Detects duplicate issues by title (keeps oldest, cancels+archives newer copies)
+- **Expires stale priority-4 backlog issues** (step 4, added 2026-08-28) — see below
 - Keeps issue list clean — closes resolved/duplicate issues
-- Reports `N closed` (real open→closed transitions only), `R recycled`, and `K already closed, skipped`
+- Reports `N closed`, `D deduped`, `R recycled`, `E expired`, `H learnings harvested`, and `K already closed, skipped`
 
 **Backlog recycling.** The builder's pre-pick flips an issue to `state:started` *before* implementation. If that iteration then dies before opening a PR (auth blip, CI failure, context exhaustion, killed run), nothing clears the label — and because `tracker.sh list pickable` is exclusion-based, a `state:started` issue is removed from the picking pool permanently. This leaks the backlog one issue at a time until the builder starves.
 
@@ -239,7 +245,13 @@ Cleanup now sorts every `state:started` issue into four buckets by cross-referen
 
 The rule is deliberately conservative: only the "no PR ever" case is unambiguous. A closed-unmerged PR may have been a deliberate rejection, so auto-recycling it would rebuild work Aaron already declined — those are surfaced for a human decision instead.
 
-Recycled counts are appended to `data/lift-cleanup-metrics.csv` as a fourth `recycled` column. Rows written before 2026-07-27 have three fields, so parsers must tolerate both widths.
+Recycled counts are appended to `data/lift-cleanup-metrics.csv` as a fourth `recycled` column; `expired` was added as a fifth on 2026-08-28. Rows written earlier have three or four fields, so parsers must tolerate all widths.
+
+**Needs-your-call snapshot + rejection-learnings harvest (step 2b, since 2026-08-28).** The "closed unmerged — needs your call" bucket used to live only in an overnight log; now it feeds two consumers:
+- `data/lift-needs-decision.txt` — a nightly overwrite of the current rejected-PR issue IDs. The morning digest reads it and renders the "⚖️ Needs your call" line, so these decisions surface in the daily standup instead of rotting.
+- `data/lift-build-learnings.md` — for every PR closed *without* merging in the last 14 days, cleanup appends one entry (`## PR #N — title (closed unmerged date)`) containing the closing comment: the repo owner's last comment wins, other human comments count, bot comments are ignored, and a missing comment is recorded as a nudge to leave one. Entries are keyed by `## PR #N ` so re-runs are idempotent. The builder injects the tail of this file into every iteration prompt — Aaron's merge/reject decisions finally train the pipeline again (the review tuner that used to do this was removed 2026-05-11).
+
+**Backlog expiry (step 4, since 2026-08-28).** Triage SKIP demotes issues to `priority:4-low` and nothing ever revisited them — they accumulate forever and creep toward the adapter's silent `--limit 200` truncation cliff. Any open `priority:4-low` issue untouched for `BACKLOG_EXPIRY_DAYS` (default 56, `0` disables) is closed as not planned with a reopen invitation. Parked issues (`state:started` / `state:blocked` / `state:needs-input`) never expire — those are waiting on a human, not forgotten.
 
 > **Adapter query limits.** Every open-issue query in `tracker.sh` shares a single cap, `GH_OPEN_LIMIT` (default **1000**, overridable by env). Truncation here fails *silently* — `gh issue list` just returns a short list with no error — so a stale cap hides issues from every consumer at once. This has bitten twice: `list <state>` was capped at 100 until 2026-07-27, hiding 31 `state:started` issues from the recycler; the 200 cap that replaced it was found on 2026-08-28 hiding **8 of 10** triageable issues and **3 of 5** pickable ones behind 265 open issues, leaving the builder to choose from a pool of 2. `gh_list` now also warns on stderr when an open-issue query comes back at exactly the cap, which is the only externally visible symptom of truncation. Keep `GH_OPEN_LIMIT` comfortably above the real open-issue count.
 
@@ -350,7 +362,9 @@ Issue cleanup → Completed/canceled closed, duplicates removed
     ↓
 Aaron (morning) → Merges green PRs directly, reviews yellow PRs, ignores failed (auto-retry next night)
     ↓
-Feedback loop → Aaron's corrections improve future reviews + discovery
+Feedback loop → canceled issues + product decisions steer discovery;
+    closing comments on PRs Aaron rejects are harvested nightly (cleanup)
+    into lift-build-learnings.md and fed back into the builder prompt
 ```
 
 ---
@@ -373,6 +387,8 @@ Feedback loop → Aaron's corrections improve future reviews + discovery
 | `~/development/pilot/init.sh` | Interactive setup wizard |
 | `pilot/data/` | All logs, metrics, usage tracking, learnings |
 | `pilot/data/pilot-YYYY-MM-DD.log` | Unified structured log (all components) |
+| `pilot/data/lift-build-learnings.md` | Aaron's closing comments on rejected (closed-unmerged) PRs — harvested nightly by cleanup, injected into the builder prompt |
+| `pilot/data/lift-needs-decision.txt` | Nightly snapshot of rejected-PR issues awaiting Aaron's call — surfaced by the morning digest |
 
 See [Pilot Responsibilities](pilot-responsibilities.md) for the complete list of Aaron's manual tasks, automated tasks, environment variables, and changelog.
 
@@ -413,6 +429,21 @@ Also corrected the Scheduled Tasks table, which had been missing the Wednesday t
 **Observed effect on cleanup.** With the full issue set visible, `cleanup.sh --dry-run` now reports 150 done-awaiting-close (was 92) and 42 needing a human call (was 7), and takes ~4 minutes. Behavior is unchanged — 0 auto-recycled, exit 0 — it simply is no longer blind to two thirds of the board.
 
 **Why not a pre-build freshness check against master.** Verified as ineffective for this incident: when PR #1041 was opened, `plate_count_mode` was **not** in master — it lived only in the still-open PR #1032, and master stayed clean for six more days. Checking the codebase at build time would have found nothing. The duplicate was visible only in the *open-PR set*, which is why the audit's cross-PR collision check is the one that fires (retro-validated: it flags `exercises.plate_count_mode added by PRs [1032, 1041]` at #1041's creation).
+### 2026-08-28 — Agile-gap pass: outcome metrics, rejection-feedback loop, WIP limit, blockers in the standup, GA burndown, backlog expiry, acceptance criteria
+
+**Context.** A review of Pilot against standard agile practice found two systemic gaps: the pipeline measured *activity* (iterations, tokens, stalls) but not *outcomes* (merged PRs, merge rate, lead time), and the human-feedback loop still advertised in the Data Flow diagram had been dead since the review tuner was removed (2026-05-11) — Aaron's merge/reject decisions were the one signal nothing learned from. Seven changes, all zero-AI-token (bash/python/gh) apart from two prompt additions:
+
+- **Health report — Delivery metrics** (`scripts/health-report.sh`): new report + Slack section computed from `gh pr list`: PRs merged (7d), PRs closed unmerged, merge rate, avg time-to-merge, open-PR count with oldest age, and output tokens per merged PR (the cost-of-delivery number). Two new anomalies: review-queue aging (oldest open PR ≥ 7d) and low merge rate (<50% with ≥4 decided PRs). Every path degrades to zeros when `gh` is unavailable.
+- **Health report — GA burndown**: stabilization mode now has a termination condition. The report tracks the GitHub milestone named by `GA_MILESTONE` (default `GA`) as a release burndown — closed/total (%) and open issues remaining — and prints a create-the-milestone hint until it exists.
+- **Rejection-learnings loop** (`scripts/cleanup.sh` step 2b + `scripts/builder.sh`): cleanup harvests the closing comments of PRs closed unmerged in the last 14 days into `data/lift-build-learnings.md` (idempotent by `## PR #N ` key; repo-owner comment wins, bot comments ignored, missing comment recorded as a nudge). The builder injects the file's tail into every iteration prompt as "Learnings from PRs Aaron rejected". Cleanup also snapshots the current rejected-PR issue IDs to `data/lift-needs-decision.txt` for the digest.
+- **WIP limit** (`scripts/builder.sh` + `wip_gate_active` in `lib/builder-utils.sh`): when `MAX_OPEN_PRS` (default 8, `0` disables) PRs are already open, the builder stops for the night with a Slack notice instead of growing the review queue. `ci:failed` retry iterations are exempt (their old PR is closed at startup).
+- **Blockers in the digest** (`scripts/digest.sh`): the 6:15 AM digest gains "⏳ Waiting on you" (`state:needs-input` issues with links) and "⚖️ Needs your call" (rejected-PR issues from the cleanup snapshot) — the standup now surfaces what is blocked on a human.
+- **Backlog expiry** (`scripts/cleanup.sh` step 4): open `priority:4-low` issues untouched for `BACKLOG_EXPIRY_DAYS` (default 56, `0` disables) are auto-closed as not planned with a reopen invitation; parked issues (started/blocked/needs-input) never expire. `lift-cleanup-metrics.csv` gains a fifth `expired` column (parsers must tolerate 3/4/5-field rows).
+- **Acceptance criteria** (`scripts/triage.sh` + builder prompt): APPROVE/ENHANCE verdicts emit `ACCEPTANCE_CRITERIA` (2–4 testable, user-observable criteria), rendered as a definition-of-done checklist in the triage comment; the builder must verify each criterion before pushing and confirm it in the PR's Verification section.
+- **Config:** `MAX_OPEN_PRS`, `BACKLOG_EXPIRY_DAYS`, `GA_MILESTONE` added to `project.env.example` + `init.sh`; `project.env.example` also gains the long-missing `GITHUB_ISSUES_REPO` (drift — init.sh has written it since the GitHub migration).
+- **Tests:** +16 across builder/cleanup/digest/triage/health-report (WIP gate, harvest end-to-end with idempotency, expiry filter, digest blockers, flow metrics end-to-end, acceptance parsing). Full suite 267 green (rebased onto the same-day duplicate-build-fix and doc-drift-audit merges).
+
+**New for Aaron:** leave a one-line closing comment whenever you close a PR without merging (it becomes builder training data); create the `GA` milestone in aschung212/Lift and tag GA-blocking issues; expect the builder to pause nights when ≥8 PRs are open.
 
 ### 2026-08-21 — GA-readiness shift: pipeline re-aimed from feature discovery to stabilization
 

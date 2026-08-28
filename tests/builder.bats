@@ -354,3 +354,45 @@ EOF
   run _marker_lines ISSUE_DONE "$TEST_TMPDIR/run.md"
   [ "${#lines[@]}" -eq 2 ]
 }
+
+# ── wip_gate_active ──────────────────────────────────────────────────────────
+
+# bats test_tags=fast
+@test "builder: wip_gate_active gates when open PRs reach the cap" {
+  run wip_gate_active 8 8 ""
+  [ "$status" -eq 0 ]
+  run wip_gate_active 12 8 ""
+  [ "$status" -eq 0 ]
+}
+
+# bats test_tags=fast
+@test "builder: wip_gate_active passes below the cap" {
+  run wip_gate_active 7 8 ""
+  [ "$status" -eq 1 ]
+  run wip_gate_active 0 8 ""
+  [ "$status" -eq 1 ]
+}
+
+# bats test_tags=fast
+@test "builder: wip_gate_active disabled by 0 or non-numeric cap" {
+  run wip_gate_active 50 0 ""
+  [ "$status" -eq 1 ]
+  run wip_gate_active 50 "" ""
+  [ "$status" -eq 1 ]
+  run wip_gate_active 50 "abc" ""
+  [ "$status" -eq 1 ]
+}
+
+# bats test_tags=fast
+@test "builder: wip_gate_active exempts retry iterations" {
+  # RETRY_ISSUES non-empty: those failed PRs were closed at startup, so the
+  # retry does not grow the review queue — never gate it.
+  run wip_gate_active 12 8 "TEST-101 TEST-102"
+  [ "$status" -eq 1 ]
+}
+
+# bats test_tags=fast
+@test "builder: wip_gate_active tolerates a non-numeric open count (gh unavailable)" {
+  run wip_gate_active "not-a-number" 8 ""
+  [ "$status" -eq 1 ]
+}

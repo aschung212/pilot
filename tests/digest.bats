@@ -40,3 +40,28 @@ TEST-101  P3  Backlog    Add thing"
   [ "$status" -eq 0 ]
   [[ "$output" == *"not set"* ]]
 }
+
+# ── Blockers section (standup: what is waiting on a human) ───────────────────
+
+# bats test_tags=fast
+@test "digest: surfaces needs-your-call PRs from the cleanup snapshot" {
+  printf 'TEST-42\nTEST-77\n' > "$OUTPUT_DIR/lift-needs-decision.txt"
+  run bash "$DIGEST" --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Needs your call"* ]]
+  [[ "$output" == *"TEST-42"* ]]
+  [[ "$output" == *"TEST-77"* ]]
+}
+
+# bats test_tags=fast
+@test "digest: omits needs-your-call section when the snapshot is empty or missing" {
+  rm -f "$OUTPUT_DIR/lift-needs-decision.txt"
+  run bash "$DIGEST" --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"Needs your call"* ]]
+
+  : > "$OUTPUT_DIR/lift-needs-decision.txt"
+  run bash "$DIGEST" --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"Needs your call"* ]]
+}

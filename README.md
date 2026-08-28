@@ -134,8 +134,11 @@ See [docs/adapters.md](docs/adapters.md) for interface contracts and examples.
 The pipeline optimizes itself weekly:
 
 - **Budget tuner** — raises iteration caps when productive, lowers when stalling
-- **Health report** — surfaces anomalies (empty backlog, high stall rate, token trends)
+- **Health report** — surfaces anomalies (empty backlog, high stall rate, token trends, aging PR queue, low merge rate) plus delivery metrics (merge rate, time-to-merge, tokens per merged PR) and a GA-milestone burndown
 - **Backpressure** — builder signals discovery to run more when backlog is low
+- **WIP limit** — builder pauses the night when too many PRs are already open awaiting human review (`MAX_OPEN_PRS`)
+- **Rejection learnings** — closing comments on PRs the human rejects are harvested nightly and fed back into the builder prompt
+- **Backlog expiry** — stale P4 issues auto-close after `BACKLOG_EXPIRY_DAYS` so the backlog stays a plan, not a museum
 
 See [docs/tuning.md](docs/tuning.md) for details.
 

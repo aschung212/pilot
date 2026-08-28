@@ -75,3 +75,123 @@ for title, ids in by_title.items():
   [[ "$output" == *"Cleanup:"* ]]
   [[ "$output" == *"0 closed, 0 deduped"* ]]
 }
+
+# ── Needs-decision snapshot + rejection-learnings harvest (step 2b) ──────────
+
+# bats test_tags=fast
+@test "cleanup: writes an empty needs-decision snapshot when nothing is rejected" {
+  CLEANUP="$PILOT_DIR/scripts/cleanup.sh"
+  run bash "$CLEANUP"
+  [ "$status" -eq 0 ]
+  # Snapshot file exists (digest.sh reads it) but holds no issue IDs
+  [ -f "$OUTPUT_DIR/lift-needs-decision.txt" ]
+  [ ! -s "$OUTPUT_DIR/lift-needs-decision.txt" ]
+  # Learnings file is seeded with its header
+  [ -f "$OUTPUT_DIR/lift-build-learnings.md" ]
+  grep -q "Build learnings" "$OUTPUT_DIR/lift-build-learnings.md"
+}
+
+# bats test_tags=fast
+@test "cleanup: harvests closing comments from recent unmerged closes, idempotently" {
+  export GITHUB_ISSUES_REPO="aaron/testrepo"
+
+  # Crafted gh mock: the harvest query (contains closedAt) gets PR JSON with
+  # four cases — already recorded (#7), fresh rejection with owner comment
+  # (#8), merged (#9, must be ignored), and an old rejection outside the
+  # 14-day window (#10, must be ignored). Everything else gets empty output.
+  RECENT=$(python3 -c 'from datetime import datetime,timezone,timedelta; print((datetime.now(timezone.utc)-timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ"))')
+  OLD=$(python3 -c 'from datetime import datetime,timezone,timedelta; print((datetime.now(timezone.utc)-timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ"))')
+  cat > "$TEST_TMPDIR/prs.json" <<JSON
+[
+  {"number": 7, "title": "old entry", "closedAt": "$RECENT", "mergedAt": null, "comments": []},
+  {"number": 8, "title": "fix(TEST-8): bad approach", "closedAt": "$RECENT", "mergedAt": null,
+   "comments": [{"author": {"login": "vercel-bot"}, "body": "deploy preview"},
+                 {"author": {"login": "aaron"}, "body": "Rejected: modal breaks offline mode"}]},
+  {"number": 9, "title": "feat(TEST-9): merged fine", "closedAt": "$RECENT", "mergedAt": "$RECENT", "comments": []},
+  {"number": 10, "title": "fix(TEST-10): too old", "closedAt": "$OLD", "mergedAt": null, "comments": []}
+]
+JSON
+  mkdir -p "$TEST_TMPDIR/bin"
+  cat > "$TEST_TMPDIR/bin/gh" <<GHEOF
+#!/bin/bash
+case "\$*" in
+  *closedAt*) cat "$TEST_TMPDIR/prs.json" ;;
+  *) echo "" ;;
+esac
+GHEOF
+  chmod +x "$TEST_TMPDIR/bin/gh"
+  export PATH="$TEST_TMPDIR/bin:$PATH"
+
+  # Pre-seed the learnings file with PR #7 so it must NOT be re-harvested
+  mkdir -p "$OUTPUT_DIR"
+  printf '# Build learnings\n\n## PR #7 — old entry (closed unmerged 2026-08-01)\nalready here\n' \
+    > "$OUTPUT_DIR/lift-build-learnings.md"
+
+  CLEANUP="$PILOT_DIR/scripts/cleanup.sh"
+  run bash "$CLEANUP"
+  [ "$status" -eq 0 ]
+
+  LEARNINGS="$OUTPUT_DIR/lift-build-learnings.md"
+  # Fresh rejection harvested with the owner's comment (bot comment ignored)
+  grep -q "## PR #8 " "$LEARNINGS"
+  grep -q "Rejected: modal breaks offline mode" "$LEARNINGS"
+  ! grep -q "deploy preview" "$LEARNINGS"
+  # Merged and out-of-window PRs are not learnings
+  ! grep -q "## PR #9 " "$LEARNINGS"
+  ! grep -q "## PR #10 " "$LEARNINGS"
+  # Idempotent: #7 appears exactly once, and a second run adds nothing new
+  [ "$(grep -c '^## PR #7 ' "$LEARNINGS")" -eq 1 ]
+  run bash "$CLEANUP"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^## PR #8 ' "$LEARNINGS")" -eq 1 ]
+}
+
+# ── Backlog expiry (step 4) ──────────────────────────────────────────────────
+
+# bats test_tags=fast
+@test "cleanup: stale-P4 filter expires old issues but never parked ones" {
+  # Replicates the expiry filter in cleanup.sh step 4: priority:4-low issues
+  # untouched beyond the cutoff are expired, unless parked on a human
+  # (started / blocked / needs-input).
+  STALE=$(python3 -c 'from datetime import datetime,timezone,timedelta; print((datetime.now(timezone.utc)-timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%SZ"))')
+  FRESH=$(python3 -c 'from datetime import datetime,timezone,timedelta; print((datetime.now(timezone.utc)-timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%SZ"))')
+  result=$(python3 -c "
+import json, sys
+from datetime import datetime, timezone, timedelta
+days = int(sys.argv[1])
+issues = json.load(sys.stdin)
+cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+PARKED = {'state:started', 'state:blocked', 'state:needs-input'}
+for i in issues:
+    if not isinstance(i, dict) or not i.get('number'):
+        continue
+    labels = {l.get('name') for l in (i.get('labels') or []) if isinstance(l, dict)}
+    if labels & PARKED:
+        continue
+    try:
+        upd = datetime.fromisoformat(str(i.get('updatedAt')).replace('Z', '+00:00'))
+    except Exception:
+        continue
+    if upd < cutoff:
+        print(i['number'])
+" 56 <<JSON
+[
+  {"number": 1, "updatedAt": "$STALE", "labels": [{"name": "priority:4-low"}]},
+  {"number": 2, "updatedAt": "$FRESH", "labels": [{"name": "priority:4-low"}]},
+  {"number": 3, "updatedAt": "$STALE", "labels": [{"name": "priority:4-low"}, {"name": "state:needs-input"}]},
+  {"number": 4, "updatedAt": "$STALE", "labels": [{"name": "priority:4-low"}, {"name": "state:started"}]}
+]
+JSON
+)
+  [ "$result" = "1" ]
+}
+
+# bats test_tags=fast
+@test "cleanup: expiry disabled by BACKLOG_EXPIRY_DAYS=0" {
+  export BACKLOG_EXPIRY_DAYS=0
+  export GITHUB_ISSUES_REPO="aaron/testrepo"
+  CLEANUP="$PILOT_DIR/scripts/cleanup.sh"
+  run bash "$CLEANUP" --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"Would expire"* ]]
+}
