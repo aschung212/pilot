@@ -76,14 +76,17 @@ Verify with `launchctl list | grep stale-pr-audit`. Until it is loaded, the audi
 
 ## What's Fully Automated
 
-- Decomposed pipeline — 6 independent services, each with own launchd plist:
+- Decomposed pipeline — 9 independent services, each with its own launchd plist (plus the daily digest). No orchestrator:
   - Discovery (Sun/Tue/Thu 10 PM): finds improvements, creates GitHub issues (Gemini + Claude). **GA-readiness mode since 2026-08-21:** rotation covers only bug-hunt, performance, ux-polish, accessibility, pwa-reliability, security-deps — no feature research, no test-coverage hunting.
   - Triage (Sun/Tue/Thu 10:30 PM): reviews issues, adds implementation plans (Gemini, Claude fallback). **GA gate:** net-new features and test-only issues are SKIPped ("deferred until post-GA"); only bug/perf/UX-polish/a11y/security work reaches the builder.
   - Builder (Mon-Fri 11 PM): implements per-issue branches (`enhance/LIFT-{id}-{date}`), per-issue PRs with Claude Sonnet adversarial review (post-commit hook, single model) + auto-fix cycle, CI check. Uses git worktree for isolation. Failed PRs (`ci:failed`) auto-retried next night.
   - Cleanup: runs at end of builder — archives completed/canceled, deduplicates backlog
+  - Auditor (Wednesday 6 PM): pipeline self-audit
+  - Roadmap Synth (Wednesday 7 PM): synthesizes the roadmap from the backlog
+  - Architect (Wednesday 8 PM): deep architectural review
   - Budget Tuner (Sunday 9 PM): adjusts iteration/token caps based on week's data
-  - Review Tuner (Sunday 9:15 PM): learns from PR feedback
   - Health Report (Sunday 8 AM): weekly metrics dashboard, log rotation, anomaly detection
+  - Stale-PR Audit (Sunday 8:15 AM): flags open PRs whose work already shipped — no-op merges, migrations duplicating a master column, two open PRs adding the same column
 - Version controlled at [github.com/aschung212/pilot](https://github.com/aschung212/pilot)
 - Swappable components via adapter scripts (tracker, notify, AI models)
 - Structured logging via `lib/log.sh` — unified daily log, error alerting to Slack
@@ -92,16 +95,15 @@ Verify with `launchctl list | grep stale-pr-audit`. Until it is loaded, the audi
 - Vercel preview deploys per PR; auto-merge available (GitHub setting enabled)
 - Post-merge CI failure → Slack notification
 - Slack threading: one parent message per night, all updates threaded (updated for multi-PR output)
-- `/ai-review`: syncs LC log, syncs Linear (LC + applications), updates Obsidian temporal notes, posts to Slack
 - Slack webhooks: all notifications are token-free (no Claude instances spawned)
-- Test suite (bats-core, 105 tests across 16 files): fast tier (101 tests) runs on every commit via pre-commit hook, full tier (105 tests) runs on push via GitHub Actions CI
+- Test suite (bats-core, 239 tests across 21 files): fast tier (234 tests) runs on every commit via pre-commit hook, full tier (239 tests) runs on push via GitHub Actions CI
 - Auto-discovery smoke tests: fail when new scripts lack test coverage — enforces that every new script gets tests
 - Linear digest: posts board snapshot to #daily-review at 6:15 AM daily (launchd)
-- Overnight runner: discovery → triage → builder chain starts at 11 PM nightly (launchd)
 
 ## What's NOT Automated
 
-- **~~Starting scripts~~** — ✅ Now automated via launchd at 11 PM nightly (`com.aaron.lift-overnight`)
+- **~~Starting scripts~~** — ✅ Automated: every stage has its own launchd plist (see the service list above). There is no `com.aaron.lift-overnight` orchestrator; that plist was retired when the pipeline was decomposed.
+- **Loading new launchd plists** — a plist committed to `launchd/` does nothing until you `cp` it to `~/Library/LaunchAgents/` and `launchctl load` it. Check One-Time Setup above for any pending.
 - **Merging PRs** — intentionally manual (review first)
 - **Daily notes** — Aaron writes the content, AI reviews it
 - **Linear triage** — discovery creates issues, Aaron prioritizes and adds context
@@ -143,13 +145,15 @@ If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/T
 | File | Purpose |
 |---|---|
 | `~/development/pilot/` | Pipeline repo — all scripts, adapters, config, docs ([GitHub](https://github.com/aschung212/pilot)) |
-| `~/Documents/Scripts/lift-*.sh` | Symlinks to `~/development/pilot/scripts/` — launchd points here |
+| `~/Documents/Scripts/lift-*.sh` | Symlinks to `~/development/pilot/scripts/`. The five older plists (builder, discover, health, triage, tune-budget) point at these; the four newer ones (architect, auditor, roadmap, stale-pr-audit) point straight at the repo. Both work — prefer the direct form for anything new. |
+| `~/development/pilot/launchd/` | Committed launchd plists. A plist here does nothing until it is copied to `~/Library/LaunchAgents/` and `launchctl load`ed. |
+| `~/development/pilot/scripts/stale-pr-audit.sh` | Weekly (Sun 8:15 AM) — flags open PRs whose work already shipped |
 | `~/development/pilot/adapters/` | Swappable adapters: tracker, notify, ai-code, ai-research |
 | `~/development/pilot/lib/log.sh` | Shared structured logging (unified log, error alerting) |
 | `~/development/lift/CLAUDE.md` | Lift project standards (design, code, workflow) |
 | `~/.claude/commands/ai-review.md` | Daily review slash command |
 | `~/.claude/CLAUDE.md` | Global Claude instructions |
-| `~/development/pilot/tests/` | bats-core test suite — 20 test files, 211 tests (fast tier runs in the pre-commit hook) |
+| `~/development/pilot/tests/` | bats-core test suite — 21 test files, 239 tests (fast tier, 234, runs in the pre-commit hook) |
 | `~/development/pilot/.github/workflows/test.yml` | GitHub Actions CI — runs full test suite on push |
 | `~/development/pilot/.githooks/pre-commit` | Git pre-commit hook — runs fast test tier before every commit |
 | `~/Documents/Scripts/lift-triage.sh` | Gemini issue triage — reviews, enhances, and plans before builder runs |
@@ -179,6 +183,18 @@ If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/T
 ---
 
 ## Changelog
+
+### 2026-08-28 — Doc drift swept: the automated-services list was describing a pipeline that no longer exists
+
+Checking whether the docs reflected the audit scheduling turned up adjacent sections that had gone stale and now contradicted the corrected ones. Fixed in the live (non-changelog) sections only — historical entries are left exactly as written.
+
+- **"Review Tuner (Sunday 9:15 PM): learns from PR feedback" was still listed as fully automated.** It was decommissioned **2026-05-11**; `scripts/tune-reviews.sh` does not exist and no plist references it. Removed.
+- **"6 independent services" → 9.** Auditor (Wed 6 PM), Roadmap Synth (Wed 7 PM) and Architect (Wed 8 PM) had never been added to the list, and Stale-PR Audit is new.
+- **"Overnight runner: discovery → triage → builder chain starts at 11 PM nightly"** — removed. There is no orchestrator plist; the pipeline was decomposed long ago, and the stated time was wrong besides (discovery is 10 PM).
+- **`com.aaron.lift-overnight`** was still cited in *What's NOT Automated* as the thing that automated script-starting. That plist is retired. Replaced with an accurate line, plus a new entry noting that a committed plist does nothing until it is `launchctl load`ed.
+- **Test counts:** "105 tests across 16 files / fast 101 / full 105" and Key Files' "20 test files, 211 tests" → **239 across 21, fast tier 234**.
+- **Key Files' symlink claim** said launchd points at `~/Documents/Scripts/lift-*.sh`. Only five of nine plists do; the four newest point straight at the repo. Documented both, and noted the direct form as preferred for new services.
+- **Removed the `/ai-review` line from *What's Fully Automated*.** Per the global instructions, the Obsidian vault workflows are a separate domain from Pilot and do not belong in this doc's automation surface. **Flagging this one explicitly** — it is a scope judgment, not a factual correction, so revert it if you disagree.
 
 ### 2026-08-28 — Stale-PR audit scheduled weekly (Sunday 08:15)
 
