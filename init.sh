@@ -158,6 +158,9 @@ LINEAR_PROJECT=""
 LINEAR_ORG=""
 ISSUE_PREFIX=""
 GH_OPEN_LIMIT="${GH_OPEN_LIMIT:-1000}"
+OBSIDIAN_VAULT="${OBSIDIAN_VAULT:-}"
+AUDITOR_USE_AI_SYNTHESIS="${AUDITOR_USE_AI_SYNTHESIS:-1}"
+GEMINI_API_BASE="${GEMINI_API_BASE:-}"
 GITHUB_ISSUES_REPO=""
 LIFT_PROJECT=""
 
@@ -357,6 +360,10 @@ ISSUE_PREFIX="$ISSUE_PREFIX"
 # Row cap for tracker.sh's open-issue queries. gh truncates silently, so keep
 # this comfortably above your open-issue count; tracker.sh warns at the cap.
 GH_OPEN_LIMIT="$GH_OPEN_LIMIT"
+# Optional knobs (safe defaults; see project.env.example for what they do)
+OBSIDIAN_VAULT="$OBSIDIAN_VAULT"
+AUDITOR_USE_AI_SYNTHESIS="$AUDITOR_USE_AI_SYNTHESIS"
+GEMINI_API_BASE="$GEMINI_API_BASE"
 LIFT_PROJECT="$LIFT_PROJECT"
 LINEAR_TEAM="$LINEAR_TEAM"
 LINEAR_PROJECT="$LINEAR_PROJECT"

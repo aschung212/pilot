@@ -92,6 +92,7 @@ Each pipeline stage is an independent service with its own schedule, logs, and f
 | Budget Tuner | Sunday 21:00 | Adjusts iteration/token caps |
 | Health Report | Sunday 08:00 | Weekly metrics dashboard + log rotation |
 | Stale-PR Audit | Sunday 08:15 | Flags open PRs whose work already shipped |
+| Doc-Drift Audit | Sunday 09:00, biweekly | Checks README/docs/vault refs against the repo's real state |
 
 The builder uses a **git worktree** so it never touches your working directory — you can work on the same repo simultaneously.
 
@@ -172,10 +173,16 @@ pilot/
     triage.sh                # Triage agent
     builder.sh               # Overnight builder
     cleanup.sh               # Issue tracker cleanup
-    stale-pr-audit.sh        # On-demand: open PRs whose work already shipped
+    architect.sh             # Deep-read critic for architectural drift
+    pipeline-auditor.sh      # Self-reflective audit of the pipeline itself
+    roadmap-synth.sh         # Clusters the backlog into themes / epics
+    stale-pr-audit.sh        # Weekly: open PRs whose work already shipped
+    doc-drift-audit.sh       # Biweekly: docs vs. the repo's actual state
     tune-budget.sh           # Budget auto-tuner
     health-report.sh         # Weekly health dashboard
     digest.sh                # Morning digest
+    capture-pr-screenshots.sh # Screenshots for PR descriptions
+    orchestrator.sh          # Legacy chained runner — superseded by per-service plists
   adapters/
     tracker.sh               # Issue tracker (Linear)
     notify.sh                # Notifications (Slack, --as bot identity)

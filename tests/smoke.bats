@@ -100,8 +100,15 @@ import sys, os, glob, plistlib
 root = sys.argv[1]
 bad = []
 for f in sorted(glob.glob(os.path.join(root, "launchd", "*.plist"))):
-    with open(f, "rb") as fh:
-        d = plistlib.load(fh)
+    try:
+        with open(f, "rb") as fh:
+            d = plistlib.load(fh)
+    except Exception as e:
+        # plutil -lint is more permissive than a real XML parser: it accepts
+        # comments containing a double hyphen, which launchd's own parser and
+        # plistlib both reject. Report it here rather than dying on a traceback.
+        bad.append(f"{os.path.basename(f)} — unparseable ({e})")
+        continue
     for arg in d.get("ProgramArguments", []):
         if not isinstance(arg, str) or not arg.endswith(".sh"):
             continue

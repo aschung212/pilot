@@ -50,6 +50,7 @@ updated: 2026-05-08
 | What | How |
 |---|---|
 | **Review Linear digest** | Auto-posted to #daily-review at 6:15 AM via launchd. Check it during morning Slack review. |
+| **Act on the doc-drift audit** | Auto-posted to #lift-automation Sunday 09:00, **every other week** (even ISO weeks). Flags docs that disagree with the repo: undocumented scripts/adapters/env vars, dead references, plists missing from the schedule tables, stale test counts, broken vault paths. Each finding needs your call on which side is wrong — sometimes the doc is right and the code is the bug. Run any time: `./scripts/doc-drift-audit.sh`. |
 | **Act on the stale-PR audit** | Auto-posted to #lift-automation Sunday 08:15. It flags open PRs whose work already shipped — no-op merges, migrations duplicating a master column, two open PRs adding the same column. A clean week still posts one line, so silence means the job broke. Anything flagged is a PR to close or land **before** Sunday 22:00 discovery. |
 | **Manage Linear backlog** | Reprioritize, add comments/context to flagged issues. Completed/canceled issues and duplicates are archived automatically each night. When canceling, add a comment explaining why — discovery agent learns from this. |
 | **Update product decisions** | If you reject a category of feature (not just one issue), update `Lift - Product Decisions.md` in your vault |
@@ -67,7 +68,15 @@ updated: 2026-05-08
 cp ~/development/pilot/launchd/com.aaron.pilot-stale-pr-audit.plist ~/Library/LaunchAgents/ && launchctl load ~/Library/LaunchAgents/com.aaron.pilot-stale-pr-audit.plist
 ```
 
-Verify with `launchctl list | grep stale-pr-audit`. Until it is loaded, the audit only runs when you invoke it by hand. It also requires `scripts/stale-pr-audit.sh` to be present in the **main checkout**, so merge the PR first.
+Verify with `launchctl list | grep stale-pr-audit`. Until it is loaded, the audit only runs when you invoke it by hand.
+
+**Load the doc-drift audit plist (added 2026-08-28).** Same deal:
+
+```bash
+cp ~/development/pilot/launchd/com.aaron.pilot-doc-drift.plist ~/Library/LaunchAgents/ && launchctl load ~/Library/LaunchAgents/com.aaron.pilot-doc-drift.plist
+```
+
+Verify with `launchctl list | grep doc-drift`. It fires weekly but no-ops on odd ISO weeks, so the first real run is **Sunday 2026-09-06** (ISO week 36).
 
 - [x] Run `/github subscribe aschung212/Lift` in #lift-automation in Slack ✅ 2026-03-31
 - [x] Schedule `linear-digest.sh` via cron or launchd for mornings ✅ 2026-03-31 (launchd, 6:15 AM daily)
@@ -76,7 +85,7 @@ Verify with `launchctl list | grep stale-pr-audit`. Until it is loaded, the audi
 
 ## What's Fully Automated
 
-- Decomposed pipeline — 9 independent services, each with its own launchd plist (plus the daily digest). No orchestrator:
+- Decomposed pipeline — 10 independent services, each with its own launchd plist (plus the daily digest). No orchestrator:
   - Discovery (Sun/Tue/Thu 10 PM): finds improvements, creates GitHub issues (Gemini + Claude). **GA-readiness mode since 2026-08-21:** rotation covers only bug-hunt, performance, ux-polish, accessibility, pwa-reliability, security-deps — no feature research, no test-coverage hunting.
   - Triage (Sun/Tue/Thu 10:30 PM): reviews issues, adds implementation plans (Gemini, Claude fallback). **GA gate:** net-new features and test-only issues are SKIPped ("deferred until post-GA"); only bug/perf/UX-polish/a11y/security work reaches the builder.
   - Builder (Mon-Fri 11 PM): implements per-issue branches (`enhance/LIFT-{id}-{date}`), per-issue PRs with Claude Sonnet adversarial review (post-commit hook, single model) + auto-fix cycle, CI check. Uses git worktree for isolation. Failed PRs (`ci:failed`) auto-retried next night.
@@ -87,6 +96,7 @@ Verify with `launchctl list | grep stale-pr-audit`. Until it is loaded, the audi
   - Budget Tuner (Sunday 9 PM): adjusts iteration/token caps based on week's data
   - Health Report (Sunday 8 AM): weekly metrics dashboard, log rotation, anomaly detection
   - Stale-PR Audit (Sunday 8:15 AM): flags open PRs whose work already shipped — no-op merges, migrations duplicating a master column, two open PRs adding the same column
+  - Doc-Drift Audit (Sunday 9:00 AM, every other week): checks README, both Pilot docs, CLAUDE.md and the Pilot-referenced vault paths against the repo's actual state
 - Version controlled at [github.com/aschung212/pilot](https://github.com/aschung212/pilot)
 - Swappable components via adapter scripts (tracker, notify, AI models)
 - Structured logging via `lib/log.sh` — unified daily log, error alerting to Slack
@@ -96,7 +106,7 @@ Verify with `launchctl list | grep stale-pr-audit`. Until it is loaded, the audi
 - Post-merge CI failure → Slack notification
 - Slack threading: one parent message per night, all updates threaded (updated for multi-PR output)
 - Slack webhooks: all notifications are token-free (no Claude instances spawned)
-- Test suite (bats-core, 239 tests across 21 files): fast tier (234 tests) runs on every commit via pre-commit hook, full tier (239 tests) runs on push via GitHub Actions CI
+- Test suite (bats-core, 251 tests across 22 files): fast tier (246 tests) runs on every commit via pre-commit hook, full tier (251 tests) runs on push via GitHub Actions CI
 - Auto-discovery smoke tests: fail when new scripts lack test coverage — enforces that every new script gets tests
 - Linear digest: posts board snapshot to #daily-review at 6:15 AM daily (launchd)
 
@@ -148,12 +158,13 @@ If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/T
 | `~/Documents/Scripts/lift-*.sh` | Symlinks to `~/development/pilot/scripts/`. The five older plists (builder, discover, health, triage, tune-budget) point at these; the four newer ones (architect, auditor, roadmap, stale-pr-audit) point straight at the repo. Both work — prefer the direct form for anything new. |
 | `~/development/pilot/launchd/` | Committed launchd plists. A plist here does nothing until it is copied to `~/Library/LaunchAgents/` and `launchctl load`ed. |
 | `~/development/pilot/scripts/stale-pr-audit.sh` | Weekly (Sun 8:15 AM) — flags open PRs whose work already shipped |
+| `~/development/pilot/scripts/doc-drift-audit.sh` | Biweekly (Sun 9:00 AM) — checks the docs against the repo's real state; checks live in `lib/doc-drift-check.py` |
 | `~/development/pilot/adapters/` | Swappable adapters: tracker, notify, ai-code, ai-research |
 | `~/development/pilot/lib/log.sh` | Shared structured logging (unified log, error alerting) |
 | `~/development/lift/CLAUDE.md` | Lift project standards (design, code, workflow) |
 | `~/.claude/commands/ai-review.md` | Daily review slash command |
 | `~/.claude/CLAUDE.md` | Global Claude instructions |
-| `~/development/pilot/tests/` | bats-core test suite — 21 test files, 239 tests (fast tier, 234, runs in the pre-commit hook) |
+| `~/development/pilot/tests/` | bats-core test suite — 22 test files, 251 tests (fast tier, 246, runs in the pre-commit hook) |
 | `~/development/pilot/.github/workflows/test.yml` | GitHub Actions CI — runs full test suite on push |
 | `~/development/pilot/.githooks/pre-commit` | Git pre-commit hook — runs fast test tier before every commit |
 | `~/Documents/Scripts/lift-triage.sh` | Gemini issue triage — reviews, enhances, and plans before builder runs |
@@ -161,7 +172,7 @@ If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/T
 | `~/Documents/Scripts/lift-tune-budget.sh` | Auto-tuner — analyzes usage + runtime history and adjusts budget config |
 | `~/Documents/Scripts/lift-linear-cleanup.sh` | Linear cleanup — archives done/canceled issues, deduplicates backlog |
 | `pilot/data/` | Logs, metrics, digests, cost tracking |
-| `Obsidian: 20_Learning/Vibe Coding Projects/Lift - Product Decisions.md` | Product direction — rejected concepts, approved direction. Discovery agent reads this. |
+| `Obsidian: 20_Learning/Vibe Coding Projects/Lift/Lift - Product Decisions.md` | Product direction — rejected concepts, approved direction. Discovery agent reads this. |
 
 ## Slack Channels
 
@@ -183,6 +194,32 @@ If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/T
 ---
 
 ## Changelog
+
+### 2026-08-28 — Biweekly doc-drift audit, and the 19 drifts it found on its first run
+
+Docs drift silently. The 2026-08-28 sweep earlier today was done by hand, and hand-reading docs against the filesystem does not scale. `scripts/doc-drift-audit.sh` (checks in `lib/doc-drift-check.py`) does it mechanically.
+
+**What it checks:** undocumented scripts/adapters/env vars · a `*.sh` named in the docs that no longer exists · plists missing from, or disagreeing with, the schedule tables · a plist pointing at a missing script · test counts vs the real suite (both tiers) · Obsidian vault paths Pilot depends on.
+
+**It is a reporter, never an editor.** Every finding needs a human call about which side is wrong — sometimes the doc is right and the code is the bug.
+
+**Two exemptions keep it honest.** Changelog sections are excluded from every check (history is *supposed* to describe the past), and doc tombstones — "the old `ai-review.sh` was deleted 2026-07-17" — are recognized as the docs doing their job. Without those it cries wolf, and a report that cries wolf gets ignored. Both are pinned by tests, along with scripts that legitimately live outside the repo and counts quoting either tier.
+
+**Vault scope:** only the vault files Pilot itself reads or names (`PRODUCT_DECISIONS_FILE`, `PRODUCT_FEATURES_FILE`, and vault paths cited in Pilot docs). Your vault workflows are a separate domain and are not audited. A broken path here is a *Pilot* bug — discovery and triage degrade silently without it.
+
+**Cadence:** launchd cannot express "every two weeks", so `com.aaron.pilot-doc-drift` fires weekly at Sunday 09:00 and the script no-ops on odd ISO weeks. Calendar-anchored, so it cannot drift the way a 14-day `StartInterval` would. First real run: **Sunday 2026-09-06**.
+
+**The 19 findings on its first run — all fixed:**
+- **A vault path was wrong.** Key Files cited `20_Learning/Vibe Coding Projects/Lift - Product Decisions.md`; the file actually lives under a `Lift/` subdirectory. The docs had been pointing at a nonexistent note.
+- **`Fast tier (196 tests)`** — I updated the full tier this morning and missed the fast tier one line below. Both now derive from a real run (251 full / 246 fast, 22 files).
+- **Six scripts documented nowhere:** `architect.sh`, `pipeline-auditor.sh`, `roadmap-synth.sh`, `capture-pr-screenshots.sh`, `orchestrator.sh`, and the new audit. Added to the README tree; `orchestrator.sh` is now labelled as superseded by the per-service plists.
+- **Three undocumented env vars:** `OBSIDIAN_VAULT`, `AUDITOR_USE_AI_SYNTHESIS`, `GEMINI_API_BASE` — added to `project.env.example` and `init.sh`.
+
+**A real bug in my own plist, caught by my own test.** `plutil -lint` passed `com.aaron.pilot-doc-drift.plist`, but XML comments may not contain `--`, and mine explained the `--biweekly` flag. `plutil` is lenient; launchd's parser and `plistlib` are not — the plist would have failed to load, silently, which is exactly the failure mode these plist tests exist to catch. Fixed, and the smoke test now reports it as a clean message instead of a traceback.
+
+**Verification.** Full suite **251 passing, 0 failures** (12 new audit tests, half of them asserting it stays *quiet* on look-alike drift). After fixing all 19, the audit reports `✅ Docs match the repo.` `bash -n` clean; `plutil -lint` plus a strict `plistlib` parse on all 10 plists.
+
+**⚠️ New for Aaron — one manual step,** the same shape as the stale-PR audit: `launchctl load` the new plist (see One-Time Setup). Note the audit runs the test suite twice (both tiers) and takes ~3 minutes.
 
 ### 2026-08-28 — Doc drift swept: the automated-services list was describing a pipeline that no longer exists
 
