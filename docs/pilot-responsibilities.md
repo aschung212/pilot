@@ -313,6 +313,9 @@ Pilot mirrored most agile ceremonies but measured activity instead of outcomes, 
 - **Found along the way: `master` CI is red** and has been since the #1250/#1251 merges — two stale tests, filed as [#1254](https://github.com/aschung212/Lift/issues/1254). One assertion missed the third `syncQueue.enqueue` argument that LIFT-1239 added; one uses hardcoded dates that just aged out of a rolling 6-month window. Not caused by #1253, but it blocks merging it (and everything else).
 - **New responsibility for Aaron.** Fix #1254 first (a task chip is queued for it), then review + merge [PR #1253](https://github.com/aschung212/Lift/pull/1253) on a green check. Until #1254 lands, treat "2 failing shards" on any Lift PR as the known baseline rather than a new break.
 - **Tests.** 24 new; 3501 passing locally; lint, typecheck and build clean. Verified live in the browser at mobile viewport in dark and light with 4 gyms / 9 exercises / 1 archived, including the round-trip back to the workout tab's gym filter.
+### 2026-08-27 — Opus-tier model bumped to Claude Opus 5 (1M context)
+
+`AI_CODE_MODEL` moved from `claude-opus-4-8[1m]` to `claude-opus-5[1m]` — builder, discovery, architect, and code-gen now run Claude Opus 5, still at 1M context and `max` effort. The model string was verified with a live CLI probe before the switch (request succeeded, 1M context window confirmed). Live `project.env` updated in place; repo defaults, script fallbacks, the `init.sh` wizard default, and docs updated to match. Commit co-author trailers follow automatically via `model_display_name()` and now read `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`. **No new responsibilities for Aaron** — pricing is unchanged from Opus 4.8 ($5/$25 per MTok) and no other knobs moved.
 
 ### 2026-08-21 — GA-readiness shift: Pilot re-aimed from feature discovery to stabilization
 

@@ -220,9 +220,9 @@ else
   fail "Claude CLI not found. Install: https://docs.anthropic.com/en/docs/claude-code"
 fi
 
-ask "Code generation model [claude-opus-4-8[1m]]: "
+ask "Code generation model [claude-opus-5[1m]]: "
 read -r AI_CODE_MODEL
-AI_CODE_MODEL="${AI_CODE_MODEL:-claude-opus-4-8[1m]}"
+AI_CODE_MODEL="${AI_CODE_MODEL:-claude-opus-5[1m]}"
 
 ask "Code reasoning effort — low/medium/high/max [max]: "
 read -r AI_CODE_EFFORT

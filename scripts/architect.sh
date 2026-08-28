@@ -88,7 +88,7 @@ if [ -n "${MOCK_CLAUDE_OUTPUT:-}" ]; then
 elif ! claude \
     --allowedTools "$ARCHITECT_ALLOWED_TOOLS" \
     --output-format json \
-    --model "${AI_CODE_MODEL:-claude-opus-4-8[1m]}" \
+    --model "${AI_CODE_MODEL:-claude-opus-5[1m]}" \
     --effort "${AI_CODE_EFFORT:-max}" \
     --max-turns "${ARCHITECT_MAX_TURNS:-40}" \
     -p "$(cat "$PROMPT_FILE")" \

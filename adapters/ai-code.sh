@@ -16,7 +16,7 @@ REAL_SCRIPT="$(readlink "$0" 2>/dev/null || echo "$0")"
 SCRIPT_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
 [ -z "${_PILOT_TEST_MODE:-}" ] && [ -f "$SCRIPT_DIR/../project.env" ] && source "$SCRIPT_DIR/../project.env"
 
-MODEL="${AI_CODE_MODEL:-claude-opus-4-8[1m]}"
+MODEL="${AI_CODE_MODEL:-claude-opus-5[1m]}"
 EFFORT="${AI_CODE_EFFORT:-max}"
 MAX_TURNS="${BUILDER_MAX_TURNS:-100}"
 JSON_OUTPUT=""

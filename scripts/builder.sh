@@ -102,7 +102,7 @@ BUILDER_PREPICK_MAX_TURNS="${BUILDER_PREPICK_MAX_TURNS:-2}"
 # explicit instruction the builder self-reports a stale version in the trailer
 # (it identifies as its training-cutoff model, historically "Opus 4.6",
 # regardless of the --model flag in use), producing inconsistent attribution.
-CODE_MODEL="${AI_CODE_MODEL:-claude-opus-4-8[1m]}"
+CODE_MODEL="${AI_CODE_MODEL:-claude-opus-5[1m]}"
 COAUTHOR_TRAILER="Co-Authored-By: $(model_display_name "$CODE_MODEL") <noreply@anthropic.com>"
 
 USAGE_CSV="$OUTPUT_DIR/lift-usage-tracking.csv"
@@ -228,7 +228,7 @@ BUILD_LEARNINGS=$(tail -c 4000 "$OUTPUT_DIR/lift-build-learnings.md" 2>/dev/null
 # whole night. Escape hatch: SKIP_AUTH_PREFLIGHT=1.
 if [ -z "${_PILOT_TEST_MODE:-}" ] && [ -z "${SKIP_AUTH_PREFLIGHT:-}" ]; then
   PREFLIGHT_LOG="$OUTPUT_DIR/lift-enhance-$DATE-preflight.md"
-  AUTH_PROBE=$(run_with_timeout "$BUILDER_AUTH_TIMEOUT" claude --allowedTools "Read" --model "${AI_CODE_MODEL:-claude-opus-4-8[1m]}" \
+  AUTH_PROBE=$(run_with_timeout "$BUILDER_AUTH_TIMEOUT" claude --allowedTools "Read" --model "${AI_CODE_MODEL:-claude-opus-5[1m]}" \
     --output-format json --max-turns 1 -p "Reply with exactly: AUTH_OK" 2>&1 || true)
   if is_auth_failure "$AUTH_PROBE"; then
     AUTH_ALERT="🚨 *${PROJECT_NAME} builder ABORTED — claude CLI is not authenticated.*
@@ -415,7 +415,7 @@ $detail
   PRE_PICK_JSON="$OUTPUT_DIR/lift-enhance-$DATE-run${RUN}-prepick.json"
   # Pin the Opus-tier model for picking quality, but deliberately NOT max effort:
   # choosing one issue from titles is trivial, so max effort would only add cost/latency.
-  PRE_PICK_RESULT=$(run_with_timeout "$BUILDER_PREPICK_TIMEOUT" claude --allowedTools "Read,Glob,Grep" --disallowedTools "$BUILDER_DISALLOWED_TOOLS" --model "${AI_CODE_MODEL:-claude-opus-4-8[1m]}" --output-format json --max-turns "$BUILDER_PREPICK_MAX_TURNS" -p "$(cat <<PREPICK
+  PRE_PICK_RESULT=$(run_with_timeout "$BUILDER_PREPICK_TIMEOUT" claude --allowedTools "Read,Glob,Grep" --disallowedTools "$BUILDER_DISALLOWED_TOOLS" --model "${AI_CODE_MODEL:-claude-opus-5[1m]}" --output-format json --max-turns "$BUILDER_PREPICK_MAX_TURNS" -p "$(cat <<PREPICK
 You are the pre-pick stage of the overnight builder pipeline for $PROJECT_NAME. Your only job in this call is to pick exactly ONE issue from the unstarted backlog to work on next. You are NOT implementing anything in this call — that happens in the next stage. Pick the issue and exit immediately.
 
 ## Unstarted backlog (pickable)
@@ -545,7 +545,7 @@ ASSIGNED
     STEP2_TEXT="**Pick exactly ONE issue** from the unstarted backlog to implement fully"
   fi
 
-  run_with_timeout "$BUILDER_ITERATION_TIMEOUT" claude --allowedTools "$BUILDER_ALLOWED_TOOLS" --disallowedTools "$BUILDER_DISALLOWED_TOOLS" --model "${AI_CODE_MODEL:-claude-opus-4-8[1m]}" --effort "${AI_CODE_EFFORT:-max}" --output-format json -p "$(cat <<PROMPT
+  run_with_timeout "$BUILDER_ITERATION_TIMEOUT" claude --allowedTools "$BUILDER_ALLOWED_TOOLS" --disallowedTools "$BUILDER_DISALLOWED_TOOLS" --model "${AI_CODE_MODEL:-claude-opus-5[1m]}" --effort "${AI_CODE_EFFORT:-max}" --output-format json -p "$(cat <<PROMPT
 You are iteration $RUN of the overnight self-improving enhancer for $PROJECT_NAME at $REPO. This is Aaron Chung's portfolio project — he's an ex-AWS SDE2 targeting SWE roles at companies like Notion, Airtable, and Linear.
 
 You are running in a loop. Previous iterations tonight and from recent days have already made improvements. Your job is to find the NEXT most impactful thing to do that hasn't been done yet.
@@ -964,7 +964,7 @@ $PRIMARY_ISSUE"
               # Merge conflict — ask Claude to resolve
               CONFLICT_FILES=$(git diff --name-only --diff-filter=U 2>/dev/null || true)
               if [ -n "$CONFLICT_FILES" ]; then
-                run_with_timeout "$BUILDER_FIX_TIMEOUT" claude --allowedTools "$BUILDER_ALLOWED_TOOLS" --disallowedTools "$BUILDER_DISALLOWED_TOOLS" --model "${AI_CODE_MODEL:-claude-opus-4-8[1m]}" --effort "${AI_CODE_EFFORT:-max}" -p "You are in the $REPO repo on branch $ITER_BRANCH. There are merge conflicts with master in these files:
+                run_with_timeout "$BUILDER_FIX_TIMEOUT" claude --allowedTools "$BUILDER_ALLOWED_TOOLS" --disallowedTools "$BUILDER_DISALLOWED_TOOLS" --model "${AI_CODE_MODEL:-claude-opus-5[1m]}" --effort "${AI_CODE_EFFORT:-max}" -p "You are in the $REPO repo on branch $ITER_BRANCH. There are merge conflicts with master in these files:
 $CONFLICT_FILES
 
 Resolve all merge conflicts, keeping the intent of both sides. Then run npm test and npm run build to verify. Commit the resolution with message 'fix: resolve merge conflicts with master'. End the commit body with exactly this trailer (do not self-report a different model version): $COAUTHOR_TRAILER" --max-turns "$BUILDER_FIX_MAX_TURNS" 2>&1 | tee -a "$RUN_LOG" || true
@@ -979,7 +979,7 @@ Resolve all merge conflicts, keeping the intent of both sides. Then run npm test
             if [ "$CI_PASS" = "false" ]; then
               FAIL_SNIPPET=$(echo "$BUILD_OUT" | tail -30)
               TEST_SNIPPET=$(echo "$TEST_OUT" | tail -30)
-              run_with_timeout "$BUILDER_FIX_TIMEOUT" claude --allowedTools "$BUILDER_ALLOWED_TOOLS" --disallowedTools "$BUILDER_DISALLOWED_TOOLS" --model "${AI_CODE_MODEL:-claude-opus-4-8[1m]}" --effort "${AI_CODE_EFFORT:-max}" -p "You are in the $REPO repo on branch $ITER_BRANCH. The CI build or tests are failing. Fix the issues and commit the fix.
+              run_with_timeout "$BUILDER_FIX_TIMEOUT" claude --allowedTools "$BUILDER_ALLOWED_TOOLS" --disallowedTools "$BUILDER_DISALLOWED_TOOLS" --model "${AI_CODE_MODEL:-claude-opus-5[1m]}" --effort "${AI_CODE_EFFORT:-max}" -p "You are in the $REPO repo on branch $ITER_BRANCH. The CI build or tests are failing. Fix the issues and commit the fix.
 
 Build output (last 30 lines):
 $FAIL_SNIPPET

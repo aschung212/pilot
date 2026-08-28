@@ -116,7 +116,7 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
 **Script:** `~/development/pilot/scripts/builder.sh`
 **Shared lib:** `~/development/pilot/lib/builder-utils.sh` (budget guards, verdict logic, review formatting)
 **Schedule:** Nightly after triage (third stage, runs until 7 AM)
-**Model:** Claude Opus 4.8 (1M context, max effort) — pinned via `AI_CODE_MODEL`/`AI_CODE_EFFORT` in `project.env`
+**Model:** Claude Opus 5 (1M context, max effort) — pinned via `AI_CODE_MODEL`/`AI_CODE_EFFORT` in `project.env`
 
 **What it does:**
 - **Auth preflight (before the loop):** one cheap `claude` probe down the real code path. If the keychain OAuth token is expired/logged-out, every iteration would 401; rather than burn the loop silently, the builder aborts immediately and alerts #lift-automation. Auth failures are classified by `is_auth_failure()` in `builder-utils.sh`; transient/network errors are *not* auth signatures and fall through to normal per-iteration handling. Skippable with `SKIP_AUTH_PREFLIGHT=1`. (Added 2026-06-23 after two silent zero-PR nights.)
@@ -308,9 +308,9 @@ Pipeline is fully decomposed — each service has its own launchd plist. No orch
 | Agent | Model | Rationale |
 |---|---|---|
 | Discovery (research) | Gemini 2.5 Flash (Gemini API + Google Search grounding) | Grounded web search returns real URLs/versions, saves Claude tokens. Free tier via `GEMINI_API_KEY`. |
-| Discovery (analysis) | Claude Opus 4.8 (1M, max effort) | Best at codebase reasoning + issue creation |
+| Discovery (analysis) | Claude Opus 5 (1M, max effort) | Best at codebase reasoning + issue creation |
 | Triage | Gemini 2.5 Flash via Gemini API (Claude Sonnet fallback) | Good at planning; free-tier Flash via `GEMINI_API_KEY`. **Not** Google AI Pro — that consumer subscription grants no API access. |
-| Builder | Claude Opus 4.8 (1M, max effort) | Best coding model, complex multi-file changes |
+| Builder | Claude Opus 5 (1M, max effort) | Best coding model, complex multi-file changes |
 | Review (commit) | Claude Sonnet (`PILOT_REVIEW_MODEL` overridable) | Inline via post-commit hook — adversarial review of full branch diff, independent from the Opus builder. Single model, single pass. Re-platformed off the retired Gemini CLI on 2026-07-16; uses the builder's Claude auth (no extra billing). |
 | Cover letter review | Gemini 2.5 Flash | Second opinion, zero extra cost |
 
@@ -444,6 +444,9 @@ Also corrected the Scheduled Tasks table, which had been missing the Wednesday t
 - **Tests:** +16 across builder/cleanup/digest/triage/health-report (WIP gate, harvest end-to-end with idempotency, expiry filter, digest blockers, flow metrics end-to-end, acceptance parsing). Full suite 267 green (rebased onto the same-day duplicate-build-fix and doc-drift-audit merges).
 
 **New for Aaron:** leave a one-line closing comment whenever you close a PR without merging (it becomes builder training data); create the `GA` milestone in aschung212/Lift and tag GA-blocking issues; expect the builder to pause nights when ≥8 PRs are open.
+### 2026-08-27 — Opus-tier model bumped to Claude Opus 5
+
+`AI_CODE_MODEL` moved from `claude-opus-4-8[1m]` to `claude-opus-5[1m]` (Claude Opus 5, 1M-context variant); `AI_CODE_EFFORT` stays `max` — Opus 5 supports the same low→max effort ladder. One-line change in the live `project.env` per the 2026-05-28 centralization; the `${AI_CODE_MODEL:-claude-opus-5[1m]}` fallbacks in `adapters/ai-code.sh`, `scripts/builder.sh`, `scripts/discover.sh`, and `scripts/architect.sh`, plus the `init.sh` default and `project.env.example`, were bumped in the same pass so unsourced/test-mode runs use the same model. The string was validated with a live headless probe before the edit (`claude --model "claude-opus-5[1m]" -p …` → success, `contextWindow: 1000000`). `model_display_name()` needed no code change (`claude-opus-5[1m]` → `Claude Opus 5`); a new regression test pins that mapping, so commit trailers now read `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`.
 
 ### 2026-08-21 — GA-readiness shift: pipeline re-aimed from feature discovery to stabilization
 
