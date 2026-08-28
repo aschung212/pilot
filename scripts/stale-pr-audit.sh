@@ -134,10 +134,12 @@ print("\n".join(out))
 PY
 )
 
-echo "$FINDINGS" | tee -a "$REPORT"
+# TOTALCOUNT is the python block's out-of-band finding count; strip it from
+# everything a human reads.
 TOTAL=$(echo "$FINDINGS" | grep -oE 'TOTALCOUNT=[0-9]+' | cut -d= -f2 | tr -d ' \n')
 TOTAL="${TOTAL:-0}"
-sed -i '' '/^TOTALCOUNT=/d' "$REPORT" 2>/dev/null || true
+FINDINGS=$(echo "$FINDINGS" | grep -v '^TOTALCOUNT=')
+echo "$FINDINGS" | tee -a "$REPORT"
 
 echo "" | tee -a "$REPORT"
 if [ "$TOTAL" -gt 0 ] 2>/dev/null; then
