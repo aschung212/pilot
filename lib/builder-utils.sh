@@ -271,9 +271,12 @@ run_with_timeout() {
 # Normalize every accepted separator (`|`, `:`, em dash, or none at all)
 # to a single pipe so the existing `IFS='|' read -r marker summary` parsing
 # keeps working unchanged.
+#
+# Emits in FILE order and does not dedupe — callers that loop to write
+# comments add their own `| sort -u`, while the `head -1` callers (PR title)
+# depend on first-in-the-log, which is what they read before this refactor.
 _marker_lines() {
   local kind="$1" log="$2"
   { grep -oE "${kind}:${ISSUE_PREFIX}-[0-9]+[^\"]*" "$log" 2>/dev/null || true; } \
-    | sed -E "s/^(${kind}:${ISSUE_PREFIX}-[0-9]+)([[:space:]]*(\||:|—)[[:space:]]*)?/\1|/" \
-    | sort -u
+    | sed -E "s/^(${kind}:${ISSUE_PREFIX}-[0-9]+)([[:space:]]*(\||:|—)[[:space:]]*)?/\1|/"
 }

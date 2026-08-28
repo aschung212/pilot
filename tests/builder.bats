@@ -335,3 +335,22 @@ EOF
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 }
+
+# bats test_tags=fast
+@test "builder: _marker_lines preserves file order for the head -1 (PR title) callers" {
+  export ISSUE_PREFIX=LIFT
+  # Lexicographically LIFT-1000 sorts before LIFT-900, so a sorted
+  # implementation would title the PR after the wrong issue.
+  printf 'ISSUE_DONE:LIFT-900:first in the log\nISSUE_DONE:LIFT-1000:second in the log\n' > "$TEST_TMPDIR/run.md"
+  run _marker_lines ISSUE_DONE "$TEST_TMPDIR/run.md"
+  [ "${lines[0]}" = "ISSUE_DONE:LIFT-900|first in the log" ]
+  [ "${lines[1]}" = "ISSUE_DONE:LIFT-1000|second in the log" ]
+}
+
+# bats test_tags=fast
+@test "builder: _marker_lines does not dedupe (looping callers add their own sort -u)" {
+  export ISSUE_PREFIX=LIFT
+  printf 'ISSUE_DONE:LIFT-5:same\nISSUE_DONE:LIFT-5:same\n' > "$TEST_TMPDIR/run.md"
+  run _marker_lines ISSUE_DONE "$TEST_TMPDIR/run.md"
+  [ "${#lines[@]}" -eq 2 ]
+}

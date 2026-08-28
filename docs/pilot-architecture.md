@@ -204,7 +204,7 @@ Recycled counts are appended to `data/lift-cleanup-metrics.csv` as a fourth `rec
 
 ## Testing Infrastructure
 
-The pipeline has a bats-core test suite with **234 tests across 21 test files** in `~/development/pilot/tests/`. Tests use two-tier execution to balance speed with thoroughness:
+The pipeline has a bats-core test suite with **236 tests across 21 test files** in `~/development/pilot/tests/`. Tests use two-tier execution to balance speed with thoroughness:
 
 **Fast tier (196 tests) — pre-commit hook:**
 - Runs before every commit via `.githooks/pre-commit`
@@ -213,7 +213,7 @@ The pipeline has a bats-core test suite with **234 tests across 21 test files** 
 - Parallel execution via GNU parallel (`bats -j 8`)
 - Blocks commit if any test fails
 
-**Full tier (234 tests) — GitHub Actions CI:**
+**Full tier (236 tests) — GitHub Actions CI:**
 - Runs on every push via `.github/workflows/test.yml`
 - Includes everything in the fast tier plus integration-level tests (CSV analysis, full script invocations)
 - Test paths resolve dynamically (no hardcoded local paths) for CI runner compatibility
@@ -315,7 +315,7 @@ Feedback loop → Aaron's corrections improve future reviews + discovery
 | `~/development/pilot/lib/log.sh` | Shared structured logging library |
 | `~/development/pilot/config/budget.conf` | Budget config (auto-tuned) |
 | `~/development/pilot/scripts/stale-pr-audit.sh` | On-demand audit: open PRs whose work has already shipped (no-op merges, duplicate/colliding migrations) |
-| `~/development/pilot/tests/` | bats-core test suite (234 tests, 21 files, two-tier execution) |
+| `~/development/pilot/tests/` | bats-core test suite (236 tests, 21 files, two-tier execution) |
 | `~/development/pilot/.github/workflows/test.yml` | GitHub Actions CI — full test suite on push |
 | `~/development/pilot/.githooks/pre-commit` | Pre-commit hook — fast test tier on every commit |
 | `~/development/pilot/project.env` | Lift-specific configuration (git-ignored) |
