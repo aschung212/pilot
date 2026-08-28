@@ -29,6 +29,8 @@ Documentation is a first-class deliverable, not an afterthought. Every change to
 
 **Changelog:** Append to the changelog in `docs/pilot-responsibilities.md` for every significant change. Include the date and what changed.
 
+**Drift check:** `scripts/doc-drift-audit.sh` verifies the docs against the repo mechanically — undocumented scripts/adapters/env vars, dead references, plists missing from the schedule tables, stale test counts, and broken Obsidian vault paths. It runs biweekly, but run it by hand after any structural change; it is a reporter, never an editor. Changelog sections and deliberate tombstones ("the old `x.sh` was deleted 2026-07-17") are exempt by design.
+
 ## Issue Tracking
 Lift uses GitHub Issues (`gh` CLI). Issue IDs use `LIFT-XXX` format via the `ISSUE_PREFIX` env var.
 Other projects (Technical Prep, Applications, AI Competency) use Linear (`linear` CLI).
@@ -89,3 +91,4 @@ All logs, metrics, queues, and outputs live in `pilot/data/` (gitignored). Key f
 - `lift-enhance-YYYY-MM-DD-runN.md` — per-iteration build logs
 - `lift-discover-YYYY-MM-DD.md` — discovery run logs
 - `lift-stale-pr-audit-YYYY-MM-DD.md` — stale-PR audit report (weekly, Sun 08:15)
+- `lift-doc-drift-YYYY-MM-DD.md` — doc-drift audit report (biweekly, Sun 09:00)

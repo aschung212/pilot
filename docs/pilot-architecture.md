@@ -189,7 +189,33 @@ Read-only against Lift: it fetches refs and uses `merge-tree`, never checking an
 
 **Why not a freshness check at build time.** Verified against the incident: when PR #1041 was opened, its "duplicate" column was not yet in master — it lived only in the still-open PR #1032, and master stayed clean for six more days. Checking the codebase at build time would have found nothing. The signal existed only in the open-PR set, which is why the collision check is the one that fires (retro-validated: it reports `exercises.plate_count_mode added by PRs [1032, 1041]` on the day #1041 was created).
 
-### 7. Issue Cleanup
+### 7. Doc-Drift Audit
+**Script:** `doc-drift-audit.sh` (checks live in `lib/doc-drift-check.py`)
+**Schedule:** Sunday 09:00, **biweekly** (`com.aaron.pilot-doc-drift`)
+**Model:** none — pure filesystem/plist analysis, no AI call
+
+The documentation mandate says docs ship with the change. They drift anyway, and silently. On 2026-08-28 the responsibilities doc still listed a Review Tuner deleted 3.5 months earlier, claimed "6 independent services" when there were 9, cited a retired orchestrator plist, and reported test counts less than half the real number — none of it visible without reading the docs against the filesystem line by line.
+
+This does that mechanically. It is a **reporter, never an editor**: every finding needs a human call about which side is wrong, and sometimes the doc is right and the code is the bug.
+
+| # | Check | Catches |
+|---|---|---|
+| 1 | Scripts absent from README / architecture doc | New scripts that never got written up |
+| 2 | A `*.sh` named in the docs that no longer exists | The Review Tuner class of decay |
+| 3 | Plists missing from, or disagreeing with, the schedule tables | The Wednesday-trio omission; wrong times |
+| 4 | Plist `ProgramArguments` pointing at a missing script | A service that silently never runs |
+| 5 | Test counts claimed vs. the real suite (both tiers) | Stale numbers after adding tests |
+| 6 | Adapters absent from CLAUDE.md | Undocumented backends |
+| 7 | Pilot env vars read by scripts but undocumented | The env-var half of the mandate |
+| 8 | Obsidian vault paths Pilot depends on that don't resolve | Silent degradation of discovery/triage |
+
+**Two design rules keep it trustworthy.** Changelog sections are excluded from every check — history is *supposed* to describe the past. And doc **tombstones** ("the old `ai-review.sh` was deleted 2026-07-17") are recognized as the docs doing their job, not as drift; a line announcing a removal suppresses the finding. Both are pinned by tests, along with scripts that legitimately live outside the repo (`~/Documents/Scripts/set-claude-token.sh`) and counts that quote either test tier. Without those exemptions the report cries wolf, and a report that cries wolf gets ignored.
+
+**Vault scope.** Only the vault files Pilot itself reads or names are checked — `PRODUCT_DECISIONS_FILE`, `PRODUCT_FEATURES_FILE`, and vault paths cited in Pilot docs. Aaron's vault workflows are a separate domain and are not audited. A broken path here is a *Pilot* bug: discovery and triage degrade silently without it.
+
+**Biweekly cadence.** launchd cannot express "every two weeks", so the plist fires weekly and the script no-ops on odd ISO weeks (`--biweekly`). Calendar-anchored, so it cannot drift the way a 1,209,600-second `StartInterval` would.
+
+### 8. Issue Cleanup
 **Script:** `cleanup.sh`
 **When:** After each overnight session (final stage of pipeline)
 
@@ -221,16 +247,16 @@ Recycled counts are appended to `data/lift-cleanup-metrics.csv` as a fourth `rec
 
 ## Testing Infrastructure
 
-The pipeline has a bats-core test suite with **239 tests across 21 test files** in `~/development/pilot/tests/`. Tests use two-tier execution to balance speed with thoroughness:
+The pipeline has a bats-core test suite with **251 tests across 22 test files** in `~/development/pilot/tests/`. Tests use two-tier execution to balance speed with thoroughness:
 
-**Fast tier (196 tests) — pre-commit hook:**
+**Fast tier (246 tests) — pre-commit hook:**
 - Runs before every commit via `.githooks/pre-commit`
 - Covers: unit tests, adapter contract tests, argument parsing, error handling, log formatting
 - Builder tests source real functions from `lib/builder-utils.sh` (not copies of logic)
 - Parallel execution via GNU parallel (`bats -j 8`)
 - Blocks commit if any test fails
 
-**Full tier (239 tests) — GitHub Actions CI:**
+**Full tier (251 tests) — GitHub Actions CI:**
 - Runs on every push via `.github/workflows/test.yml`
 - Includes everything in the fast tier plus integration-level tests (CSV analysis, full script invocations)
 - Test paths resolve dynamically (no hardcoded local paths) for CI runner compatibility
@@ -252,6 +278,7 @@ Pipeline is fully decomposed — each service has its own launchd plist. No orch
 | 6:15 AM | Issue Digest | Daily | `com.aaron.linear-digest` |
 | 8:00 AM Sun | Health Report | Weekly | `com.aaron.pilot-health` |
 | 8:15 AM Sun | Stale-PR Audit | Weekly | `com.aaron.pilot-stale-pr-audit` |
+| 9:00 AM Sun | Doc-Drift Audit | Biweekly (even ISO weeks) | `com.aaron.pilot-doc-drift` |
 | 6:00 PM Wed | Auditor | Weekly | `com.aaron.pilot-auditor` |
 | 7:00 PM Wed | Roadmap Synth | Weekly | `com.aaron.pilot-roadmap` |
 | 8:00 PM Wed | Architect | Weekly | `com.aaron.pilot-architect` |
@@ -337,8 +364,9 @@ Feedback loop → Aaron's corrections improve future reviews + discovery
 | `~/development/pilot/adapters/` | Swappable tool adapters (tracker, notify, ai-code, ai-research) |
 | `~/development/pilot/lib/log.sh` | Shared structured logging library |
 | `~/development/pilot/config/budget.conf` | Budget config (auto-tuned) |
-| `~/development/pilot/scripts/stale-pr-audit.sh` | On-demand audit: open PRs whose work has already shipped (no-op merges, duplicate/colliding migrations) |
-| `~/development/pilot/tests/` | bats-core test suite (239 tests, 21 files, two-tier execution) |
+| `~/development/pilot/scripts/stale-pr-audit.sh` | Weekly audit: open PRs whose work has already shipped (no-op merges, duplicate/colliding migrations) |
+| `~/development/pilot/scripts/doc-drift-audit.sh` | Biweekly audit: docs vs. the repo's actual state (checks in `lib/doc-drift-check.py`) |
+| `~/development/pilot/tests/` | bats-core test suite (251 tests, 22 files, two-tier execution) |
 | `~/development/pilot/.github/workflows/test.yml` | GitHub Actions CI — full test suite on push |
 | `~/development/pilot/.githooks/pre-commit` | Pre-commit hook — fast test tier on every commit |
 | `~/development/pilot/project.env` | Lift-specific configuration (git-ignored) |
@@ -351,6 +379,12 @@ See [Pilot Responsibilities](pilot-responsibilities.md) for the complete list of
 ---
 
 ## Changelog
+
+### 2026-08-28 — Biweekly doc-drift audit
+
+New `doc-drift-audit.sh` (checks in `lib/doc-drift-check.py`), scheduled `com.aaron.pilot-doc-drift` at Sunday 09:00 with a biweekly no-op on odd ISO weeks. Mechanically checks the docs against the repo — see agent section 7 for the full check list and the two exemptions (changelog sections, doc tombstones) that keep it from crying wolf.
+
+First run found 19 real drifts, all fixed: a vault path missing its `Lift/` subdirectory, a stale `Fast tier (196 tests)` line, six scripts documented nowhere, and three undocumented env vars. It also caught a malformed XML comment in its own plist — `plutil -lint` accepts a `--` inside a comment, but launchd's parser and `plistlib` reject it, so the job would have silently never loaded.
 
 ### 2026-08-28 — Stale-PR audit scheduled weekly
 

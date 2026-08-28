@@ -25,6 +25,11 @@ setup() {
   export SLACK_BOT_TOKEN=""
   export SLACK_WEBHOOK_URL=""
   export PATH="$TEST_TMPDIR/bin:$TEST_DIR/mocks:$PATH"
+  # Without this the script sources the real project.env (present in the main
+  # checkout, absent in a git worktree) and clobbers every fixture value above
+  # with Aaron's live Lift config — these tests passed in the worktree and
+  # failed in the main checkout until this was added.
+  export _PILOT_TEST_MODE=1
 
   # ── Fixture repo: master has one migration; branches add more ────────────
   export REPO_PATH="$TEST_TMPDIR/repo"

@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.aaron.pilot-doc-drift</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/aaron/development/pilot/scripts/doc-drift-audit.sh</string>
+        <string>--biweekly</string>
+        <string>--notify</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <array>
+        <!-- Sunday 09:00, weekly. The biweekly cadence is enforced inside the
+             script: the biweekly flag makes it no-op on odd ISO weeks, because
+             launchd cannot express "every two weeks". Anchoring on the ISO week
+             keeps it on the calendar instead of drifting like a 14-day
+             StartInterval. Sits after the Health Report (08:00) and Stale-PR
+             Audit (08:15), so the Sunday review artifacts arrive together.
+             NOTE: XML comments cannot contain a double hyphen, so flags are
+             written without their leading dashes here. -->
+        <dict>
+            <key>Weekday</key>
+            <integer>0</integer>
+            <key>Hour</key>
+            <integer>9</integer>
+            <key>Minute</key>
+            <integer>0</integer>
+        </dict>
+    </array>
+    <key>StandardOutPath</key>
+    <string>/Users/aaron/Documents/Claude/outputs/pilot-doc-drift-launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/aaron/Documents/Claude/outputs/pilot-doc-drift-launchd.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:/Users/aaron/.npm-global/bin</string>
+        <key>HOME</key>
+        <string>/Users/aaron</string>
+    </dict>
+</dict>
+</plist>
