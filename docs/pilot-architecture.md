@@ -397,6 +397,10 @@ See [Pilot Responsibilities](pilot-responsibilities.md) for the complete list of
 
 ## Changelog
 
+### 2026-08-28 — PR-creation failures now fail honestly (closes the last live fragment of pilot PR #8)
+
+Cleared the pilot PR backlog: #24 (agile-gap pass) and #22 (model bumps) merged after conflict resolution; #8 (2026-05-12 builder hardening) closed as superseded — its marker normalizer landed as `_marker_lines` (2026-08-28), its side-branch recovery and branch-scoped commit counting landed 2026-05-20. One fragment of #8 was still live and is fixed here: when `gh pr create` failed and no PR existed for the branch, `builder.sh` fabricated a `pull/new/<branch>` **compare** URL, counted it as a PR, and handed Slack a fake "View PR" link (the 2026-05-11 incident: 12 "PRs" reported, 3 real). Now: new `extract_pr_url` in `lib/builder-utils.sh` anchors on `…/pull/<number>` (failure text mentioning github.com and compare URLs no longer match); if create + lookup both produce no PR, the iteration is scored a failure (counts toward `MAX_CONSECUTIVE_FAILURES`), a ❌ alert goes to the build thread with a link to the preserved branch, and the metrics row records `false` — the branch is deliberately not deleted so the work can be investigated. +2 bats tests.
+
 ### 2026-08-28 — Biweekly doc-drift audit
 
 New `doc-drift-audit.sh` (checks in `lib/doc-drift-check.py`), scheduled `com.aaron.pilot-doc-drift` at Sunday 09:00 with a biweekly no-op on odd ISO weeks. Mechanically checks the docs against the repo — see agent section 7 for the full check list and the two exemptions (changelog sections, doc tombstones) that keep it from crying wolf.

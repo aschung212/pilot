@@ -1140,10 +1140,27 @@ _Automated by overnight pipeline — $(date)_
 PRBODY
 )" 2>&1 || echo "")
 
-        if echo "$PR_URL" | grep -q "github.com"; then
-          PR_URL=$(echo "$PR_URL" | grep -oE 'https://github.com/[^ ]+' | head -1)
-        else
-          PR_URL=$(cd "$REPO" && gh pr view "$ITER_BRANCH" --json url -q .url 2>/dev/null || echo "https://github.com/$GITHUB_REPO/pull/new/$ITER_BRANCH")
+        # Anchor on a real PR URL (…/pull/<number>). `gh pr create` failure
+        # text can still mention github.com, and the old fallback fabricated a
+        # COMPARE url (pull/new/<branch>) that Slack then presented as a real
+        # PR — the 2026-05-11 incident reported 12 "PRs" when only 3 existed.
+        PR_URL=$(extract_pr_url "$PR_URL")
+        if [ -z "$PR_URL" ]; then
+          PR_URL=$(extract_pr_url "$(cd "$REPO" && gh pr view "$ITER_BRANCH" --json url -q .url 2>/dev/null || true)")
+        fi
+        if [ -z "$PR_URL" ]; then
+          # No PR exists after create + lookup. Fail honestly: keep the pushed
+          # branch for investigation, alert, score the iteration a failure —
+          # never hand Slack a fabricated link.
+          echo "  ❌ PR creation FAILED for $ITER_BRANCH — no PR exists after create+lookup; branch preserved for investigation" | tee -a "$RUN_LOG"
+          log_error "PR creation failed for $ITER_BRANCH (create + view both returned no PR URL) — branch preserved"
+          thread_send "❌ *Run $RUN — PR creation FAILED* for \`$ITER_BRANCH\` — commits are pushed but no PR exists. Investigate: https://github.com/$GITHUB_REPO/tree/$ITER_BRANCH"
+          FAILURES=$((FAILURES + 1))
+          ITER_END=$(date +%s)
+          ITER_DURATION=$((ITER_END - ITER_START))
+          echo "$DATE,$RUN,$ITER_START_FMT,$(date +%H:%M:%S),$ITER_DURATION,$NEW_COMMITS,$TESTS_BEFORE,$TESTS_BEFORE,0,0,0,0,0,,false" >> "$METRICS_FILE"
+          git checkout "${DEFAULT_BRANCH:-master}" 2>/dev/null || true
+          continue
         fi
 
         NIGHTLY_PRS+="$PR_URL "

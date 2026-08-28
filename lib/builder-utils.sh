@@ -132,6 +132,18 @@ wip_gate_active() {
   [ "$open_count" -ge "$max" ]
 }
 
+# ── extract_pr_url ────────────────────────────────────────────────────────────
+# Pull the real PR URL (…/pull/<number>) out of captured `gh pr create` output.
+# Anchored on /pull/<digits> because the output can be failure text that still
+# mentions github.com, and a COMPARE url (…/pull/new/<branch>) is not a PR —
+# matching either is how the 2026-05-11 incident reported 12 "PRs" to Slack
+# when only 3 existed (see pilot PR #8).
+# Input: $1 = captured gh pr create output
+# Output: the first anchored PR URL, or nothing. Always exits 0.
+extract_pr_url() {
+  printf '%s\n' "${1:-}" | grep -oE 'https://github\.com/[^ ]+/pull/[0-9]+' | head -1 || true
+}
+
 # ── parse_stop_time ──────────────────────────────────────────────────────────
 # Parse the CLI argument: if numeric, treat as iteration count; if time, use as stop time.
 # Input: $1 = CLI arg (e.g. "06:00" or "5"), $2 = default stop time
