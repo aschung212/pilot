@@ -193,13 +193,16 @@ If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/T
 
 **Backlog audit (your "worth checking" ask).** Ran the audit over the open-PR set: **no other duplicates**. No no-op PRs, no migration duplicating master, no two PRs colliding on a column. #1041 was a one-off, not the tip of a pile.
 
+**Side effect of the truncation fix — `cleanup.sh` now sees the whole board.** Its dry-run reports **150** issues `state:started` with a merged PR (was 92 at the 2026-07-27 audit) and **42** stuck behind a closed-unmerged PR (was 7). Most of that jump is issues the 200 cap had been hiding from the recycler, not new decay. Nothing is auto-recycled (0 recycled — the conservative "no PR ever" rule still holds), and the run exits 0. It is also slower now (~4 min, more issues to cross-reference), which matters only if you time the overnight chain.
+
 **Verification.** `bash -n` clean across all scripts; full bats suite **234 passing, 0 failures** (up from 199 — 7 new marker tests, 4 new triage-deferral tests, 7 new audit tests). `triage.sh --dry-run` against the live backlog now prints `🔒 Deferred 1 issue(s) with an open PR — LIFT-616` — a **live recurrence** of the exact #783 configuration, caught. The audit's cross-PR check was retro-validated against the incident: it reports `exercises.plate_count_mode added by PRs [1032, 1041]` on the day #1041 was opened, a month before it was found by hand.
 
 **⚠️ New for Aaron:**
 1. **`stale-pr-audit.sh` is NOT wired into the nightly chain** — you asked to see it first. Run it on demand with `./scripts/stale-pr-audit.sh` (add `--notify` to post to Slack). Say the word and I'll add it to the overnight chain after cleanup.
 2. **I did not run `builder.sh 1`.** The Infrastructure Change Protocol calls for it, but it opens a real PR against Lift and spends budget, so I verified the exact tracker/triage queries the builder depends on instead. Worth doing before the next unattended run.
 3. **LIFT-616 is the live recurrence** — `state:unstarted` with open PR #1065 (28 days). Triage now defers it, so it can't be forked, but the PR still needs landing or closing.
-4. **The picking pool just tripled** (2 → 5 pickable) now that truncation is fixed. Expect the builder to have more to choose from tonight.
+4. **The picking pool more than doubled** (2 → 5 pickable) now that truncation is fixed. Expect the builder to have more to choose from tonight.
+5. **42 issues need your call** (up from 7) — `state:started` with a closed-unmerged PR. Cleanup never auto-recycles these because closing a PR may have been a deliberate rejection. It will keep reporting them until you either recycle them to `state:unstarted` or close them as not planned. The **150** issues sitting `state:started` with a merged PR are harmless to the picking pool but inflate the do-not-pick list in every builder prompt.
 
 ### 2026-08-28 — Lift: exercise-first gyms + tags manager (#1252, PR #1253); master CI found red (#1254)
 

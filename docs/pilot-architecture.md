@@ -347,6 +347,8 @@ See [Pilot Responsibilities](pilot-responsibilities.md) for the complete list of
 - **`adapters/tracker.sh`** — all open-issue queries share `GH_OPEN_LIMIT` (200 → **1000**), plus a stderr warning when a query returns exactly at the cap. Found while verifying the triage guard: with 265 open issues the 200 cap was hiding **8 of 10** triageable and **3 of 5** pickable issues.
 - **`scripts/stale-pr-audit.sh`** (new, on-demand) — asks the question issue identity cannot: does merging this PR still change anything? Flags no-op merges (`git merge-tree` against master), migrations duplicating a column already in master, and two open PRs adding the same column.
 
+**Observed effect on cleanup.** With the full issue set visible, `cleanup.sh --dry-run` now reports 150 done-awaiting-close (was 92) and 42 needing a human call (was 7), and takes ~4 minutes. Behavior is unchanged — 0 auto-recycled, exit 0 — it simply is no longer blind to two thirds of the board.
+
 **Why not a pre-build freshness check against master.** Verified as ineffective for this incident: when PR #1041 was opened, `plate_count_mode` was **not** in master — it lived only in the still-open PR #1032, and master stayed clean for six more days. Checking the codebase at build time would have found nothing. The duplicate was visible only in the *open-PR set*, which is why the audit's cross-PR collision check is the one that fires (retro-validated: it flags `exercises.plate_count_mode added by PRs [1032, 1041]` at #1041's creation).
 
 ### 2026-08-21 — GA-readiness shift: pipeline re-aimed from feature discovery to stabilization
