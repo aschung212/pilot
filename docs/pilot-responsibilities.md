@@ -171,6 +171,16 @@ If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/T
 
 ## Changelog
 
+### 2026-08-28 — Lift: exercise-first gyms + tags manager (#1252, PR #1253); master CI found red (#1254)
+
+- **What.** New **Settings › Exercises › "Manage Exercises"** — the inverse of Manage Gyms. Every exercise in one alphabetical, searchable list; each row expands to a Gyms and a Tags chip picker, toggles applying immediately. Collapsed rows carry a gym summary line ("Gold's Gym · Home Garage", or "All gyms" when unassigned) so membership gaps are scannable without tapping in; archived exercises sink to the bottom with an "Archived" prefix.
+- **Why.** Gym membership was only editable gym-first: you tapped into a gym and got a checklist of exercises. Spotting that one exercise is at gyms 1 and 2 but should also be at gym 4 meant opening all four and transposing the matrix by hand. The per-exercise view existed only inside EditExerciseModal — one at a time, behind the log-set gear, buried among plate calculator / intensity / archive / delete.
+- **Scope discipline.** Membership only: no exercise create/rename/archive/delete and no inline gym/tag creation, since those already have owners. A test pins their absence so the scope can't drift. Reuses the gym/tag manager shell and the existing chip chrome, so no new modal paradigm.
+- **Also.** `toggleExerciseTag` consolidated onto the workout store (WorkoutTracker's duplicate removed). A live 44pt DOM audit of the new modal caught a real 1px HIG violation in my own CSS — the two-line row label measured 43px — now fixed and pinned in `cssRegression.test.ts`.
+- **Found along the way: `master` CI is red** and has been since the #1250/#1251 merges — two stale tests, filed as [#1254](https://github.com/aschung212/Lift/issues/1254). One assertion missed the third `syncQueue.enqueue` argument that LIFT-1239 added; one uses hardcoded dates that just aged out of a rolling 6-month window. Not caused by #1253, but it blocks merging it (and everything else).
+- **New responsibility for Aaron.** Fix #1254 first (a task chip is queued for it), then review + merge [PR #1253](https://github.com/aschung212/Lift/pull/1253) on a green check. Until #1254 lands, treat "2 failing shards" on any Lift PR as the known baseline rather than a new break.
+- **Tests.** 24 new; 3501 passing locally; lint, typecheck and build clean. Verified live in the browser at mobile viewport in dark and light with 4 gyms / 9 exercises / 1 archived, including the round-trip back to the workout tab's gym filter.
+
 ### 2026-08-21 — GA-readiness shift: Pilot re-aimed from feature discovery to stabilization
 
 Lift's build-out is treated as a completed beta; the pipeline now works toward a general-availability release. Full technical detail in the [architecture doc changelog](pilot-architecture.md#changelog). Merged to main 2026-08-26 (PR #20).
