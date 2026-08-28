@@ -228,6 +228,10 @@ ask "Code reasoning effort — low/medium/high/max [max]: "
 read -r AI_CODE_EFFORT
 AI_CODE_EFFORT="${AI_CODE_EFFORT:-max}"
 
+ask "Architect model — weekly deep review [claude-fable-5]: "
+read -r AI_ARCHITECT_MODEL
+AI_ARCHITECT_MODEL="${AI_ARCHITECT_MODEL:-claude-fable-5}"
+
 if [ -n "${GEMINI_API_KEY:-}" ]; then
   ok "GEMINI_API_KEY found — web research + triage enabled (free-tier Flash via the Gemini API)"
   ask "Research model [gemini-2.5-flash]: "
@@ -372,6 +376,7 @@ LINEAR_ORG="$LINEAR_ORG"
 # ── AI Models ────────────────────────────────────────────────
 AI_CODE_MODEL="$AI_CODE_MODEL"
 AI_CODE_EFFORT="$AI_CODE_EFFORT"
+AI_ARCHITECT_MODEL="$AI_ARCHITECT_MODEL"
 AI_RESEARCH_MODEL="$AI_RESEARCH_MODEL"
 
 # ── Agent Tuning ─────────────────────────────────────────────
@@ -562,6 +567,7 @@ echo "  Project:    $PROJECT_NAME"
 echo "  Repo:       $REPO_PATH"
 echo "  Tracker:    $TRACKER_ADAPTER"
 echo "  Builder:    ${AI_CODE_MODEL} (effort: ${AI_CODE_EFFORT}) ($(echo "$BUILDER_DAYS" | tr ',' '/' | sed 's/1/Mon/;s/2/Tue/;s/3/Wed/;s/4/Thu/;s/5/Fri/'))"
+echo "  Architect:  ${AI_ARCHITECT_MODEL} (weekly)"
 echo "  Discovery:  ${AI_RESEARCH_MODEL:-disabled} ($(echo "$DISCOVER_DAYS" | tr ',' '/' | sed 's/0/Sun/;s/2/Tue/;s/4/Thu/'))"
 echo ""
 echo "  Next steps:"
