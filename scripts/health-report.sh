@@ -172,6 +172,106 @@ ANOMALIES=$(echo "$REPORT_DATA" | python3 -c "import json,sys; a=json.load(sys.s
 # Current backlog depth
 BACKLOG_COUNT=$({ bash "$TRACKER" list backlog unstarted started 2>/dev/null | grep -c "${ISSUE_PREFIX}-" || echo "0"; } | head -1)
 
+# ── Delivery / flow metrics ──────────────────────────────────────────────────
+# The activity metrics above measure effort (iterations, commits, tokens).
+# These measure outcomes: PRs merged, merge rate, time-to-merge, review-queue
+# aging, and tokens per merged PR — the numbers that say whether the pipeline
+# is actually delivering, not just running. Pure gh + python (no AI tokens);
+# every failure path degrades to zeros so the report still renders when gh is
+# unavailable or the repo var is unset (e.g. test mode).
+FLOW_DATA=$(gh pr list --repo "${GITHUB_ISSUES_REPO:-}" --state all --limit 200 \
+  --json number,createdAt,closedAt,mergedAt,state 2>/dev/null \
+  | python3 -c "
+import json, sys
+from datetime import datetime, timezone, timedelta
+zeros = {'merged': 0, 'closed_unmerged': 0, 'merge_rate': 0, 'avg_ttm_h': 0, 'open_prs': 0, 'oldest_open_days': 0}
+try:
+    prs = json.load(sys.stdin)
+    assert isinstance(prs, list)
+except Exception:
+    print(json.dumps(zeros)); sys.exit(0)
+now = datetime.now(timezone.utc)
+week_ago = now - timedelta(days=7)
+
+def ts(s):
+    try:
+        return datetime.fromisoformat(str(s).replace('Z', '+00:00'))
+    except Exception:
+        return None
+
+merged = [p for p in prs if isinstance(p, dict) and ts(p.get('mergedAt')) and ts(p['mergedAt']) >= week_ago]
+closed_unmerged = [p for p in prs if isinstance(p, dict) and not p.get('mergedAt')
+                   and ts(p.get('closedAt')) and ts(p['closedAt']) >= week_ago]
+open_prs = [p for p in prs if isinstance(p, dict) and p.get('state') == 'OPEN']
+ttm = [(ts(p['mergedAt']) - ts(p['createdAt'])).total_seconds() / 3600
+       for p in merged if ts(p.get('createdAt'))]
+decided = len(merged) + len(closed_unmerged)
+print(json.dumps({
+    'merged': len(merged),
+    'closed_unmerged': len(closed_unmerged),
+    'merge_rate': round(len(merged) / decided * 100) if decided else 0,
+    'avg_ttm_h': round(sum(ttm) / len(ttm), 1) if ttm else 0,
+    'open_prs': len(open_prs),
+    'oldest_open_days': max(((now - ts(p['createdAt'])).days for p in open_prs if ts(p.get('createdAt'))), default=0),
+}))
+" 2>/dev/null || echo '{"merged":0,"closed_unmerged":0,"merge_rate":0,"avg_ttm_h":0,"open_prs":0,"oldest_open_days":0}')
+MERGED=$(echo "$FLOW_DATA" | python3 -c "import json,sys; print(json.load(sys.stdin)['merged'])" 2>/dev/null || echo "0")
+CLOSED_UNMERGED=$(echo "$FLOW_DATA" | python3 -c "import json,sys; print(json.load(sys.stdin)['closed_unmerged'])" 2>/dev/null || echo "0")
+MERGE_RATE=$(echo "$FLOW_DATA" | python3 -c "import json,sys; print(json.load(sys.stdin)['merge_rate'])" 2>/dev/null || echo "0")
+AVG_TTM_H=$(echo "$FLOW_DATA" | python3 -c "import json,sys; print(json.load(sys.stdin)['avg_ttm_h'])" 2>/dev/null || echo "0")
+OPEN_PRS=$(echo "$FLOW_DATA" | python3 -c "import json,sys; print(json.load(sys.stdin)['open_prs'])" 2>/dev/null || echo "0")
+OLDEST_OPEN_DAYS=$(echo "$FLOW_DATA" | python3 -c "import json,sys; print(json.load(sys.stdin)['oldest_open_days'])" 2>/dev/null || echo "0")
+
+# Tokens per merged PR — the cost-of-delivery number that ties the token budget
+# to actual output. "n/a" when nothing merged this week.
+TOKENS_PER_PR=$(python3 -c "
+m = int('${MERGED:-0}' or 0); t = int('${TOKENS:-0}' or 0)
+print(f'{t // m:,}' if m else 'n/a')
+" 2>/dev/null || echo "n/a")
+
+# Flow anomalies. Guard: python's anomaly list prints '  ✅ No anomalies' when
+# empty — replace that placeholder instead of appending after it.
+append_anomaly() {
+  if echo "$ANOMALIES" | grep -q "No anomalies"; then
+    ANOMALIES="  ⚠️ $1"
+  else
+    ANOMALIES+="
+  ⚠️ $1"
+  fi
+}
+if [ "${OLDEST_OPEN_DAYS:-0}" -ge 7 ] 2>/dev/null; then
+  append_anomaly "Review queue aging: oldest open PR is ${OLDEST_OPEN_DAYS}d old ($OPEN_PRS open) — merge or close it; the builder gates new work at MAX_OPEN_PRS"
+fi
+DECIDED=$((MERGED + CLOSED_UNMERGED))
+if [ "$DECIDED" -ge 4 ] 2>/dev/null && [ "${MERGE_RATE:-100}" -lt 50 ] 2>/dev/null; then
+  append_anomaly "Low merge rate: ${MERGE_RATE}% of decided PRs merged this week — check data/lift-build-learnings.md for the rejection pattern"
+fi
+
+# ── GA release burndown ──────────────────────────────────────────────────────
+# The 2026-08-21 GA shift re-aimed the whole pipeline at stabilization, but
+# stabilization needs a termination condition. Convention: a GitHub milestone
+# (default 'GA', override via GA_MILESTONE) holds the release-blocking issues;
+# this reports progress toward closing it out.
+GA_MILESTONE="${GA_MILESTONE:-GA}"
+GA_LINE=$(gh api "repos/${GITHUB_ISSUES_REPO:-}/milestones?state=all" 2>/dev/null \
+  | GA_MILESTONE="$GA_MILESTONE" python3 -c "
+import json, sys, os
+title = os.environ.get('GA_MILESTONE', 'GA')
+try:
+    ms = json.load(sys.stdin)
+    assert isinstance(ms, list)
+except Exception:
+    sys.exit(0)
+for m in ms:
+    if isinstance(m, dict) and m.get('title') == title:
+        o, c = int(m.get('open_issues') or 0), int(m.get('closed_issues') or 0)
+        total = o + c
+        pct = round(c / total * 100) if total else 0
+        print(f'{c}/{total} closed ({pct}%) — {o} open issue(s) to GA')
+        break
+" 2>/dev/null || true)
+[ -z "$GA_LINE" ] && GA_LINE="milestone \"$GA_MILESTONE\" not found — create it in ${GITHUB_ISSUES_REPO:-the project repo} and tag GA-blocking issues to track release burndown"
+
 # Check launchd services are loaded
 LOADED_SERVICES=$(launchctl list 2>/dev/null || true)
 MISSING_SERVICES=""
@@ -210,6 +310,17 @@ cat > "$REPORT" << REPORT_EOF
 - **Runs:** $DISC_RUNS
 - **Issues created:** $DISC_CREATED
 
+## Delivery
+- **PRs merged (7d):** $MERGED
+- **PRs closed unmerged (7d):** $CLOSED_UNMERGED
+- **Merge rate:** ${MERGE_RATE}%
+- **Avg time-to-merge:** ${AVG_TTM_H}h
+- **Open PRs:** $OPEN_PRS (oldest: ${OLDEST_OPEN_DAYS}d)
+- **Output tokens per merged PR:** $TOKENS_PER_PR
+
+## GA Burndown
+- $GA_LINE
+
 ## Backlog
 - **Open issues:** $BACKLOG_COUNT
 
@@ -245,6 +356,14 @@ _${PERIOD}_
 *Tokens*
   • Total output: *$TOKENS*
   • Builder: $BUILDER_TOKENS | Discovery: $DISCOVER_TOKENS
+
+*Delivery*
+  • Merged: *$MERGED* | Closed unmerged: $CLOSED_UNMERGED | Merge rate: *${MERGE_RATE}%*
+  • Avg time-to-merge: ${AVG_TTM_H}h | Open PRs: $OPEN_PRS (oldest ${OLDEST_OPEN_DAYS}d)
+  • Tokens per merged PR: $TOKENS_PER_PR
+
+*GA burndown*
+  • $GA_LINE
 
 *Discovery & Backlog*
   • Discovery: $DISC_RUNS runs → $DISC_CREATED issues created

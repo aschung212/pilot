@@ -27,6 +27,8 @@ updated: 2026-05-08
 | **Test on preview deploys** | Click the Vercel preview URL in the PR description. Preview mode is enabled by default — Supabase writes are blocked (safe to use real Google account). Toggle "Enable writes" in the blue banner if you need full write-path testing. Test account available: test@lift.local / LiftTest2026! | Vercel preview URL in PR body |
 | **Test locally if needed** | `cd ~/development/lift && npm run dev` | localhost |
 | **Merge or request changes** | GitHub PR UI — merge individually, each PR is self-contained | Vercel auto-deploys on merge to master |
+| **Leave a closing comment when rejecting a PR** | If you close a PR without merging, add a one-line comment saying why. cleanup.sh harvests it into `data/lift-build-learnings.md` and the builder reads it every iteration — no comment means the builder cannot learn from the rejection. | GitHub PR UI |
+| **Act on digest blockers** | The 6:15 AM digest now lists "⏳ Waiting on you" (needs-input issues — answer, then flip `state:needs-input` → `state:unstarted`) and "⚖️ Needs your call" (issues whose PR was closed unmerged — recycle to unstarted or close as not planned) | #daily-review digest |
 | **Triage discovery issues** | Review new Linear issues from discovery agent, set priorities, add comments, cancel junk | linear.app/masterchung -> Lift project |
 | **Run `/ai-review`** | Claude Code CLI | Posts summary + LC update to #daily-review |
 
@@ -54,6 +56,7 @@ updated: 2026-05-08
 | **Act on the stale-PR audit** | Auto-posted to #lift-automation Sunday 08:15. It flags open PRs whose work already shipped — no-op merges, migrations duplicating a master column, two open PRs adding the same column. A clean week still posts one line, so silence means the job broke. Anything flagged is a PR to close or land **before** Sunday 22:00 discovery. |
 | **Manage Linear backlog** | Reprioritize, add comments/context to flagged issues. Completed/canceled issues and duplicates are archived automatically each night. When canceling, add a comment explaining why — discovery agent learns from this. |
 | **Update product decisions** | If you reject a category of feature (not just one issue), update `Lift - Product Decisions.md` in your vault |
+| **Review delivery metrics + GA burndown** | Weekly health report (Sun 8 AM, #pilot) now shows merged PRs, merge rate, time-to-merge, open-PR aging, tokens per merged PR, and GA-milestone burndown. If the "review queue aging" anomaly fires, clear the PR queue — the builder pauses nights at `MAX_OPEN_PRS` (8) open PRs. |
 | **Review metrics** | `pilot/data/lift-metrics.csv` and `lift-discovery-metrics.csv` |
 | **Review token usage + runtime** | `pilot/data/lift-usage-tracking.csv` and `lift-runtime.csv` — budgets auto-tune but review if unexpected |
 | **Update CLAUDE.md** | If design principles or code standards evolve |
@@ -80,6 +83,7 @@ Verify with `launchctl list | grep doc-drift`. It fires weekly but no-ops on odd
 
 - [x] Run `/github subscribe aschung212/Lift` in #lift-automation in Slack ✅ 2026-03-31
 - [x] Schedule `linear-digest.sh` via cron or launchd for mornings ✅ 2026-03-31 (launchd, 6:15 AM daily)
+- [ ] Create the `GA` milestone in aschung212/Lift and add the GA-blocking issues to it — the weekly health report tracks it as the release burndown (added 2026-08-28)
 
 ---
 
@@ -88,8 +92,8 @@ Verify with `launchctl list | grep doc-drift`. It fires weekly but no-ops on odd
 - Decomposed pipeline — 10 independent services, each with its own launchd plist (plus the daily digest). No orchestrator:
   - Discovery (Sun/Tue/Thu 10 PM): finds improvements, creates GitHub issues (Gemini + Claude). **GA-readiness mode since 2026-08-21:** rotation covers only bug-hunt, performance, ux-polish, accessibility, pwa-reliability, security-deps — no feature research, no test-coverage hunting.
   - Triage (Sun/Tue/Thu 10:30 PM): reviews issues, adds implementation plans (Gemini, Claude fallback). **GA gate:** net-new features and test-only issues are SKIPped ("deferred until post-GA"); only bug/perf/UX-polish/a11y/security work reaches the builder.
-  - Builder (Mon-Fri 11 PM): implements per-issue branches (`enhance/LIFT-{id}-{date}`), per-issue PRs with Claude Sonnet adversarial review (post-commit hook, single model) + auto-fix cycle, CI check. Uses git worktree for isolation. Failed PRs (`ci:failed`) auto-retried next night.
-  - Cleanup: runs at end of builder — archives completed/canceled, deduplicates backlog
+  - Builder (Mon-Fri 11 PM): implements per-issue branches (`enhance/LIFT-{id}-{date}`), per-issue PRs with Claude Sonnet adversarial review (post-commit hook, single model) + auto-fix cycle, CI check. Uses git worktree for isolation. Failed PRs (`ci:failed`) auto-retried next night. **WIP limit (2026-08-28):** pauses the night when `MAX_OPEN_PRS` (8) PRs are already open. Prompt carries rejection learnings from `lift-build-learnings.md`.
+  - Cleanup: runs at end of builder — archives completed/canceled, deduplicates backlog, recycles abandoned issues, harvests rejection learnings from closed-unmerged PRs, snapshots the needs-your-call list for the digest, and expires P4 issues untouched for `BACKLOG_EXPIRY_DAYS` (56)
   - Auditor (Wednesday 6 PM): pipeline self-audit
   - Roadmap Synth (Wednesday 7 PM): synthesizes the roadmap from the backlog
   - Architect (Wednesday 8 PM): deep architectural review
@@ -283,6 +287,22 @@ Then `launchctl list | grep stale-pr-audit`. The script must exist in the **main
 3. **LIFT-616 is the live recurrence** — `state:unstarted` with open PR #1065 (28 days). Triage now defers it, so it can't be forked, but the PR still needs landing or closing.
 4. **The picking pool more than doubled** (2 → 5 pickable) now that truncation is fixed. Expect the builder to have more to choose from tonight.
 5. **42 issues need your call** (up from 7) — `state:started` with a closed-unmerged PR. Cleanup never auto-recycles these because closing a PR may have been a deliberate rejection. It will keep reporting them until you either recycle them to `state:unstarted` or close them as not planned. The **150** issues sitting `state:started` with a merged PR are harmless to the picking pool but inflate the do-not-pick list in every builder prompt.
+### 2026-08-28 — Agile-gap pass: outcome metrics, rejection-feedback loop, WIP limit, blockers in the digest, GA burndown, backlog expiry, acceptance criteria
+
+Pilot mirrored most agile ceremonies but measured activity instead of outcomes, and the feedback loop from Aaron's merge/reject decisions had been dead since the review tuner was removed (2026-05-11). Seven changes close the gaps — full technical detail in the [architecture doc changelog](pilot-architecture.md#changelog).
+
+- **Weekly health report** gains a Delivery section (PRs merged, merge rate, time-to-merge, open-PR aging, tokens per merged PR) and a **GA burndown** against the `GA` GitHub milestone, plus review-queue-aging and low-merge-rate anomalies.
+- **Rejection-learnings loop:** cleanup harvests your closing comments on PRs closed unmerged into `data/lift-build-learnings.md`; the builder reads it every iteration and stops repeating rejected approaches.
+- **WIP limit:** the builder pauses the night when `MAX_OPEN_PRS` (default 8) PRs are already open, instead of piling more onto your review queue. `ci:failed` retries are exempt.
+- **Morning digest** now surfaces blockers: "⏳ Waiting on you" (needs-input issues) and "⚖️ Needs your call" (issues whose PR you closed unmerged).
+- **Backlog expiry:** P4 issues untouched for 8 weeks are auto-closed as not planned ("reopen if still relevant").
+- **Acceptance criteria:** triage APPROVE/ENHANCE now attach a testable definition-of-done checklist; the builder must verify each criterion and cover it in the PR's Verification section.
+- New knobs in `project.env`: `MAX_OPEN_PRS`, `BACKLOG_EXPIRY_DAYS`, `GA_MILESTONE`. Tests 251 → 267, all green.
+
+**New responsibilities for Aaron:**
+1. **Always leave a one-line closing comment when you reject a PR** — it becomes builder training data; a silent close teaches nothing.
+2. **Create the `GA` milestone** in aschung212/Lift and add GA-blocking issues to it (one-time; the health report nags until it exists).
+3. Act on the digest's blocker lines during the morning review; if the builder reports the WIP gate, clear the PR queue.
 
 ### 2026-08-28 — Lift: exercise-first gyms + tags manager (#1252, PR #1253); master CI found red (#1254)
 

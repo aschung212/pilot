@@ -388,6 +388,10 @@ ROADMAP_MAX_TURNS=3
 MAX_CONSECUTIVE_FAILURES=3
 MAX_STALLS=2
 MAX_FIX_ATTEMPTS=1
+# Flow / backlog policies (WIP limit, backlog expiry, release burndown):
+MAX_OPEN_PRS=8
+BACKLOG_EXPIRY_DAYS=56
+GA_MILESTONE="GA"
 # Sonnet planning-agent effort (creativity / quality) — low|medium|high|max:
 AI_TRIAGE_EFFORT="high"
 AI_ROADMAP_EFFORT="high"

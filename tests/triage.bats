@@ -337,3 +337,34 @@ _refs_from_titles() {
   [ -z "$deferred" ]
   [ "$(echo "$kept" | xargs)" = "LIFT-616 LIFT-580" ]
 }
+
+# ── Acceptance criteria (definition of done) ─────────────────────────────────
+
+# bats test_tags=fast
+@test "triage: ACCEPTANCE_CRITERIA extracted from triage output" {
+  result="VERDICT: APPROVE
+CONFIDENCE: 8
+IMPLEMENTATION_PLAN: do the thing
+ACCEPTANCE_CRITERIA: criterion one | criterion two
+COMPLEXITY: small"
+  acceptance=$(echo "$result" | grep -oE 'ACCEPTANCE_CRITERIA: .*' | head -1 | sed 's/ACCEPTANCE_CRITERIA: //')
+  [ "$acceptance" = "criterion one | criterion two" ]
+}
+
+# bats test_tags=fast
+@test "triage: acceptance criteria pipe-split into checkbox bullets" {
+  acceptance="deleting the last set removes the card | undo toast restores it"
+  bullets=$(echo "$acceptance" | tr '|' '\n' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//; /^$/d; s/^/- [ ] /')
+  [ "$(echo "$bullets" | wc -l | tr -d ' ')" -eq 2 ]
+  echo "$bullets" | grep -q "^- \[ \] deleting the last set removes the card$"
+  echo "$bullets" | grep -q "^- \[ \] undo toast restores it$"
+}
+
+# bats test_tags=fast
+@test "triage: prompt and comments carry the acceptance-criteria contract" {
+  TRIAGE_SCRIPT="$PILOT_DIR/scripts/triage.sh"
+  # Prompt asks for the field on APPROVE/ENHANCE
+  grep -q "ACCEPTANCE_CRITERIA: (if APPROVE/ENHANCE)" "$TRIAGE_SCRIPT"
+  # Both comment templates render it as a definition-of-done checklist
+  [ "$(grep -c 'Acceptance criteria.*definition of done' "$TRIAGE_SCRIPT")" -ge 2 ]
+}
