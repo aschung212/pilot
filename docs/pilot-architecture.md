@@ -172,7 +172,24 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
 
 > **Removed 2026-05-11:** The review tuner (`scripts/tune-reviews.sh`, weekly at Sun 21:15) was deleted. It was deprecated 2026-04-06 when the review system moved to inline hooks (no PR comments to learn from). Its `lift-review-learnings.md` data file had one remaining reader, `adapters/ai-review.sh`; that adapter was deleted 2026-07-17, so nothing reads the learnings file now.
 
-### 6. Issue Cleanup
+### 6. Stale-PR Audit
+**Script:** `stale-pr-audit.sh`
+**Schedule:** Sunday 08:15, weekly (`com.aaron.pilot-stale-pr-audit`) — right after the Health Report, and ~14h before Sunday's Discovery so anything it flags can be closed or landed before the next build cycle picks work up
+**Model:** none — pure git/gh analysis, no AI call
+
+Every other dedupe guard in the pipeline is keyed on issue *identity*: "does this issue already have an open PR?" That question cannot see work rebuilt under a **different** issue number, which is exactly what produced the LIFT-783 / LIFT-1039 duplicate. This audit asks the other question, against the codebase rather than the tracker: **does merging this PR still change anything?**
+
+| Check | Method | Catches |
+|---|---|---|
+| No-op merge | `git merge-tree --write-tree` vs master; flags when the merged tree equals master's | A PR that is wholly redundant and can just be closed |
+| Duplicate migration | Every `ADD COLUMN` the PR introduces that master's migrations already add | The #1041 shape — a redundant migration inside an otherwise non-empty PR, invisible to the no-op check |
+| Column collision | Two **open** PRs adding the same column | The pre-merge form of the above; fires while both are still open, when the duplicate is cheapest to kill |
+
+Read-only against Lift: it fetches refs and uses `merge-tree`, never checking anything out. Writes `data/lift-stale-pr-audit-YYYY-MM-DD.md` and, with `--notify`, posts findings to #lift-automation. The scheduled run passes `--notify`; a clean week posts a one-line "clean" so silence always means a broken job, never a passing one.
+
+**Why not a freshness check at build time.** Verified against the incident: when PR #1041 was opened, its "duplicate" column was not yet in master — it lived only in the still-open PR #1032, and master stayed clean for six more days. Checking the codebase at build time would have found nothing. The signal existed only in the open-PR set, which is why the collision check is the one that fires (retro-validated: it reports `exercises.plate_count_mode added by PRs [1032, 1041]` on the day #1041 was created).
+
+### 7. Issue Cleanup
 **Script:** `cleanup.sh`
 **When:** After each overnight session (final stage of pipeline)
 
@@ -204,7 +221,7 @@ Recycled counts are appended to `data/lift-cleanup-metrics.csv` as a fourth `rec
 
 ## Testing Infrastructure
 
-The pipeline has a bats-core test suite with **236 tests across 21 test files** in `~/development/pilot/tests/`. Tests use two-tier execution to balance speed with thoroughness:
+The pipeline has a bats-core test suite with **239 tests across 21 test files** in `~/development/pilot/tests/`. Tests use two-tier execution to balance speed with thoroughness:
 
 **Fast tier (196 tests) — pre-commit hook:**
 - Runs before every commit via `.githooks/pre-commit`
@@ -213,7 +230,7 @@ The pipeline has a bats-core test suite with **236 tests across 21 test files** 
 - Parallel execution via GNU parallel (`bats -j 8`)
 - Blocks commit if any test fails
 
-**Full tier (236 tests) — GitHub Actions CI:**
+**Full tier (239 tests) — GitHub Actions CI:**
 - Runs on every push via `.github/workflows/test.yml`
 - Includes everything in the fast tier plus integration-level tests (CSV analysis, full script invocations)
 - Test paths resolve dynamically (no hardcoded local paths) for CI runner compatibility
@@ -232,12 +249,18 @@ Pipeline is fully decomposed — each service has its own launchd plist. No orch
 
 | Time | Service | Schedule | Plist |
 |---|---|---|---|
+| 6:15 AM | Issue Digest | Daily | `com.aaron.linear-digest` |
+| 8:00 AM Sun | Health Report | Weekly | `com.aaron.pilot-health` |
+| 8:15 AM Sun | Stale-PR Audit | Weekly | `com.aaron.pilot-stale-pr-audit` |
+| 6:00 PM Wed | Auditor | Weekly | `com.aaron.pilot-auditor` |
+| 7:00 PM Wed | Roadmap Synth | Weekly | `com.aaron.pilot-roadmap` |
+| 8:00 PM Wed | Architect | Weekly | `com.aaron.pilot-architect` |
+| 9:00 PM Sun | Budget Tuner | Weekly | `com.aaron.pilot-tune-budget` |
 | 10:00 PM | Discovery | Sun/Tue/Thu | `com.aaron.pilot-discover` |
 | 10:30 PM | Triage | Sun/Tue/Thu | `com.aaron.pilot-triage` |
 | 11:00 PM | Builder + Cleanup | Mon-Fri | `com.aaron.pilot-builder` |
-| 9:00 PM Sun | Budget Tuner | Weekly | `com.aaron.pilot-tune-budget` |
-| 8:00 AM Sun | Health Report | Weekly | `com.aaron.pilot-health` |
-| 6:15 AM | Issue Digest | Daily | `com.aaron.linear-digest` |
+
+> The Wednesday trio (auditor / roadmap / architect) and the Issue Digest were missing from this table until 2026-08-28; it is now generated from the plists' actual `StartCalendarInterval` values.
 
 ---
 
@@ -315,7 +338,7 @@ Feedback loop → Aaron's corrections improve future reviews + discovery
 | `~/development/pilot/lib/log.sh` | Shared structured logging library |
 | `~/development/pilot/config/budget.conf` | Budget config (auto-tuned) |
 | `~/development/pilot/scripts/stale-pr-audit.sh` | On-demand audit: open PRs whose work has already shipped (no-op merges, duplicate/colliding migrations) |
-| `~/development/pilot/tests/` | bats-core test suite (236 tests, 21 files, two-tier execution) |
+| `~/development/pilot/tests/` | bats-core test suite (239 tests, 21 files, two-tier execution) |
 | `~/development/pilot/.github/workflows/test.yml` | GitHub Actions CI — full test suite on push |
 | `~/development/pilot/.githooks/pre-commit` | Pre-commit hook — fast test tier on every commit |
 | `~/development/pilot/project.env` | Lift-specific configuration (git-ignored) |
@@ -328,6 +351,12 @@ See [Pilot Responsibilities](pilot-responsibilities.md) for the complete list of
 ---
 
 ## Changelog
+
+### 2026-08-28 — Stale-PR audit scheduled weekly
+
+`stale-pr-audit.sh` moved from on-demand to a weekly launchd job, `com.aaron.pilot-stale-pr-audit`, at **Sunday 08:15** with `--notify`. Slotted 15 minutes after the Health Report and ~14h ahead of Sunday's Discovery, so flagged PRs can be resolved before the next build cycle claims work. See agent section 6.
+
+Also corrected the Scheduled Tasks table, which had been missing the Wednesday trio (Auditor / Roadmap Synth / Architect) and the daily Issue Digest since those services were added.
 
 ### 2026-08-28 — Duplicate-build root cause: a lost state flip, and triage forking in-flight work
 
@@ -345,7 +374,7 @@ See [Pilot Responsibilities](pilot-responsibilities.md) for the complete list of
 - **`lib/builder-utils.sh`** — new `_marker_lines` normalizes `|`, `:`, em dash, and bare markers to a single pipe. The four `ISSUE_DONE`/`ISSUE_PROGRESS` parsers in `builder.sh` now call it, restoring the state flip and the three other consumers.
 - **`scripts/triage.sh`** — defers any issue with an open PR before review. A deferral, not a skip: the issue is untouched and returns to scope when the PR resolves. Fails open; logged to the triage log and the Slack thread.
 - **`adapters/tracker.sh`** — all open-issue queries share `GH_OPEN_LIMIT` (200 → **1000**), plus a stderr warning when a query returns exactly at the cap. Found while verifying the triage guard: with 265 open issues the 200 cap was hiding **8 of 10** triageable and **3 of 5** pickable issues.
-- **`scripts/stale-pr-audit.sh`** (new, on-demand) — asks the question issue identity cannot: does merging this PR still change anything? Flags no-op merges (`git merge-tree` against master), migrations duplicating a column already in master, and two open PRs adding the same column.
+- **`scripts/stale-pr-audit.sh`** (new; scheduled weekly Sun 08:15 as of the same day) — asks the question issue identity cannot: does merging this PR still change anything? Flags no-op merges (`git merge-tree` against master), migrations duplicating a column already in master, and two open PRs adding the same column.
 
 **Observed effect on cleanup.** With the full issue set visible, `cleanup.sh --dry-run` now reports 150 done-awaiting-close (was 92) and 42 needing a human call (was 7), and takes ~4 minutes. Behavior is unchanged — 0 auto-recycled, exit 0 — it simply is no longer blind to two thirds of the board.
 

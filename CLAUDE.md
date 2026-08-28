@@ -88,4 +88,4 @@ All logs, metrics, queues, and outputs live in `pilot/data/` (gitignored). Key f
 - `lift-metrics.csv` — builder iteration metrics
 - `lift-enhance-YYYY-MM-DD-runN.md` — per-iteration build logs
 - `lift-discover-YYYY-MM-DD.md` — discovery run logs
-- `lift-stale-pr-audit-YYYY-MM-DD.md` — stale-PR audit report (on-demand, not nightly)
+- `lift-stale-pr-audit-YYYY-MM-DD.md` — stale-PR audit report (weekly, Sun 08:15)

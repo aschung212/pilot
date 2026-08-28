@@ -50,6 +50,7 @@ updated: 2026-05-08
 | What | How |
 |---|---|
 | **Review Linear digest** | Auto-posted to #daily-review at 6:15 AM via launchd. Check it during morning Slack review. |
+| **Act on the stale-PR audit** | Auto-posted to #lift-automation Sunday 08:15. It flags open PRs whose work already shipped — no-op merges, migrations duplicating a master column, two open PRs adding the same column. A clean week still posts one line, so silence means the job broke. Anything flagged is a PR to close or land **before** Sunday 22:00 discovery. |
 | **Manage Linear backlog** | Reprioritize, add comments/context to flagged issues. Completed/canceled issues and duplicates are archived automatically each night. When canceling, add a comment explaining why — discovery agent learns from this. |
 | **Update product decisions** | If you reject a category of feature (not just one issue), update `Lift - Product Decisions.md` in your vault |
 | **Review metrics** | `pilot/data/lift-metrics.csv` and `lift-discovery-metrics.csv` |
@@ -59,6 +60,14 @@ updated: 2026-05-08
 ---
 
 ## One-Time Setup (pending)
+
+**Load the stale-PR audit plist (added 2026-08-28).** The launchd job is committed but not yet loaded on this machine:
+
+```bash
+cp ~/development/pilot/launchd/com.aaron.pilot-stale-pr-audit.plist ~/Library/LaunchAgents/ && launchctl load ~/Library/LaunchAgents/com.aaron.pilot-stale-pr-audit.plist
+```
+
+Verify with `launchctl list | grep stale-pr-audit`. Until it is loaded, the audit only runs when you invoke it by hand. It also requires `scripts/stale-pr-audit.sh` to be present in the **main checkout**, so merge the PR first.
 
 - [x] Run `/github subscribe aschung212/Lift` in #lift-automation in Slack ✅ 2026-03-31
 - [x] Schedule `linear-digest.sh` via cron or launchd for mornings ✅ 2026-03-31 (launchd, 6:15 AM daily)
@@ -171,6 +180,24 @@ If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/T
 
 ## Changelog
 
+### 2026-08-28 — Stale-PR audit scheduled weekly (Sunday 08:15)
+
+Following the duplicate-build fix below, the audit is no longer on-demand only.
+
+- **New plist** `launchd/com.aaron.pilot-stale-pr-audit.plist` — Sunday **08:15**, runs `stale-pr-audit.sh --notify`. Placed 15 minutes after the Health Report (08:00) so the two weekly review artifacts land together, and ~14h before Sunday's Discovery (22:00) so anything flagged can be closed or landed before the next build cycle picks work up. No conflict with any existing job.
+- **`--notify` is in the scheduled invocation** — a clean week still posts a single "clean" line, so silence means the job is broken rather than the backlog being healthy.
+- **Schedule tables corrected.** The architecture doc's Scheduled Tasks table and the README's service table were both missing the Wednesday trio (Auditor 18:00, Roadmap Synth 19:00, Architect 20:00); the architecture one also omitted the daily Issue Digest. Both are now generated from the plists' actual `StartCalendarInterval` values.
+
+**Verification.** `plutil -lint` passes, and three new smoke tests now guard *every* plist — valid XML, a Label plus a schedule, and a ProgramArguments script that exists in this repo (paths are rebased onto the checkout, since plists carry machine-absolute paths CI does not have). Each was confirmed to fail against a deliberately broken plist rather than passing vacuously — the first cut of the path check did pass vacuously, because `plutil -extract ... raw` returns an array's element *count*, not its elements. The script was also run under a launchd-equivalent environment (`env -i` with only the plist's `PATH` and `HOME`) — exit 0, `gh`/`git`/`python3` all resolve, `project.env` sources correctly, and the Slack webhook and `notify.sh send` subcommand are both present. No test message was posted.
+
+**⚠️ New for Aaron — one manual step.** The plist is committed but **not loaded**; loading it needs your machine. After merging the PR:
+
+```bash
+cp ~/development/pilot/launchd/com.aaron.pilot-stale-pr-audit.plist ~/Library/LaunchAgents/ && launchctl load ~/Library/LaunchAgents/com.aaron.pilot-stale-pr-audit.plist
+```
+
+Then `launchctl list | grep stale-pr-audit`. The script must exist in the **main checkout** first, so merge before loading.
+
 ### 2026-08-28 — Why the pipeline built the same change twice (LIFT-783 / LIFT-1039), and the three defects behind it
 
 **Symptom.** Resolving PR #1041 surfaced that the pipeline had shipped the same work twice: LIFT-783 (PR #1032, merged 2026-08-04) and LIFT-1039 — "Split from LIFT-783" — (PR #1041, opened 2026-07-29). Same migration, same always-send upsert field, same setter. #1041 sat open a month and merged with **zero schema delta**; the only thing worth keeping was an unrelated `syncQueue` bug it found on the way.
@@ -195,10 +222,10 @@ If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/T
 
 **Side effect of the truncation fix — `cleanup.sh` now sees the whole board.** Its dry-run reports **150** issues `state:started` with a merged PR (was 92 at the 2026-07-27 audit) and **42** stuck behind a closed-unmerged PR (was 7). Most of that jump is issues the 200 cap had been hiding from the recycler, not new decay. Nothing is auto-recycled (0 recycled — the conservative "no PR ever" rule still holds), and the run exits 0. It is also slower now (~4 min, more issues to cross-reference), which matters only if you time the overnight chain.
 
-**Verification.** `bash -n` clean across all scripts; full bats suite **236 passing, 0 failures** (up from 199 — 9 new marker tests, 4 new triage-deferral tests, 7 new audit tests). `triage.sh --dry-run` against the live backlog now prints `🔒 Deferred 1 issue(s) with an open PR — LIFT-616` — a **live recurrence** of the exact #783 configuration, caught. The audit's cross-PR check was retro-validated against the incident: it reports `exercises.plate_count_mode added by PRs [1032, 1041]` on the day #1041 was opened, a month before it was found by hand.
+**Verification.** `bash -n` clean across all scripts; full bats suite **239 passing, 0 failures** (up from 199 — 9 marker tests, 4 triage-deferral tests, 7 audit tests, 3 launchd-plist smoke tests). `triage.sh --dry-run` against the live backlog now prints `🔒 Deferred 1 issue(s) with an open PR — LIFT-616` — a **live recurrence** of the exact #783 configuration, caught. The audit's cross-PR check was retro-validated against the incident: it reports `exercises.plate_count_mode added by PRs [1032, 1041]` on the day #1041 was opened, a month before it was found by hand.
 
 **⚠️ New for Aaron:**
-1. **`stale-pr-audit.sh` is NOT wired into the nightly chain** — you asked to see it first. Run it on demand with `./scripts/stale-pr-audit.sh` (add `--notify` to post to Slack). Say the word and I'll add it to the overnight chain after cleanup.
+1. **`stale-pr-audit.sh` now runs weekly, Sunday 08:15** (`com.aaron.pilot-stale-pr-audit`), posting to #lift-automation — scheduled at your request after you reviewed it. It lands 15 minutes after the Health Report and ~14h before Sunday's Discovery, so anything it flags can be closed or landed before the next build cycle picks work up. Run it any time with `./scripts/stale-pr-audit.sh` (add `--notify` to post). **You must `launchctl load` the new plist once** — see the Weekly section.
 2. **I did not run `builder.sh 1`.** The Infrastructure Change Protocol calls for it, but it opens a real PR against Lift and spends budget, so I verified the exact tracker/triage queries the builder depends on instead. Worth doing before the next unattended run.
 3. **LIFT-616 is the live recurrence** — `state:unstarted` with open PR #1065 (28 days). Triage now defers it, so it can't be forked, but the PR still needs landing or closing.
 4. **The picking pool more than doubled** (2 → 5 pickable) now that truncation is fixed. Expect the builder to have more to choose from tonight.
