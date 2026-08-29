@@ -105,3 +105,83 @@ print(json.dumps({'new_cooldown': new_cooldown}))
   new_cd=$(echo "$result" | python3 -c "import json,sys; print(json.load(sys.stdin)['new_cooldown'])")
   [ "$new_cd" = "45" ]
 }
+
+# ── End-to-end regressions (2026-08-28) ─────────────────────────────────────
+# The tuner shipped with five passing tests and had never adjusted a value in
+# its life: every test above re-implements the Python in the test file, so none
+# of them ever executed the real script. Two bugs hid behind that:
+#
+#   1. The heredoc's positional args sat on the line AFTER the PYEOF terminator,
+#      so python3 ran with an empty argv (every path defaulted to "", so it read
+#      no data and always returned skip:True) and bash then tried to EXECUTE the
+#      CSV path — "Permission denied", exit 126.
+#   2. With argv restored, `int(row.get('commits', 0))` hit None on short rows
+#      (csv.DictReader fills missing columns with None, so the default never
+#      applies) and crashed on the 30 ragged rows in lift-metrics.csv.
+#
+# These drive the REAL script.
+
+_seed_csvs() {  # $1 = dir; writes enough data for the tuner to act
+  cat > "$1/lift-usage-tracking.csv" <<'EOF'
+date,run,input_tokens,output_tokens,cache_read_tokens,cache_create_tokens,nightly_output_total,duration_sec
+2026-04-01,1,1000,20000,0,0,20000,600
+2026-04-02,1,1000,20000,0,0,20000,600
+2026-04-03,1,1000,20000,0,0,20000,600
+2026-04-04,1,1000,20000,0,0,20000,600
+EOF
+  cat > "$1/lift-metrics.csv" <<'EOF'
+date,run,start,end,duration_sec,commits,tests_before,tests_after,added,fixed,skipped,failed,stalled,notes,success
+2026-04-01,1,00:00:00,00:10:00,600,3,10,12,1,0,0,0,0,,true
+2026-04-02,1,00:00:00,00:10:00,600,3,10,12,1,0,0,0,0,,true
+2026-04-03,1,00:00:00,00:10:00,600,3,10,12,1,0,0,0,0,,true
+2026-04-04,1,00:00:00,00:10:00,600,3,10,12,1,0,0,0,0,,true
+EOF
+}
+
+# bats test_tags=fast
+@test "tune-budget: the heredoc actually passes argv to python (it analyses real CSVs)" {
+  _seed_csvs "$OUTPUT_DIR"
+  run bash "$PILOT_DIR/scripts/tune-budget.sh" --dry-run
+  [ "$status" -eq 0 ]
+  # With an empty argv the tuner reads nothing and reports 0 nights. Seeing the
+  # seeded nights proves the arguments reached python.
+  [[ "$output" == *"nights=4"* ]]
+  # And it must never try to execute a CSV as a command.
+  [[ "$output" != *"Permission denied"* ]]
+}
+
+# bats test_tags=fast
+@test "tune-budget: short rows in metrics.csv do not crash the analysis" {
+  _seed_csvs "$OUTPUT_DIR"
+  # A ragged row: fewer fields than the header, so DictReader yields None values.
+  echo "2026-04-05,1,00:00:00" >> "$OUTPUT_DIR/lift-metrics.csv"
+  run bash "$PILOT_DIR/scripts/tune-budget.sh" --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"TypeError"* ]]
+  [[ "$output" != *"Traceback"* ]]
+}
+
+# bats test_tags=fast
+@test "tune-budget: --dry-run writes neither budget.conf nor the tune log" {
+  _seed_csvs "$OUTPUT_DIR"
+  cp "$PILOT_DIR/config/budget.conf" "$TEST_TMPDIR/conf.before"
+  run bash "$PILOT_DIR/scripts/tune-budget.sh" --dry-run
+  [ "$status" -eq 0 ]
+  diff -q "$PILOT_DIR/config/budget.conf" "$TEST_TMPDIR/conf.before"
+  [ ! -f "$OUTPUT_DIR/lift-tune-log.csv" ]
+}
+
+# bats test_tags=fast
+@test "tune-budget: --dry-run reports the change it would apply" {
+  _seed_csvs "$OUTPUT_DIR"
+  run bash "$PILOT_DIR/scripts/tune-budget.sh" --dry-run
+  [[ "$output" == *"[dry-run] Would apply:"* ]]
+  [[ "$output" == *"MAX_OUTPUT_TOKENS_PER_NIGHT"* ]]
+}
+
+# bats test_tags=fast
+@test "tune-budget: rejects an unknown argument" {
+  run bash "$PILOT_DIR/scripts/tune-budget.sh" --bogus
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Unknown argument"* ]]
+}

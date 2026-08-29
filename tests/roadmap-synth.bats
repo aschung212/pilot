@@ -259,3 +259,60 @@ teardown() {
   result=$(roadmap_render_markdown "$FIXTURES_DIR/roadmap-synth-fixture.json" "2026-04-29" "Lift")
   [[ "$result" == *"LIFT-3"* ]]
 }
+
+# ── Envelope extraction (2026-08-28) ────────────────────────────────────────
+# roadmap-synth captures stdout+stderr together, and Bun prepends a
+# "warn: CPU lacks AVX support" line on this machine. json.load() on the whole
+# file then dies at "line 1 column 1 (char 0)". builder.sh was hardened against
+# this on 2026-05-19; roadmap-synth was not, so EVERY run from 2026-05-06 to
+# 2026-08-26 — 17 consecutive weeks — failed to extract its synthesis.
+#
+# Claude also wraps the payload in a ```json fence, which has to come off before
+# the themes parse. These drive the real extractor out of the script.
+
+_extractor() {  # writes the script's own heredoc body to $1
+  python3 - "$PILOT_DIR/scripts/roadmap-synth.sh" "$1" <<'PYEOF'
+import sys
+src, dest = sys.argv[1], sys.argv[2]
+lines = open(src).read().splitlines()
+start = next(i for i, l in enumerate(lines) if l.startswith("python3 - ") and "SYNTH_RESULT_FILE" in l)
+end = next(i for i in range(start + 1, len(lines)) if lines[i].strip() == "PYEOF")
+open(dest, "w").write("\n".join(lines[start + 1:end]))
+PYEOF
+}
+
+# bats test_tags=fast
+@test "roadmap-synth: extractor survives the Bun warning preamble and a json fence" {
+  _extractor "$TEST_TMPDIR/extract.py"
+  run python3 "$TEST_TMPDIR/extract.py" \
+    "$TEST_DIR/fixtures/roadmap-bun-preamble.json" "$TEST_TMPDIR/out.json"
+  [ "$status" -eq 0 ]
+  run python3 -c "import json;print(len(json.load(open('$TEST_TMPDIR/out.json'))['themes']))"
+  [ "$output" = "2" ]
+}
+
+# bats test_tags=fast
+@test "roadmap-synth: extractor still handles a clean envelope with no preamble" {
+  _extractor "$TEST_TMPDIR/extract.py"
+  python3 - "$TEST_TMPDIR/clean.json" <<'PYEOF'
+import json, sys
+inner = json.dumps({"themes": [{"name": "T", "description": "d", "issues": [1]}],
+                    "epics": [], "orphans": []})
+json.dump({"type": "result", "result": inner}, open(sys.argv[1], "w"))
+PYEOF
+  run python3 "$TEST_TMPDIR/extract.py" "$TEST_TMPDIR/clean.json" "$TEST_TMPDIR/out.json"
+  [ "$status" -eq 0 ]
+  run python3 -c "import json;print(len(json.load(open('$TEST_TMPDIR/out.json'))['themes']))"
+  [ "$output" = "1" ]
+}
+
+# bats test_tags=fast
+@test "roadmap-synth: extractor handles a bare synthesis object" {
+  _extractor "$TEST_TMPDIR/extract.py"
+  echo '{"themes":[{"name":"A","description":"d","issues":[1]}],"epics":[],"orphans":[]}' \
+    > "$TEST_TMPDIR/bare.json"
+  run python3 "$TEST_TMPDIR/extract.py" "$TEST_TMPDIR/bare.json" "$TEST_TMPDIR/out.json"
+  [ "$status" -eq 0 ]
+  run python3 -c "import json;print(len(json.load(open('$TEST_TMPDIR/out.json'))['themes']))"
+  [ "$output" = "1" ]
+}

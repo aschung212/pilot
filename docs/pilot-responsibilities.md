@@ -110,7 +110,7 @@ Verify with `launchctl list | grep doc-drift`. It fires weekly but no-ops on odd
 - Post-merge CI failure → Slack notification
 - Slack threading: one parent message per night, all updates threaded (updated for multi-PR output)
 - Slack webhooks: all notifications are token-free (no Claude instances spawned)
-- Test suite (bats-core, 251 tests across 22 files): fast tier (246 tests) runs on every commit via pre-commit hook, full tier (251 tests) runs on push via GitHub Actions CI
+- Test suite (bats-core, 278 tests across 22 files): fast tier (271 tests) runs on every commit via pre-commit hook, full tier (278 tests) runs on push via GitHub Actions CI
 - Auto-discovery smoke tests: fail when new scripts lack test coverage — enforces that every new script gets tests
 - Linear digest: posts board snapshot to #daily-review at 6:15 AM daily (launchd)
 
@@ -168,11 +168,11 @@ If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/T
 | `~/development/lift/CLAUDE.md` | Lift project standards (design, code, workflow) |
 | `~/.claude/commands/ai-review.md` | Daily review slash command |
 | `~/.claude/CLAUDE.md` | Global Claude instructions |
-| `~/development/pilot/tests/` | bats-core test suite — 22 test files, 251 tests (fast tier, 246, runs in the pre-commit hook) |
+| `~/development/pilot/tests/` | bats-core test suite — 22 test files, 278 tests (fast tier, 271, runs in the pre-commit hook) |
 | `~/development/pilot/.github/workflows/test.yml` | GitHub Actions CI — runs full test suite on push |
 | `~/development/pilot/.githooks/pre-commit` | Git pre-commit hook — runs fast test tier before every commit |
 | `~/Documents/Scripts/lift-triage.sh` | Gemini issue triage — reviews, enhances, and plans before builder runs |
-| `~/Documents/Scripts/lift-budget.conf` | Token budget config — auto-tuned nightly by `lift-tune-budget.sh` |
+| `~/Documents/Scripts/lift-budget.conf` | Token budget config — auto-tuned **weekly** (Sun 21:00) by `tune-budget.sh`. Inert from inception until 2026-08-28; see the changelog. Preview changes with `tune-budget.sh --dry-run`. |
 | `~/Documents/Scripts/lift-tune-budget.sh` | Auto-tuner — analyzes usage + runtime history and adjusts budget config |
 | `~/Documents/Scripts/lift-linear-cleanup.sh` | Linear cleanup — archives done/canceled issues, deduplicates backlog |
 | `pilot/data/` | Logs, metrics, digests, cost tracking |
@@ -198,6 +198,35 @@ If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/T
 ---
 
 ## Changelog
+
+### 2026-08-28 — Two agents that had never once worked: the budget tuner and roadmap-synth
+
+Checking that the two new plists had loaded surfaced non-zero exit codes on two *other* services. Both turned out to have been broken since inception.
+
+**1. The budget auto-tuner had never adjusted a single value.** `launchctl` reported exit **126**.
+
+- **Bug A — heredoc args after the terminator.** The Python block's positional arguments sat on the line *after* `PYEOF`, so `python3` ran with an empty argv. Every CSV path defaulted to `""`, so it read no data and always returned `skip: True`; bash then tried to **execute** `lift-usage-tracking.csv` as a command — "Permission denied", exit 126.
+- **Bug B, hidden behind A.** With argv restored, `int(row.get('commits', 0))` hit `None` on short rows — `csv.DictReader` fills missing columns with `None`, so the `get` default never applies — and crashed on the **30 ragged rows** in `lift-metrics.csv`. `builder.sh` already used the correct `or 0` idiom; the tuner never ran long enough for anyone to notice it didn't.
+- **Why nothing caught it:** the tuner had **five green tests**, and every one of them re-implements the Python *inside the test file*. None ever ran the script. New tests drive the real script end-to-end, and each was verified to fail when its fix is reverted.
+- **Evidence of the blast radius:** `lift-tune-log.csv` contained only its header, last written **2026-04-03**, and `config/budget.conf` had not changed since **2026-04-02**. Roughly five months of "auto-tuning" that never happened.
+
+**2. `roadmap-synth` had failed for 17 consecutive weeks.** Every saved output from **2026-05-06 through 2026-08-26** begins with Bun's `warn: CPU lacks AVX support` line, so `json.load()` on the captured stream died at "line 1 column 1". This is the *same* failure that made all 12 pre-pick stages unparseable on 2026-05-19 — `builder.sh` was hardened then, `roadmap-synth` was not. The extractor now falls back to the first line that parses as a JSON object, and strips the ```json fence Claude wraps the payload in. Replaying the real 2026-08-26 output through the fix recovers **10 themes** — the synthesis had been produced correctly all along and thrown away every week.
+
+**New: `tune-budget.sh --dry-run`** — analyses and reports what it would change, touching neither `budget.conf`, the tune log, nor Slack.
+
+**Doc claims corrected.** Both docs said the budget was "auto-tuned nightly". It is weekly (Sunday 21:00), and it was not tuning at all.
+
+**Verification.** Full suite **278 passing, 0 failures** (8 new tests). Both fixes verified non-vacuously by reverting each and watching the matching test fail. `bash -n` clean.
+
+**⚠️ New for Aaron — the tuner's first real run will cut your token cap.** Against the last 7 nights it wants:
+
+```
+MAX_ITERATIONS_PER_NIGHT     12 → 12     (unchanged)
+MAX_OUTPUT_TOKENS_PER_NIGHT  500000 → 200000
+ITERATION_COOLDOWN           30 → 30     (unchanged)
+```
+
+200,000 is the **floor** the script clamps to, so its raw suggestion was lower still — average nightly output is 95,242 with zero cap hits across those 7 nights. That change applies automatically at **Sunday 21:00**. If you'd rather it not drop that far, raise the floor at `scripts/tune-budget.sh` (`suggested_tokens = max(suggested_tokens, 200000)`) before then, or run `./scripts/tune-budget.sh --dry-run` yourself to re-check against fresher data.
 
 ### 2026-08-28 — Pilot PR backlog cleared (#24, #22 merged; #8 closed superseded) + honest PR-creation failures
 
