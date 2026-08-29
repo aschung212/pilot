@@ -67,6 +67,34 @@ DECISIONS_FILE="${PRODUCT_DECISIONS_FILE:-}"
 [ -n "$DECISIONS_FILE" ] && [ ! -f "$DECISIONS_FILE" ] && echo "  ⚠️ Product decisions file not found: $DECISIONS_FILE" >&2
 PRODUCT_DECISIONS=$(cat "$DECISIONS_FILE" 2>/dev/null || echo "No product decisions file found")
 
+# ── Reconcile issues whose PR was closed unmerged ────────────────────────
+# Runs BEFORE the triageable query on purpose: reconcile moves rejected-PR
+# issues out of state:started (which `triageable` excludes) and into
+# state:triage, so anything it releases is triaged in this same run rather
+# than waiting a week.
+#
+# This is a pre-step, not a gate — a reconcile failure must never stop triage
+# from running, so its exit status is logged and swallowed.
+#
+# Kill switch: PR_RECONCILE_ENABLED=0 skips it entirely.
+RECONCILE="$SCRIPT_DIR/pr-close-reconcile.sh"
+if [ "${PR_RECONCILE_ENABLED:-1}" = "0" ]; then
+  echo "  ⏭  PR-close reconcile disabled (PR_RECONCILE_ENABLED=0)" | tee -a "$TRIAGE_LOG"
+elif [ ! -x "$RECONCILE" ]; then
+  echo "  ⚠️  PR-close reconcile not found at $RECONCILE — skipping" | tee -a "$TRIAGE_LOG"
+  log_warn "pr-close-reconcile.sh missing or not executable"
+else
+  # Triage's --dry-run must not let a sub-step mutate the tracker.
+  RECONCILE_MODE="--apply"
+  [ "$DRY_RUN" = "--dry-run" ] && RECONCILE_MODE="--dry-run"
+  echo "  🔁 PR-close reconcile ($RECONCILE_MODE)..." | tee -a "$TRIAGE_LOG"
+  RECONCILE_OUT=$(bash "$RECONCILE" "$RECONCILE_MODE" 2>&1) || {
+    echo "  ⚠️  PR-close reconcile failed — continuing with triage" | tee -a "$TRIAGE_LOG"
+    log_warn "pr-close-reconcile failed: $(echo "$RECONCILE_OUT" | tail -3 | tr '\n' ' ')"
+  }
+  echo "$RECONCILE_OUT" | grep -E "^(  [✖↩？]|Closed:)" | sed 's/^/    /' | tee -a "$TRIAGE_LOG" || true
+fi
+
 # Get every issue in scope for triage. "triageable" is exclusion-based:
 # every open issue that is NOT in {state:started, state:blocked, state:canceled}.
 # This includes state:triage, state:backlog, state:unstarted, AND issues with

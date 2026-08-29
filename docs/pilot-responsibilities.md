@@ -90,6 +90,7 @@ Verify with `launchctl list | grep doc-drift`. It fires weekly but no-ops on odd
 
 ## What's Fully Automated
 
+- **PR-close reconcile** — the first step of every Triage run: an issue whose PR was closed unmerged is either closed (when a rejection verdict is recorded and the title/body links agree) or released from `state:started` back to `state:triage`. Prevents the leak that hid 74 of 107 open issues from Triage. Kill switch `PR_RECONCILE_ENABLED=0`.
 - Decomposed pipeline — 10 independent services, each with its own launchd plist (plus the daily digest). No orchestrator:
   - Discovery (Sun/Tue/Thu 10 PM): finds improvements, creates GitHub issues (Gemini + Claude). **GA-readiness mode since 2026-08-21:** rotation covers only bug-hunt, performance, ux-polish, accessibility, pwa-reliability, security-deps — no feature research, no test-coverage hunting.
   - Triage (Sun/Tue/Thu 10:30 PM): reviews issues, adds implementation plans (Gemini, Claude fallback). **GA gate:** net-new features and test-only issues are SKIPped ("deferred until post-GA"); only bug/perf/UX-polish/a11y/security work reaches the builder.
@@ -111,13 +112,11 @@ Verify with `launchctl list | grep doc-drift`. It fires weekly but no-ops on odd
 - Post-merge CI failure → Slack notification
 - Slack threading: one parent message per night, all updates threaded (updated for multi-PR output)
 - Slack webhooks: all notifications are token-free (no Claude instances spawned)
-- Test suite (bats-core, 303 tests across 24 files): fast tier (288 tests) runs on every commit via pre-commit hook, full tier (303 tests) runs on push via GitHub Actions CI
+- Test suite (bats-core, 307 tests across 24 files): fast tier (288 tests) runs on every commit via pre-commit hook, full tier (307 tests) runs on push via GitHub Actions CI
 - Auto-discovery smoke tests: fail when new scripts lack test coverage — enforces that every new script gets tests
 - Linear digest: posts board snapshot to #daily-review at 6:15 AM daily (launchd)
 
 ## What's NOT Automated
-
-- **PR-close reconcile** (`scripts/pr-close-reconcile.sh`) — built 2026-08-28 but deliberately unscheduled and dry-run by default; it closes issues, so run it by hand with `--apply` until you trust it
 
 - **~~Starting scripts~~** — ✅ Automated: every stage has its own launchd plist (see the service list above). There is no `com.aaron.lift-overnight` orchestrator; that plist was retired when the pipeline was decomposed.
 - **Loading new launchd plists** — a plist committed to `launchd/` does nothing until you `cp` it to `~/Library/LaunchAgents/` and `launchctl load` it. Check One-Time Setup above for any pending.
@@ -172,7 +171,7 @@ If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/T
 | `~/development/lift/CLAUDE.md` | Lift project standards (design, code, workflow) |
 | `~/.claude/commands/ai-review.md` | Daily review slash command |
 | `~/.claude/CLAUDE.md` | Global Claude instructions |
-| `~/development/pilot/tests/` | bats-core test suite — 24 test files, 303 tests (fast tier, 288, runs in the pre-commit hook) |
+| `~/development/pilot/tests/` | bats-core test suite — 24 test files, 307 tests (fast tier, 288, runs in the pre-commit hook) |
 | `~/development/pilot/.github/workflows/test.yml` | GitHub Actions CI — runs full test suite on push |
 | `~/development/pilot/.githooks/pre-commit` | Git pre-commit hook — runs fast test tier before every commit |
 | `~/Documents/Scripts/lift-triage.sh` | Gemini issue triage — reviews, enhances, and plans before builder runs |
@@ -218,7 +217,7 @@ If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/T
 
 **Root cause 1 — the `state:started` leak.** An issue flips to `state:started` when its PR opens; when that PR closes *unmerged*, nothing resets it. `tracker.sh`'s `triageable` query excludes `state:started`, so those issues became permanently invisible to Triage. **74 of 107 open issues carried `state:started` with zero open PRs** — 69% of the backlog unreachable by the pipeline's own self-cleaning stage.
 
-All 74 were repaired to `state:triage` (triageable but not pickable, so they get re-examined before the builder can claim one). New `scripts/pr-close-reconcile.sh` prevents recurrence — see architecture doc, agent section 10. 8 new bats tests; full suite **303 green**.
+All 74 were repaired to `state:triage` (triageable but not pickable, so they get re-examined before the builder can claim one). New `scripts/pr-close-reconcile.sh` prevents recurrence — see architecture doc, agent section 10. 8 new bats tests; full suite **307 green**.
 
 Note this bucket was never undetected: `cleanup.sh` computes it and deliberately reports rather than acts ("a closed-unmerged PR may have been a deliberate rejection"). That rule is sound — it failed because the surfaced list was never worked through, reaching 74. The new script resolves only the subset whose decision is already recorded as a verdict on the PR; everything else still comes to you.
 
@@ -226,9 +225,20 @@ Note this bucket was never undetected: `cleanup.sh` computes it and deliberately
 
 `data/lift-discovery-log.md` shows it happening: **`[testing]` ran 2026-08-23 and `[monetization]` ran 2026-08-25**, producing #1188–#1191 and the #1201–#1205 Supporter cluster — 9 of the issues this audit closed, and monetization is banned outright by the GA rules. **Fix pending:** gate the retired focuses behind an explicit opt-in so a bare `discover.sh testing` refuses.
 
+### 2026-08-28 — PR-close reconcile moved from manual to automatic (inside Triage)
+
+Per your call that it must not need manual execution: `pr-close-reconcile.sh` now runs as the **first step of every Triage run**, immediately before the `list triageable` query — so an issue it releases from `state:started` is triaged the same night rather than waiting a week.
+
+- Triage passes `--apply` (or `--dry-run` when Triage itself is dry-run, so a preview never mutates the tracker).
+- A reconcile failure is **non-fatal** — logged and swallowed; it is a pre-step, not a gate.
+- Kill switch: `PR_RECONCILE_ENABLED=0`.
+- Verified live: a `--dry-run` Triage logged the reconcile pass, correctly flagged PR #1065's conflicting links without touching anything, then proceeded to its 23 untriaged issues.
+
+Tests: +4 in `triage.bats` (ordering before the triageable query, failure non-fatal, dry-run propagation, kill switch). Suite 307 green.
+
 ### ⚠️ New for Aaron
 
-1. **`pr-close-reconcile.sh` is not scheduled.** It defaults to a dry run. Run `./scripts/pr-close-reconcile.sh` to preview, `--apply` to act. Schedule it (before Triage) once you've watched a few runs.
+1. **`pr-close-reconcile.sh` runs automatically inside Triage** — first step of every run, before the triageable query, so issues it releases are triaged the same night. It can close issues; watch the first few Triage logs. Disable with `PR_RECONCILE_ENABLED=0` if it misbehaves.
 2. **The five stale focus prompts still need rewriting or deleting** — this is the remaining half of the fix and it is not done. `ui-refinement` and `pwa-reliability` show the pattern; the other five were missed by the GA shift.
 3. **`state:started` now means what it says.** 74 stale labels were cleared, so the `list pickable` / `list triageable` pools reflect reality again — expect Triage to have real work to do on its next run.
 4. [pilot#28](https://github.com/aschung212/pilot/issues/28) tracks the filing-side guards (filed during this audit as LIFT-1263 and relocated the same day — it is a Pilot defect, not a Lift one).
