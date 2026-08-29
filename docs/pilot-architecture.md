@@ -277,11 +277,37 @@ Recycled counts are appended to `data/lift-cleanup-metrics.csv` as a fourth `rec
 
 > **Adapter query limits.** Every open-issue query in `tracker.sh` shares a single cap, `GH_OPEN_LIMIT` (default **1000**, overridable by env). Truncation here fails *silently* — `gh issue list` just returns a short list with no error — so a stale cap hides issues from every consumer at once. This has bitten twice: `list <state>` was capped at 100 until 2026-07-27, hiding 31 `state:started` issues from the recycler; the 200 cap that replaced it was found on 2026-08-28 hiding **8 of 10** triageable issues and **3 of 5** pickable ones behind 265 open issues, leaving the builder to choose from a pool of 2. `gh_list` now also warns on stderr when an open-issue query comes back at exactly the cap, which is the only externally visible symptom of truncation. Keep `GH_OPEN_LIMIT` comfortably above the real open-issue count.
 
+### 10. PR-Close Reconcile
+**Script:** `pr-close-reconcile.sh`
+**When:** On demand (`--apply`); intended to run before Triage so reconciled issues are re-examined the same night
+
+**The leak.** An issue flips to `state:started` when its PR opens. When that PR is closed **unmerged**, nothing resets the label, so the issue keeps `state:started` forever — and `tracker.sh`'s `triageable` query excludes `state:started`, so the issue becomes permanently invisible to Triage. Nothing re-examines it, while the builder keeps seeing a backlog entry whose implementation was already rejected.
+
+Measured 2026-08-28: **74 of 107 open Lift issues carried `state:started` with zero open PRs** — 69% of the backlog unreachable by the pipeline's own self-cleaning stage. The audit that day closed 149 issues, 41 of them "PR closed, issue left open".
+
+**What it does.** For each unmerged PR closed inside the lookback window (`--since`, default 14d) whose linked issue is still open:
+
+| Signal | Action |
+|---|---|
+| Title and body issue links **agree**, and the closing comment carries a rejection verdict | close the issue `not planned`, quoting the verdict |
+| Link from only one source, or no verdict | reset `state:started` → `state:triage` — never closed |
+| Title and body links **disagree** | reported for a human; nothing is touched |
+
+`state:triage` rather than `state:unstarted` is deliberate: triageable but **not** pickable, so a reconciled issue is re-examined before the builder can spend a run on it.
+
+**Trust model.** PR link metadata in the Lift repo is unreliable — PR #1065 is titled `feat: add superset/circuit grouping for exercises (#616)` while its body reads `Issue: LIFT-1064`, an unrelated manifest issue, because the builder reused a body template. Trusting either source alone would have closed a legitimate issue. Closing therefore requires two agreeing signals; anything weaker downgrades to the safe action.
+
+**Relationship to Issue Cleanup (section 9).** `cleanup.sh` already derives this bucket and deliberately refuses to act on it ("a closed-unmerged PR may have been a deliberate rejection … surfaced for a human decision instead"). This script does not repeal that rule — it resolves only the subset where the decision is **already recorded** as a verdict on the PR. Everything else still reaches Aaron through cleanup's `data/lift-needs-decision.txt` and the digest's "⚖️ Needs your call" line. The rule failed in practice not because it was wrong but because the list was never worked: it reached 74.
+
+> **Divergence risk.** cleanup.sh independently derives the same bucket and harvests the same closing comments (into `data/lift-build-learnings.md`). Two derivations of one fact drift — change the bucket rule in both files or collapse them.
+
+Defaults to a dry run; mutations require `--apply`. Writes `data/lift-pr-close-reconcile-YYYY-MM-DD.md`; `--notify` posts a summary to #lift-automation. If the candidate extractor fails it **aborts** rather than reporting an empty result set, because a crash that looks like a clean run is the failure mode the script exists to prevent.
+
 ---
 
 ## Testing Infrastructure
 
-The pipeline has a bats-core test suite with **295 tests across 23 test files** in `~/development/pilot/tests/`. Tests use two-tier execution to balance speed with thoroughness:
+The pipeline has a bats-core test suite with **303 tests across 24 test files** in `~/development/pilot/tests/`. Tests use two-tier execution to balance speed with thoroughness:
 
 **Fast tier (288 tests) — pre-commit hook:**
 - Runs before every commit via `.githooks/pre-commit`
@@ -290,7 +316,7 @@ The pipeline has a bats-core test suite with **295 tests across 23 test files** 
 - Parallel execution via GNU parallel (`bats -j 8`)
 - Blocks commit if any test fails
 
-**Full tier (295 tests) — GitHub Actions CI:**
+**Full tier (303 tests) — GitHub Actions CI:**
 - Runs on every push via `.github/workflows/test.yml`
 - Includes everything in the fast tier plus integration-level tests (CSV analysis, full script invocations)
 - Test paths resolve dynamically (no hardcoded local paths) for CI runner compatibility
@@ -402,8 +428,9 @@ Feedback loop → canceled issues + product decisions steer discovery;
 | `~/development/pilot/lib/log.sh` | Shared structured logging library |
 | `~/development/pilot/config/budget.conf` | Budget config (auto-tuned) |
 | `~/development/pilot/scripts/stale-pr-audit.sh` | Weekly audit: open PRs whose work has already shipped (no-op merges, duplicate/colliding migrations) |
+| `~/development/pilot/scripts/pr-close-reconcile.sh` | Closes/re-triages issues whose PR was closed unmerged — the state:started leak that hid 69% of the backlog from Triage |
 | `~/development/pilot/scripts/doc-drift-audit.sh` | Biweekly audit: docs vs. the repo's actual state (checks in `lib/doc-drift-check.py`) |
-| `~/development/pilot/tests/` | bats-core test suite (295 tests, 23 files, two-tier execution) |
+| `~/development/pilot/tests/` | bats-core test suite (303 tests, 23 files, two-tier execution) |
 | `~/development/pilot/.github/workflows/test.yml` | GitHub Actions CI — full test suite on push |
 | `~/development/pilot/.githooks/pre-commit` | Pre-commit hook — fast test tier on every commit |
 | `~/development/pilot/project.env` | Lift-specific configuration (git-ignored) |
@@ -418,6 +445,18 @@ See [Pilot Responsibilities](pilot-responsibilities.md) for the complete list of
 ---
 
 ## Changelog
+
+### 2026-08-28 — Backlog audit (149 issues closed) + PR-close reconcile
+
+A full audit of the Lift backlog closed **149 of 255 open issues** — 58%. Breakdown: 34 already shipped on master, 36 whose PR was closed unmerged (rejection, stale, or silent), 19 in the dead Supporter/monetization thread, 11 duplicates, 2 obsolete, plus a bloat pass closing 41 more (7 chart affordances, 10 coverage-chasing tests, 7 architect refactor churn, 6 speculative perf, and overlapping onboarding/share items).
+
+**Root cause 1 — the `state:started` leak.** `triageable` in `tracker.sh` excludes `state:started`, so an issue whose PR closed unmerged became permanently invisible to Triage. 74 of 107 open issues carried it with **zero** open PRs. All 74 were repaired to `state:triage`. New `scripts/pr-close-reconcile.sh` (agent section 10, +8 bats tests) prevents recurrence.
+
+**Root cause 2 — retired discovery focuses are reachable with no guard.** The GA shift (`da78cc4`, 2026-08-21) correctly removed the feature-hunting focuses from the rotation: the queue is now `bug-hunt / performance / ux-polish / accessibility / pwa-reliability / security-deps`, stamped `2026-08-21-ga`. But "retired from rotation" is enforced by nothing — `discover.sh <focus>` accepts any name still present in the `case` block, and those retired prompts are unchanged since 2026-04-01, still soliciting exactly what the GA rules forbid (`competitors` still reads "Find features users love that Lift is missing").
+
+`data/lift-discovery-log.md` shows it happening: **`[testing]` ran 2026-08-23 and `[monetization]` ran 2026-08-25**, producing #1188–#1191 and the #1201–#1205 Supporter cluster — 9 of the issues this audit closed, and monetization is banned outright by the GA rules. **Fix pending:** gate the retired focuses behind an explicit opt-in so a bare `discover.sh testing` refuses.
+
+[pilot#28](https://github.com/aschung212/pilot/issues/28) tracks the filing-side guards (filed during this audit as LIFT-1263 and relocated the same day — it is a Pilot defect, not a Lift one) (dedupe against open issues, grep master before filing, check closed/rejected, honour settled patterns in CLAUDE.md).
 
 ### 2026-08-28 — Pilot's own issue queue: defects-only contract, working dedupe, and a consumer
 

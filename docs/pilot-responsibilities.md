@@ -111,11 +111,13 @@ Verify with `launchctl list | grep doc-drift`. It fires weekly but no-ops on odd
 - Post-merge CI failure → Slack notification
 - Slack threading: one parent message per night, all updates threaded (updated for multi-PR output)
 - Slack webhooks: all notifications are token-free (no Claude instances spawned)
-- Test suite (bats-core, 295 tests across 23 files): fast tier (288 tests) runs on every commit via pre-commit hook, full tier (295 tests) runs on push via GitHub Actions CI
+- Test suite (bats-core, 303 tests across 24 files): fast tier (288 tests) runs on every commit via pre-commit hook, full tier (303 tests) runs on push via GitHub Actions CI
 - Auto-discovery smoke tests: fail when new scripts lack test coverage — enforces that every new script gets tests
 - Linear digest: posts board snapshot to #daily-review at 6:15 AM daily (launchd)
 
 ## What's NOT Automated
+
+- **PR-close reconcile** (`scripts/pr-close-reconcile.sh`) — built 2026-08-28 but deliberately unscheduled and dry-run by default; it closes issues, so run it by hand with `--apply` until you trust it
 
 - **~~Starting scripts~~** — ✅ Automated: every stage has its own launchd plist (see the service list above). There is no `com.aaron.lift-overnight` orchestrator; that plist was retired when the pipeline was decomposed.
 - **Loading new launchd plists** — a plist committed to `launchd/` does nothing until you `cp` it to `~/Library/LaunchAgents/` and `launchctl load` it. Check One-Time Setup above for any pending.
@@ -170,7 +172,7 @@ If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/T
 | `~/development/lift/CLAUDE.md` | Lift project standards (design, code, workflow) |
 | `~/.claude/commands/ai-review.md` | Daily review slash command |
 | `~/.claude/CLAUDE.md` | Global Claude instructions |
-| `~/development/pilot/tests/` | bats-core test suite — 23 test files, 295 tests (fast tier, 288, runs in the pre-commit hook) |
+| `~/development/pilot/tests/` | bats-core test suite — 24 test files, 303 tests (fast tier, 288, runs in the pre-commit hook) |
 | `~/development/pilot/.github/workflows/test.yml` | GitHub Actions CI — runs full test suite on push |
 | `~/development/pilot/.githooks/pre-commit` | Git pre-commit hook — runs fast test tier before every commit |
 | `~/Documents/Scripts/lift-triage.sh` | Gemini issue triage — reviews, enhances, and plans before builder runs |
@@ -200,6 +202,36 @@ If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/T
 ---
 
 ## Changelog
+
+### 2026-08-28 — Backlog audit: 149 of 255 Lift issues closed, and the leak that let them pile up
+
+**What happened.** A full audit of the Lift backlog closed **149 of 255 open issues (58%)**. The backlog had stopped describing work that needed doing, so the builder was spending runs on issues that were already shipped, already rejected, or duplicates.
+
+| Cause | Closed |
+|---|---|
+| Already shipped on master | 34 |
+| PR closed unmerged (rejection / stale / silent), issue left open | 36 |
+| Supporter / monetization thread (confirmed dead) | 19 |
+| Duplicates of another open issue | 11 |
+| Obsolete premise or settled pattern | 2 |
+| Bloat pass — charts, coverage-chasing tests, refactor churn, speculative perf | 47 |
+
+**Root cause 1 — the `state:started` leak.** An issue flips to `state:started` when its PR opens; when that PR closes *unmerged*, nothing resets it. `tracker.sh`'s `triageable` query excludes `state:started`, so those issues became permanently invisible to Triage. **74 of 107 open issues carried `state:started` with zero open PRs** — 69% of the backlog unreachable by the pipeline's own self-cleaning stage.
+
+All 74 were repaired to `state:triage` (triageable but not pickable, so they get re-examined before the builder can claim one). New `scripts/pr-close-reconcile.sh` prevents recurrence — see architecture doc, agent section 10. 8 new bats tests; full suite **303 green**.
+
+Note this bucket was never undetected: `cleanup.sh` computes it and deliberately reports rather than acts ("a closed-unmerged PR may have been a deliberate rejection"). That rule is sound — it failed because the surfaced list was never worked through, reaching 74. The new script resolves only the subset whose decision is already recorded as a verdict on the PR; everything else still comes to you.
+
+**Root cause 2 — retired discovery focuses are reachable with no guard.** The GA shift (`da78cc4`, 2026-08-21) correctly removed the feature-hunting focuses from the rotation: the queue is now `bug-hunt / performance / ux-polish / accessibility / pwa-reliability / security-deps`, stamped `2026-08-21-ga`. But "retired from rotation" is enforced by nothing — `discover.sh <focus>` accepts any name still present in the `case` block, and those retired prompts are unchanged since 2026-04-01, still soliciting exactly what the GA rules forbid (`competitors` still reads "Find features users love that Lift is missing").
+
+`data/lift-discovery-log.md` shows it happening: **`[testing]` ran 2026-08-23 and `[monetization]` ran 2026-08-25**, producing #1188–#1191 and the #1201–#1205 Supporter cluster — 9 of the issues this audit closed, and monetization is banned outright by the GA rules. **Fix pending:** gate the retired focuses behind an explicit opt-in so a bare `discover.sh testing` refuses.
+
+### ⚠️ New for Aaron
+
+1. **`pr-close-reconcile.sh` is not scheduled.** It defaults to a dry run. Run `./scripts/pr-close-reconcile.sh` to preview, `--apply` to act. Schedule it (before Triage) once you've watched a few runs.
+2. **The five stale focus prompts still need rewriting or deleting** — this is the remaining half of the fix and it is not done. `ui-refinement` and `pwa-reliability` show the pattern; the other five were missed by the GA shift.
+3. **`state:started` now means what it says.** 74 stale labels were cleared, so the `list pickable` / `list triageable` pools reflect reality again — expect Triage to have real work to do on its next run.
+4. [pilot#28](https://github.com/aschung212/pilot/issues/28) tracks the filing-side guards (filed during this audit as LIFT-1263 and relocated the same day — it is a Pilot defect, not a Lift one).
 
 ### 2026-08-28 — The Pilot repo's own issue queue gets a contract and a consumer
 
@@ -242,7 +274,7 @@ Both are fixed as of yesterday's merge, so they should clear on their next runs 
 
 **Also fixed:** the Anomalies section printed "✅ No anomalies" and then listed the warnings underneath it. It now uses the existing `append_anomaly` helper, which replaces the placeholder on the first finding.
 
-**Verification.** Full suite **287 passing, 0 failures** (9 new tests). Verified against the real machine state, not just fixtures. `bash -n` clean; doc-drift audit clean.
+**Verification.** Full suite **295 passing, 0 failures** (9 new tests). Verified against the real machine state, not just fixtures. `bash -n` clean; doc-drift audit clean.
 
 **My mistake, worth flagging:** while testing I ran `health-report.sh` without `--dry-run`, which posted a real Weekly Health Report to #pilot and #lift-automation. The report was accurate but unscheduled — if you saw a stray health report yesterday, that was me.
 
