@@ -368,3 +368,36 @@ COMPLEXITY: small"
   # Both comment templates render it as a definition-of-done checklist
   [ "$(grep -c 'Acceptance criteria.*definition of done' "$TRIAGE_SCRIPT")" -ge 2 ]
 }
+
+# ── PR-close reconcile pre-step (added 2026-08-28) ───────────────────────────
+# Reconcile runs BEFORE `list triageable` so issues it releases from
+# state:started are triaged in the same run. It is a pre-step, not a gate:
+# a failure must never stop triage.
+
+@test "triage: reconcile runs before the triageable query" {
+  run grep -n "pr-close-reconcile.sh\|list triageable" "$PILOT_DIR/scripts/triage.sh"
+  [ "$status" -eq 0 ]
+  # First match must be the reconcile wiring, not the triageable query.
+  first=$(echo "$output" | head -1)
+  [[ "$first" == *"pr-close-reconcile"* ]]
+}
+
+@test "triage: reconcile failure does not abort triage" {
+  # The invocation must swallow a non-zero exit (|| { ... }) rather than
+  # letting set -e / a bare call kill the run.
+  run grep -A4 'RECONCILE_OUT=\$(bash "\$RECONCILE"' "$PILOT_DIR/scripts/triage.sh"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"continuing with triage"* ]]
+}
+
+@test "triage: --dry-run propagates to the reconcile sub-step" {
+  run grep -B2 -A2 'RECONCILE_MODE="--dry-run"' "$PILOT_DIR/scripts/triage.sh"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'DRY_RUN" = "--dry-run"'* ]]
+}
+
+@test "triage: reconcile honours the PR_RECONCILE_ENABLED kill switch" {
+  run grep -n 'PR_RECONCILE_ENABLED' "$PILOT_DIR/scripts/triage.sh"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *':-1'* ]]
+}

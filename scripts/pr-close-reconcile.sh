@@ -64,7 +64,14 @@
 # Idempotent: every mutation leaves a marker comment keyed to the PR number,
 # and an issue already carrying that marker is skipped on later runs.
 #
-# Usage:
+# HOW IT RUNS
+#
+# Invoked automatically by triage.sh, immediately BEFORE its `list triageable`
+# query, so an issue this releases from state:started is triaged in the same
+# run. Triage passes --apply (or --dry-run when triage itself is dry-run), and
+# treats a failure here as non-fatal. PR_RECONCILE_ENABLED=0 disables it.
+#
+# Usage (manual runs still work):
 #   ./pr-close-reconcile.sh                     # DRY RUN (default)
 #   ./pr-close-reconcile.sh --apply
 #   ./pr-close-reconcile.sh --apply --notify
