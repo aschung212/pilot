@@ -19,6 +19,7 @@ SCRIPT_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
 [ -z "${_PILOT_TEST_MODE:-}" ] && [ -f "$SCRIPT_DIR/../project.env" ] && source "$SCRIPT_DIR/../project.env"
 
 NOTIFY="$SCRIPT_DIR/../adapters/notify.sh"
+source "$SCRIPT_DIR/../lib/service-health.sh"
 TRACKER="$SCRIPT_DIR/../adapters/tracker.sh"
 source "$SCRIPT_DIR/../lib/log.sh"
 LOG_COMPONENT="health-report"
@@ -272,19 +273,29 @@ for m in ms:
 " 2>/dev/null || true)
 [ -z "$GA_LINE" ] && GA_LINE="milestone \"$GA_MILESTONE\" not found — create it in ${GITHUB_ISSUES_REPO:-the project repo} and tag GA-blocking issues to track release burndown"
 
-# Check launchd services are loaded
-LOADED_SERVICES=$(launchctl list 2>/dev/null || true)
-MISSING_SERVICES=""
-for svc in pilot-discover pilot-triage pilot-builder; do
-  if ! echo "$LOADED_SERVICES" | grep -q "com.aaron.$svc"; then
-    MISSING_SERVICES+="
-  ⚠️ launchd service $svc is not loaded"
-  fi
-done
-if [ -n "$MISSING_SERVICES" ]; then
-  ANOMALIES+="$MISSING_SERVICES"
+# ── launchd service health ───────────────────────────────────────────────────
+# Was a hardcoded three-service loaded/not-loaded check until 2026-08-28, which
+# is why `tune-budget` (exit 126 since its first run) and `roadmap-synth`
+# (exit 1 every week since 2026-05-06) stayed broken for months: neither was in
+# the list, and the check never looked at exit codes anyway. Now derived from
+# the committed plists, so a new service is covered the moment it is added.
+LC_SNAPSHOT="$OUTPUT_DIR/.launchctl-list.txt"
+launchctl list > "$LC_SNAPSHOT" 2>/dev/null || true
+SERVICE_FINDINGS=$(service_health_check \
+  "$LC_SNAPSHOT" \
+  "$SCRIPT_DIR/../launchd" \
+  "${LAUNCHD_LOG_DIR:-$HOME/Documents/Claude/outputs}" || true)
+rm -f "$LC_SNAPSHOT"
+
+if [ -n "$SERVICE_FINDINGS" ]; then
+  # append_anomaly (defined above) replaces the "✅ No anomalies" placeholder on
+  # the first finding instead of listing warnings underneath it.
+  while IFS= read -r _f; do
+    [ -z "$_f" ] && continue
+    append_anomaly "$_f"
+  done <<< "$SERVICE_FINDINGS"
 fi
-SERVICES_OK=$([ -z "$MISSING_SERVICES" ] && echo true || echo false)
+SERVICES_OK=$([ -z "$SERVICE_FINDINGS" ] && echo true || echo false)
 
 # Write report
 cat > "$REPORT" << REPORT_EOF
@@ -328,7 +339,11 @@ cat > "$REPORT" << REPORT_EOF
 - **Budget adjustments:** $TUNE_CHANGES
 
 ## Services
-$(if $SERVICES_OK; then echo "✅ All launchd services loaded"; else echo "⚠️ Some services missing — check launchctl"; fi)
+$(if $SERVICES_OK; then
+    echo "✅ All $(ls "$SCRIPT_DIR/../launchd"/*.plist 2>/dev/null | wc -l | tr -d ' ') launchd services loaded and last exited cleanly"
+  else
+    echo "$SERVICE_FINDINGS" | sed 's/^/- ⚠️ /'
+  fi)
 
 ## Anomalies
 $ANOMALIES

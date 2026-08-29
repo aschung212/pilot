@@ -52,6 +52,7 @@ updated: 2026-05-08
 | What | How |
 |---|---|
 | **Review Linear digest** | Auto-posted to #daily-review at 6:15 AM via launchd. Check it during morning Slack review. |
+| **Read the Health Report's Services section** | Auto-posted Sunday 08:00. It now reconciles every committed plist against `launchctl`: not loaded, non-zero last exit, or a log staler than the service's own cadence. Nothing watched launchd exit codes before 2026-08-28, which is how two agents stayed broken for months. Anything listed there is a service that is failing or not running at all. |
 | **Act on the doc-drift audit** | Auto-posted to #lift-automation Sunday 09:00, **every other week** (even ISO weeks). Flags docs that disagree with the repo: undocumented scripts/adapters/env vars, dead references, plists missing from the schedule tables, stale test counts, broken vault paths. Each finding needs your call on which side is wrong — sometimes the doc is right and the code is the bug. Run any time: `./scripts/doc-drift-audit.sh`. |
 | **Act on the stale-PR audit** | Auto-posted to #lift-automation Sunday 08:15. It flags open PRs whose work already shipped — no-op merges, migrations duplicating a master column, two open PRs adding the same column. A clean week still posts one line, so silence means the job broke. Anything flagged is a PR to close or land **before** Sunday 22:00 discovery. |
 | **Manage Linear backlog** | Reprioritize, add comments/context to flagged issues. Completed/canceled issues and duplicates are archived automatically each night. When canceling, add a comment explaining why — discovery agent learns from this. |
@@ -110,7 +111,7 @@ Verify with `launchctl list | grep doc-drift`. It fires weekly but no-ops on odd
 - Post-merge CI failure → Slack notification
 - Slack threading: one parent message per night, all updates threaded (updated for multi-PR output)
 - Slack webhooks: all notifications are token-free (no Claude instances spawned)
-- Test suite (bats-core, 286 tests across 22 files): fast tier (279 tests) runs on every commit via pre-commit hook, full tier (286 tests) runs on push via GitHub Actions CI
+- Test suite (bats-core, 295 tests across 23 files): fast tier (288 tests) runs on every commit via pre-commit hook, full tier (295 tests) runs on push via GitHub Actions CI
 - Auto-discovery smoke tests: fail when new scripts lack test coverage — enforces that every new script gets tests
 - Linear digest: posts board snapshot to #daily-review at 6:15 AM daily (launchd)
 
@@ -165,10 +166,11 @@ If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/T
 | `~/development/pilot/scripts/doc-drift-audit.sh` | Biweekly (Sun 9:00 AM) — checks the docs against the repo's real state; checks live in `lib/doc-drift-check.py` |
 | `~/development/pilot/adapters/` | Swappable adapters: tracker, notify, ai-code, ai-research |
 | `~/development/pilot/lib/log.sh` | Shared structured logging (unified log, error alerting) |
+| `~/development/pilot/lib/service-health.sh` | Reconciles committed plists against `launchctl` — not loaded / non-zero exit / stale log. Called by the weekly Health Report. |
 | `~/development/lift/CLAUDE.md` | Lift project standards (design, code, workflow) |
 | `~/.claude/commands/ai-review.md` | Daily review slash command |
 | `~/.claude/CLAUDE.md` | Global Claude instructions |
-| `~/development/pilot/tests/` | bats-core test suite — 22 test files, 286 tests (fast tier, 279, runs in the pre-commit hook) |
+| `~/development/pilot/tests/` | bats-core test suite — 23 test files, 295 tests (fast tier, 288, runs in the pre-commit hook) |
 | `~/development/pilot/.github/workflows/test.yml` | GitHub Actions CI — runs full test suite on push |
 | `~/development/pilot/.githooks/pre-commit` | Git pre-commit hook — runs fast test tier before every commit |
 | `~/Documents/Scripts/lift-triage.sh` | Gemini issue triage — reviews, enhances, and plans before builder runs |
@@ -210,6 +212,39 @@ Your question — "is any agent actually reading the auditor's issues?" — had 
 - **The morning digest now surfaces the queue.** A "⚙️ Pilot pipeline" section in the 6:15 AM digest lists open Pilot-repo issues, rendered only when nonzero.
 
 **New responsibility for you (small):** when the digest shows the "⚙️ Pilot pipeline" section, those are pipeline defects waiting on a human — no agent works that queue, deliberately (a builder editing its own pipeline would permanently violate the Infrastructure Change Protocol). Fix them yourself or hand them to a Claude session. The queue should be near-empty; if it grows, that's the signal something structural is wrong. Currently open: pilot#28 (discovery/architect re-filing shipped and rejected work).
+
+### 2026-08-28 — The Health Report now watches launchd exit codes
+
+Yesterday's two dead agents both sat in one column of `launchctl list` that nothing read. The Health Report's service check existed, but it was hardcoded to three services (discover / triage / builder) and only asked whether they were **loaded** — never how they **exited**. Neither `tune-budget` (exit 126 since its first run) nor `roadmap-synth` (exit 1 weekly since 2026-05-06) was even in the list.
+
+**`lib/service-health.sh`** replaces it. The service list is **derived from the committed plists**, so a new service is covered the moment it's added rather than when someone remembers to extend a hardcoded list. It answers three questions, ordered by how long each failure can hide:
+
+| Question | Failure it catches |
+|---|---|
+| Is a committed plist not loaded? | It never runs, and nothing says so |
+| Did a loaded service exit non-zero? | It runs and fails, silently |
+| Is its log older than its own cadence? | Loaded, but never actually firing |
+
+Exit **126** ("command found but not executable") and **127** ("command not found") get an explanatory hint — 126 is exactly what the tuner's malformed heredoc produced.
+
+Findings appear in both the **Services** section and the **Anomalies** list, so they reach Slack rather than sitting in a file.
+
+**Kept deliberately quiet.** Staleness thresholds derive from each plist's own schedule (`2× cadence + 1 day`), and a plist younger than one full cadence is exempt — without that, both services you loaded yesterday reported as broken because they hadn't fired yet. Four of the nine tests assert it says *nothing*; a weekly report that cries wolf gets skimmed and then ignored.
+
+**On the current machine it reports exactly the two known failures** and nothing else:
+
+```
+com.aaron.pilot-roadmap last exited 1
+com.aaron.pilot-tune-budget last exited 126 (command found but not executable — check the invocation)
+```
+
+Both are fixed as of yesterday's merge, so they should clear on their next runs — roadmap Wednesday, tune-budget Sunday. **If they don't clear, the fixes didn't take**, and this check is now how you'd find out.
+
+**Also fixed:** the Anomalies section printed "✅ No anomalies" and then listed the warnings underneath it. It now uses the existing `append_anomaly` helper, which replaces the placeholder on the first finding.
+
+**Verification.** Full suite **287 passing, 0 failures** (9 new tests). Verified against the real machine state, not just fixtures. `bash -n` clean; doc-drift audit clean.
+
+**My mistake, worth flagging:** while testing I ran `health-report.sh` without `--dry-run`, which posted a real Weekly Health Report to #pilot and #lift-automation. The report was accurate but unscheduled — if you saw a stray health report yesterday, that was me.
 
 ### 2026-08-28 — Two agents that had never once worked: the budget tuner and roadmap-synth
 
