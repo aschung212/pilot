@@ -135,7 +135,7 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
 - Updates issue tracker (marks issues In Progress/Blocked; closure deferred to PR merge via "Closes #N"). Post-run marker parsing goes through `_marker_lines` in `builder-utils.sh`, which accepts every separator the agent actually emits (`ISSUE_DONE:LIFT-N:summary`, `|`, em dash, or a bare marker) and normalizes them to a single pipe. The parsers previously required the pipe form the prompt asks for, which the agent had never once emitted — see the 2026-08-28 changelog entry.
 - Repeats for up to 12 iterations or 500K output tokens
 
-**Controls** (auto-tuned nightly by `lift-tune-budget.sh`):
+**Controls** (auto-tuned **weekly**, Sunday 21:00, by `tune-budget.sh`; `--dry-run` reports what it would change without writing):
 - Max iterations per night (default: 12)
 - Max output tokens per night (default: 500K)
 - Cooldown between iterations (default: 30s)
@@ -175,6 +175,8 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
 - Detects context bloat: flags when per-iteration duration trends up >50%
 
 > **Removed 2026-05-11:** The review tuner (`scripts/tune-reviews.sh`, weekly at Sun 21:15) was deleted. It was deprecated 2026-04-06 when the review system moved to inline hooks (no PR comments to learn from). Its `lift-review-learnings.md` data file had one remaining reader, `adapters/ai-review.sh`; that adapter was deleted 2026-07-17, so nothing reads the learnings file now.
+
+> **Was inert until 2026-08-28.** The tuner never adjusted a single value in its life. Its Python heredoc had the positional arguments on the line *after* the `PYEOF` terminator, so `python3` ran with an empty argv — every CSV path defaulted to `""`, it found no data, and it always returned `skip: True`. Bash then tried to *execute* the CSV path as a command: "Permission denied", exit **126**, which is what `launchctl list` had been reporting. Five unit tests passed throughout, because each one re-implements the Python inside the test file and none ever ran the real script. A second bug hid behind the first: `int(row.get('commits', 0))` returns `None` on a short row (`csv.DictReader` fills missing columns with `None`, so the `get` default never applies), which crashed on the 30 ragged rows in `lift-metrics.csv`. Both fixed; the end-to-end tests now drive the real script.
 
 ### 6. Stale-PR Audit
 **Script:** `stale-pr-audit.sh`
@@ -259,16 +261,16 @@ Recycled counts are appended to `data/lift-cleanup-metrics.csv` as a fourth `rec
 
 ## Testing Infrastructure
 
-The pipeline has a bats-core test suite with **251 tests across 22 test files** in `~/development/pilot/tests/`. Tests use two-tier execution to balance speed with thoroughness:
+The pipeline has a bats-core test suite with **278 tests across 22 test files** in `~/development/pilot/tests/`. Tests use two-tier execution to balance speed with thoroughness:
 
-**Fast tier (246 tests) — pre-commit hook:**
+**Fast tier (271 tests) — pre-commit hook:**
 - Runs before every commit via `.githooks/pre-commit`
 - Covers: unit tests, adapter contract tests, argument parsing, error handling, log formatting
 - Builder tests source real functions from `lib/builder-utils.sh` (not copies of logic)
 - Parallel execution via GNU parallel (`bats -j 8`)
 - Blocks commit if any test fails
 
-**Full tier (251 tests) — GitHub Actions CI:**
+**Full tier (278 tests) — GitHub Actions CI:**
 - Runs on every push via `.github/workflows/test.yml`
 - Includes everything in the fast tier plus integration-level tests (CSV analysis, full script invocations)
 - Test paths resolve dynamically (no hardcoded local paths) for CI runner compatibility
@@ -381,7 +383,7 @@ Feedback loop → canceled issues + product decisions steer discovery;
 | `~/development/pilot/config/budget.conf` | Budget config (auto-tuned) |
 | `~/development/pilot/scripts/stale-pr-audit.sh` | Weekly audit: open PRs whose work has already shipped (no-op merges, duplicate/colliding migrations) |
 | `~/development/pilot/scripts/doc-drift-audit.sh` | Biweekly audit: docs vs. the repo's actual state (checks in `lib/doc-drift-check.py`) |
-| `~/development/pilot/tests/` | bats-core test suite (251 tests, 22 files, two-tier execution) |
+| `~/development/pilot/tests/` | bats-core test suite (278 tests, 22 files, two-tier execution) |
 | `~/development/pilot/.github/workflows/test.yml` | GitHub Actions CI — full test suite on push |
 | `~/development/pilot/.githooks/pre-commit` | Pre-commit hook — fast test tier on every commit |
 | `~/development/pilot/project.env` | Lift-specific configuration (git-ignored) |
@@ -396,6 +398,14 @@ See [Pilot Responsibilities](pilot-responsibilities.md) for the complete list of
 ---
 
 ## Changelog
+
+### 2026-08-28 — Budget tuner and roadmap-synth: both broken since inception, both fixed
+
+`tune-budget.sh` had never adjusted a value: its heredoc's positional args sat after the `PYEOF` terminator, so python3 ran with an empty argv (always `skip: True`) and bash tried to execute the CSV path — exit 126. Behind that, `int(row.get('x', 0))` crashed on `None` from short `DictReader` rows. Five unit tests passed the whole time because each re-implements the Python in the test file rather than running the script. Added `--dry-run`, and end-to-end tests that drive the real script.
+
+`roadmap-synth.sh` had failed every week since 2026-05-06: Bun's `warn: CPU lacks AVX support` preamble made the captured envelope invalid JSON — the same breakage `builder.sh` was hardened against on 2026-05-19. The extractor now scans for the first parseable JSON line and strips Claude's ```json fence; replaying the real 2026-08-26 output recovers 10 themes.
+
+Also corrected both docs' claim that the budget is "auto-tuned nightly" — it is weekly, and it was not tuning at all.
 
 ### 2026-08-28 — PR-creation failures now fail honestly (closes the last live fragment of pilot PR #8)
 

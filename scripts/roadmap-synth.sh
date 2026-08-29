@@ -174,17 +174,57 @@ python3 - "$SYNTH_JSON" "$SYNTH_RESULT_FILE" << 'PYEOF'
 import json, sys
 
 in_path, out_path = sys.argv[1], sys.argv[2]
+
+
+def load_envelope(path):
+    """Parse the claude --output-format json envelope, tolerating a preamble.
+
+    The run captures stdout+stderr together (`> "$SYNTH_JSON" 2>&1`) and Bun
+    prepends `warn: CPU lacks AVX support ...` on this machine, so json.load()
+    on the whole file dies at "line 1 column 1 (char 0)". That is exactly the
+    bug that made all 12 pre-pick stages unparseable on 2026-05-19; builder.sh
+    was fixed then, roadmap-synth was not — and every roadmap run from
+    2026-05-06 to 2026-08-26 (17 consecutive weeks) failed this way.
+
+    Try the whole file first, then fall back to the first line that parses as a
+    JSON object.
+    """
+    with open(path) as f:
+        raw = f.read()
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+    for line in raw.splitlines():
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                return json.loads(line)
+            except json.JSONDecodeError:
+                continue
+    # Nothing parsed — re-raise against the full text for a useful message.
+    return json.loads(raw)
+
+
 try:
-    with open(in_path) as f:
-        data = json.load(f)
+    data = load_envelope(in_path)
 
     # Shape 1: SDK envelope — {"result": "<JSON string or dict>"}
     if "result" in data:
         result = data["result"]
         if isinstance(result, str) and result.strip():
-            # result is a JSON string — parse it
+            # result is a JSON string — parse it. Claude usually wraps it in a
+            # ```json fence, so strip that before giving up and treating the
+            # whole thing as prose.
+            candidate = result.strip()
+            if candidate.startswith("```"):
+                lines = candidate.splitlines()
+                lines = lines[1:]                      # drop the opening fence
+                if lines and lines[-1].strip() == "```":
+                    lines = lines[:-1]                 # drop the closing fence
+                candidate = "\n".join(lines).strip()
             try:
-                parsed = json.loads(result)
+                parsed = json.loads(candidate)
             except json.JSONDecodeError:
                 # Claude returned prose with JSON embedded; write raw for renderer
                 with open(out_path, "w") as f:

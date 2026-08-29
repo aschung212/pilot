@@ -7,6 +7,14 @@
 
 set -euo pipefail
 
+DRY_RUN=""
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run) DRY_RUN="1" ;;
+    *) echo "Unknown argument: $arg (valid: --dry-run)" >&2; exit 1 ;;
+  esac
+done
+
 [ -z "${_PILOT_TEST_MODE:-}" ] && [ -f "$HOME/.zshenv" ] && source "$HOME/.zshenv" 2>/dev/null || true
 REAL_SCRIPT="$(readlink "$0" 2>/dev/null || echo "$0")"
 SCRIPT_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
@@ -19,8 +27,8 @@ METRICS_CSV="$OUTPUT_DIR/lift-metrics.csv"
 RUNTIME_CSV="$OUTPUT_DIR/lift-runtime.csv"
 TUNE_LOG="$OUTPUT_DIR/lift-tune-log.csv"
 
-# Initialize tune log if needed
-if [ ! -f "$TUNE_LOG" ]; then
+# Initialize tune log if needed (never during a dry run — it writes nothing)
+if [ -z "$DRY_RUN" ] && [ ! -f "$TUNE_LOG" ]; then
   echo "date,iterations_before,iterations_after,tokens_before,tokens_after,cooldown_before,cooldown_after,reasons" > "$TUNE_LOG"
 fi
 
@@ -30,7 +38,7 @@ NOTIFY="$SCRIPT_DIR/../adapters/notify.sh"
 NIGHTS_COUNT=$([ -f "$USAGE_CSV" ] && tail -n +2 "$USAGE_CSV" | cut -d',' -f1 | sort -u | wc -l | tr -d ' ' || echo "0")
 if [ "$NIGHTS_COUNT" -lt 3 ]; then
   echo "🎛️ Auto-tuner: ${NIGHTS_COUNT}/3 nights of data collected. Skipping tuning until more data."
-  bash "$NOTIFY" --as budget-tuner send automation "🎛️ *Budget Tuner* — ${NIGHTS_COUNT}/3 nights collected, skipping" 2>/dev/null
+  [ -z "$DRY_RUN" ] && bash "$NOTIFY" --as budget-tuner send automation "🎛️ *Budget Tuner* — ${NIGHTS_COUNT}/3 nights collected, skipping" 2>/dev/null
   exit 0
 fi
 
@@ -41,7 +49,14 @@ OLD_TOKENS="$MAX_OUTPUT_TOKENS_PER_NIGHT"
 OLD_COOLDOWN="$ITERATION_COOLDOWN"
 
 # Analyze history and compute new values
-TUNING=$(python3 << 'PYEOF'
+# The positional args MUST be on this line, before the heredoc body. They were
+# stranded on their own line after PYEOF until 2026-08-28, which meant python3
+# ran with an empty argv (every path defaulted to "", so it found no data and
+# always returned skip:True) and bash then tried to EXECUTE the CSV path as a
+# command — "Permission denied", exit 126. The tuner had never adjusted a
+# single value since it was written: lift-tune-log.csv held only its header and
+# budget.conf had not changed since 2026-04-02.
+TUNING=$(python3 - "$USAGE_CSV" "$METRICS_CSV" "$RUNTIME_CSV" "$OLD_ITERS" "$OLD_TOKENS" "$OLD_COOLDOWN" << 'PYEOF'
 import csv, json, sys
 from collections import defaultdict
 from datetime import datetime
@@ -68,10 +83,10 @@ try:
             run = row.get('run', 'discover')
             if run == 'discover':
                 continue  # skip discovery runs for builder tuning
-            out = int(row.get('output_tokens', 0))
-            inp = int(row.get('input_tokens', 0))
-            cache = int(row.get('cache_read_tokens', 0))
-            dur = int(row.get('duration_sec', 0))
+            out = int(row.get('output_tokens') or 0)
+            inp = int(row.get('input_tokens') or 0)
+            cache = int(row.get('cache_read_tokens') or 0)
+            dur = int(row.get('duration_sec') or 0)
             nights[d]['iterations'] = max(nights[d]['iterations'], int(run))
             nights[d]['total_output'] += out
             nights[d]['total_input'] += inp
@@ -90,10 +105,10 @@ try:
         for row in reader:
             d = row['date']
             runtime_data[d] = {
-                'total_sec': int(row.get('total_sec', 0)),
-                'discover_sec': int(row.get('discover_sec', 0)),
-                'triage_sec': int(row.get('triage_sec', 0)),
-                'builder_sec': int(row.get('builder_sec', 0)),
+                'total_sec': int(row.get('total_sec') or 0),
+                'discover_sec': int(row.get('discover_sec') or 0),
+                'triage_sec': int(row.get('triage_sec') or 0),
+                'builder_sec': int(row.get('builder_sec') or 0),
             }
 except FileNotFoundError:
     pass
@@ -105,7 +120,12 @@ try:
         reader = csv.DictReader(f)
         for row in reader:
             d = row['date']
-            commits = int(row.get('commits', 0))
+            # `or 0`, not a get() default: csv.DictReader fills MISSING columns
+            # in a short row with None, so the key exists and the default never
+            # applies — int(None) raises. lift-metrics.csv has 30 such rows
+            # (rows written before the 2026-08 repair). builder.sh already used
+            # this idiom; the tuner did not, and never ran long enough to find out.
+            commits = int(row.get('commits') or 0)
             success = row.get('success', '')
             night_productivity[d]['commits'] += commits
             if success == 'true':
@@ -259,14 +279,14 @@ result = {
 }
 print(json.dumps(result))
 PYEOF
-"$USAGE_CSV" "$METRICS_CSV" "$RUNTIME_CSV" "$OLD_ITERS" "$OLD_TOKENS" "$OLD_COOLDOWN")
+)
 
 # Parse tuning result
 SKIP=$(echo "$TUNING" | python3 -c "import json,sys; print(json.load(sys.stdin).get('skip', True))")
 
 if [ "$SKIP" = "True" ]; then
   echo "🎛️ Auto-tuner: no adjustments needed."
-  bash "$NOTIFY" --as budget-tuner send automation "🎛️ *Budget Tuner* — analyzed $NIGHTS_COUNT nights, no adjustments needed ✅" 2>/dev/null
+  [ -z "$DRY_RUN" ] && bash "$NOTIFY" --as budget-tuner send automation "🎛️ *Budget Tuner* — analyzed $NIGHTS_COUNT nights, no adjustments needed ✅" 2>/dev/null
   exit 0
 fi
 
@@ -289,8 +309,19 @@ echo "📊 Auto-tuner adjustments:"
 echo "  $REASONS"
 echo "  Stats: $STATS"
 
-# Log the tuning decision
 DATE=$(date +%Y-%m-%d)
+
+if [ -n "$DRY_RUN" ]; then
+  echo ""
+  echo "  [dry-run] Would apply:"
+  echo "    MAX_ITERATIONS_PER_NIGHT   $OLD_ITERS → $NEW_ITERS"
+  echo "    MAX_OUTPUT_TOKENS_PER_NIGHT $OLD_TOKENS → $NEW_TOKENS"
+  echo "    ITERATION_COOLDOWN         $OLD_COOLDOWN → $NEW_COOLDOWN"
+  echo "  [dry-run] budget.conf, $(basename "$TUNE_LOG") and Slack left untouched."
+  exit 0
+fi
+
+# Log the tuning decision
 echo "$DATE,$OLD_ITERS,$NEW_ITERS,$OLD_TOKENS,$NEW_TOKENS,$OLD_COOLDOWN,$NEW_COOLDOWN,\"$REASONS\"" >> "$TUNE_LOG"
 
 # Update budget.conf
