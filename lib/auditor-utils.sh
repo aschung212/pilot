@@ -119,10 +119,37 @@ append_audit_history() {
     "$date" "$fid" "$sev" "$metric" "$mval" "$pval" "$delta" "$action_escaped" >> "$csv"
 }
 
+# ── audit_issue_worthy ───────────────────────────────────────────────────────
+# Should this finding ID file a GitHub issue at all?
+#
+# Aaron's ruling (2026-08-28, closing pilot#9–#19): cost-per-merged-PR and
+# time-to-merge both have *merged* PRs in the denominator, so they spike
+# whenever Aaron merges slowly — they measure his review bandwidth, not a
+# pipeline defect. Their only legitimate use is backpressure (the builder's
+# MAX_OPEN_PRS WIP gate); filing issues for them just rots the queue. They
+# still appear in the audit report, Slack digest, and history CSV — this
+# gates only the `gh issue create` escalation.
+#
+# Input: $1 = finding ID (e.g. "cost_per_pr_drift")
+# Returns: 0 (worthy — file an issue) or 1 (backpressure-only — do not file)
+audit_issue_worthy() {
+  case "$1" in
+    cost_per_pr_drift|time_to_merge_regression) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
 # ── find_existing_audit_issue ────────────────────────────────────────────────
 # Search aschung212/pilot for an open audit issue whose title contains the
 # given fragment. Returns the issue number (one per line) or empty if none.
 # Idempotency primitive — call before `gh issue create` to avoid dup issues.
+#
+# The fragment is matched against the TITLE only. The auditor embeds the
+# stable finding ID in every title (`[Audit P1] [<finding_id>] …`) precisely
+# so this match can work: before 2026-08-28 the ID lived only in the body,
+# the title match could never succeed, and two recurring findings were
+# re-filed weekly for months (pilot#9–#19). If you change the title format,
+# keep the finding ID in it.
 #
 # Input: $1 = title fragment to match (case-sensitive)
 # Output: issue number(s), one per line; empty if none found or gh is unavailable.

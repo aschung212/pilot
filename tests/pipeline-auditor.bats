@@ -304,3 +304,40 @@ GHSTUB
   result=$(find_existing_audit_issue "marker_emission")
   [ "$result" = "42" ]
 }
+
+# ── audit_issue_worthy (issue-filing gate) ────────────────────────────────────
+
+# bats test_tags=fast
+@test "auditor: audit_issue_worthy — cost_per_pr_drift is backpressure-only, never files" {
+  run audit_issue_worthy "cost_per_pr_drift"
+  [ "$status" -ne 0 ]
+}
+
+# bats test_tags=fast
+@test "auditor: audit_issue_worthy — time_to_merge_regression is backpressure-only, never files" {
+  run audit_issue_worthy "time_to_merge_regression"
+  [ "$status" -ne 0 ]
+}
+
+# bats test_tags=fast
+@test "auditor: audit_issue_worthy — genuine pipeline defects still file" {
+  run audit_issue_worthy "marker_emission_collapse"
+  [ "$status" -eq 0 ]
+  run audit_issue_worthy "stall_rate_high"
+  [ "$status" -eq 0 ]
+  run audit_issue_worthy "duplicate_prs"
+  [ "$status" -eq 0 ]
+}
+
+# bats test_tags=fast
+@test "auditor: issue titles embed the stable finding ID so title-search dedupe can fire" {
+  # The dedupe (find_existing_audit_issue) matches the finding ID against the
+  # TITLE. Drive the real script text: the title assignment must interpolate
+  # $P1_ID, or the #9–#19 weekly re-filing regression comes back.
+  grep -q 'ISSUE_TITLE="\[Audit P1\] \[\$P1_ID\]' "$PILOT_DIR/scripts/pipeline-auditor.sh"
+}
+
+# bats test_tags=fast
+@test "auditor: filing loop consults audit_issue_worthy before creating an issue" {
+  grep -q 'audit_issue_worthy "\$P1_ID"' "$PILOT_DIR/scripts/pipeline-auditor.sh"
+}

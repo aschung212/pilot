@@ -28,7 +28,7 @@ updated: 2026-05-08
 | **Test locally if needed** | `cd ~/development/lift && npm run dev` | localhost |
 | **Merge or request changes** | GitHub PR UI — merge individually, each PR is self-contained | Vercel auto-deploys on merge to master |
 | **Leave a closing comment when rejecting a PR** | If you close a PR without merging, add a one-line comment saying why. cleanup.sh harvests it into `data/lift-build-learnings.md` and the builder reads it every iteration — no comment means the builder cannot learn from the rejection. | GitHub PR UI |
-| **Act on digest blockers** | The 6:15 AM digest now lists "⏳ Waiting on you" (needs-input issues — answer, then flip `state:needs-input` → `state:unstarted`) and "⚖️ Needs your call" (issues whose PR was closed unmerged — recycle to unstarted or close as not planned) | #daily-review digest |
+| **Act on digest blockers** | The 6:15 AM digest now lists "⏳ Waiting on you" (needs-input issues — answer, then flip `state:needs-input` → `state:unstarted`), "⚖️ Needs your call" (issues whose PR was closed unmerged — recycle to unstarted or close as not planned), and "⚙️ Pilot pipeline" (open issues in the Pilot repo itself — these are pipeline defects, **no agent works them**, they're yours to fix or delegate in a Claude session). Each section renders only when nonzero. | #daily-review digest |
 | **Triage discovery issues** | Review new Linear issues from discovery agent, set priorities, add comments, cancel junk | linear.app/masterchung -> Lift project |
 | **Run `/ai-review`** | Claude Code CLI | Posts summary + LC update to #daily-review |
 
@@ -110,7 +110,7 @@ Verify with `launchctl list | grep doc-drift`. It fires weekly but no-ops on odd
 - Post-merge CI failure → Slack notification
 - Slack threading: one parent message per night, all updates threaded (updated for multi-PR output)
 - Slack webhooks: all notifications are token-free (no Claude instances spawned)
-- Test suite (bats-core, 278 tests across 22 files): fast tier (271 tests) runs on every commit via pre-commit hook, full tier (278 tests) runs on push via GitHub Actions CI
+- Test suite (bats-core, 286 tests across 22 files): fast tier (279 tests) runs on every commit via pre-commit hook, full tier (286 tests) runs on push via GitHub Actions CI
 - Auto-discovery smoke tests: fail when new scripts lack test coverage — enforces that every new script gets tests
 - Linear digest: posts board snapshot to #daily-review at 6:15 AM daily (launchd)
 
@@ -168,7 +168,7 @@ If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/T
 | `~/development/lift/CLAUDE.md` | Lift project standards (design, code, workflow) |
 | `~/.claude/commands/ai-review.md` | Daily review slash command |
 | `~/.claude/CLAUDE.md` | Global Claude instructions |
-| `~/development/pilot/tests/` | bats-core test suite — 22 test files, 278 tests (fast tier, 271, runs in the pre-commit hook) |
+| `~/development/pilot/tests/` | bats-core test suite — 22 test files, 286 tests (fast tier, 279, runs in the pre-commit hook) |
 | `~/development/pilot/.github/workflows/test.yml` | GitHub Actions CI — runs full test suite on push |
 | `~/development/pilot/.githooks/pre-commit` | Git pre-commit hook — runs fast test tier before every commit |
 | `~/Documents/Scripts/lift-triage.sh` | Gemini issue triage — reviews, enhances, and plans before builder runs |
@@ -198,6 +198,18 @@ If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/T
 ---
 
 ## Changelog
+
+### 2026-08-28 — The Pilot repo's own issue queue gets a contract and a consumer
+
+Your question — "is any agent actually reading the auditor's issues?" — had the answer *no*. The Pilot repo's queue was write-only: the auditor filed weekly, nothing read them, and its dedupe had never fired once (it searched titles for the finding ID, which only ever appeared in bodies), so nine open `[Audit P1]` issues were really **two** findings re-filed for months.
+
+**What changed:**
+- **Purged the queue.** pilot#9–#19 closed as not planned per your ruling: cost-per-merged-PR and time-to-merge measure *your* review bandwidth (merged PRs are the denominator), not pipeline health. Also same-day: LIFT-1263 moved out of the Lift tracker to pilot#28 — it was a Pilot defect sitting in the builder's picking pool.
+- **Those two metrics never file issues again** (`audit_issue_worthy`, `lib/auditor-utils.sh`). They stay in the audit report and Slack digest as trend data; their actuator is the builder's `MAX_OPEN_PRS` WIP gate (backpressure), not the issue tracker.
+- **Auditor dedupe fixed.** Finding ID now lives in the issue title (`[Audit P1] [<finding_id>] …`), so repeat findings comment on the standing issue instead of piling up.
+- **The morning digest now surfaces the queue.** A "⚙️ Pilot pipeline" section in the 6:15 AM digest lists open Pilot-repo issues, rendered only when nonzero.
+
+**New responsibility for you (small):** when the digest shows the "⚙️ Pilot pipeline" section, those are pipeline defects waiting on a human — no agent works that queue, deliberately (a builder editing its own pipeline would permanently violate the Infrastructure Change Protocol). Fix them yourself or hand them to a Claude session. The queue should be near-empty; if it grows, that's the signal something structural is wrong. Currently open: pilot#28 (discovery/architect re-filing shipped and rejected work).
 
 ### 2026-08-28 — Two agents that had never once worked: the budget tuner and roadmap-synth
 

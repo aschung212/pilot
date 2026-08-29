@@ -128,6 +128,27 @@ if [ "${NEEDS_DECISION_COUNT:-0}" -gt 0 ] 2>/dev/null; then
 "
 fi
 
+# --- Pilot pipeline defect queue (the Pilot repo's own issues) ---------------
+# No agent works aschung212/pilot issues — the auditor only WRITES there, and
+# every builder/triage/cleanup path is hardcoded to GITHUB_ISSUES_REPO (Lift).
+# Anything open in the Pilot repo is therefore a pipeline defect waiting on a
+# human, and without this line it is filed into the void (nine stale [Audit P1]
+# issues sat unread for months until the 2026-08-28 purge). The queue is
+# defects-only and near-empty by design, so this section renders only when
+# nonzero and is silent almost every morning.
+PILOT_REPO="${PILOT_REPO:-aschung212/pilot}"
+PILOT_OPEN_ISSUES=$(gh issue list --repo "$PILOT_REPO" --state open --limit 20 \
+  --json number,title \
+  --jq '.[] | "  • <https://github.com/'"$PILOT_REPO"'/issues/\(.number)|pilot#\(.number)>: \(.title)"' \
+  2>/dev/null || true)
+PILOT_OPEN_COUNT=$({ echo "$PILOT_OPEN_ISSUES" | grep -c "pilot#" 2>/dev/null || echo "0"; } | head -1)
+if [ "${PILOT_OPEN_COUNT:-0}" -gt 0 ] 2>/dev/null; then
+  WAITING_BLOCK+="
+⚙️ *Pilot pipeline* — ${PILOT_OPEN_COUNT} open defect(s) in the Pilot repo (no agent works these — they're yours):
+${PILOT_OPEN_ISSUES}
+"
+fi
+
 # Build message
 MSG="*📋 Issue Digest — ${DAY_NAME}, ${DATE}*
 

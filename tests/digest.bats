@@ -65,3 +65,57 @@ TEST-101  P3  Backlog    Add thing"
   [ "$status" -eq 0 ]
   [[ "$output" != *"Needs your call"* ]]
 }
+
+# ── Pilot repo defect queue (issues no agent works) ──────────────────────────
+
+# bats test_tags=fast
+@test "digest: surfaces open Pilot-repo issues" {
+  # gh stub: the digest's only gh call is the pilot-repo issue list; --jq is
+  # applied by real gh, so the stub emits the post-jq formatted lines.
+  mkdir -p "$TEST_TMPDIR/bin"
+  cat > "$TEST_TMPDIR/bin/gh" << 'GHSTUB'
+#!/bin/bash
+case "$*" in
+  *"issue list"*"--repo aschung212/pilot"*|*"--repo aschung212/pilot"*"issue list"*)
+    printf '  • <https://github.com/aschung212/pilot/issues/28|pilot#28>: Discovery re-files shipped issues\n'
+    ;;
+  *) echo "" ;;
+esac
+GHSTUB
+  chmod +x "$TEST_TMPDIR/bin/gh"
+  export PATH="$TEST_TMPDIR/bin:$PATH"
+  run bash "$DIGEST" --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Pilot pipeline"* ]]
+  [[ "$output" == *"pilot#28"* ]]
+}
+
+# bats test_tags=fast
+@test "digest: omits Pilot-repo section when its queue is empty" {
+  mkdir -p "$TEST_TMPDIR/bin"
+  cat > "$TEST_TMPDIR/bin/gh" << 'GHSTUB'
+#!/bin/bash
+echo ""
+GHSTUB
+  chmod +x "$TEST_TMPDIR/bin/gh"
+  export PATH="$TEST_TMPDIR/bin:$PATH"
+  run bash "$DIGEST" --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"Pilot pipeline"* ]]
+}
+
+# bats test_tags=fast
+@test "digest: survives gh failure on the Pilot-repo query" {
+  mkdir -p "$TEST_TMPDIR/bin"
+  cat > "$TEST_TMPDIR/bin/gh" << 'GHSTUB'
+#!/bin/bash
+echo "gh: auth error" >&2
+exit 1
+GHSTUB
+  chmod +x "$TEST_TMPDIR/bin/gh"
+  export PATH="$TEST_TMPDIR/bin:$PATH"
+  run bash "$DIGEST" --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Issue Digest"* ]]
+  [[ "$output" != *"Pilot pipeline"* ]]
+}
