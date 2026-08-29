@@ -164,8 +164,8 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
 > **Note:** The review pipeline has been progressively simplified, then re-platformed off Google. Gemini review (Flash → Pro → Sonnet) was replaced with inline hooks on 2026-04-06, simplified to Gemini 3.1 Pro only, then **migrated to a headless Claude reviewer on 2026-07-16**. Google retired the free "Gemini Code Assist for individuals" OAuth tier on 2026-06-18 — the `gemini` CLI began returning `IneligibleTierError` / `UNSUPPORTED_CLIENT` ("migrate to Antigravity"), which silently broke every review from ~2026-06-30 on. Google AI Pro/Ultra grant no Gemini API or CLI access, and the Gemini API free tier excludes all Pro models (`limit: 0`), so restoring Gemini would require enabling paid Cloud billing. The reviewer is now a `claude -p` call (Sonnet by default, `PILOT_REVIEW_MODEL` overridable) on the same auth as the builder. The old adapter (`adapters/ai-review.sh`) was deprecated 2026-04-06 and **deleted 2026-07-17** — it had no callers, and its `gemini` CLI calls would have failed the same way; the review tuner was removed on 2026-05-11. There is deliberately no review adapter: review is a hook, not a swappable backend.
 
 ### 5. Auto-Tuners
-**Scripts:** `lift-tune-budget.sh`
-**When:** After each overnight session completes
+**Scripts:** `tune-budget.sh`
+**When:** Sunday 21:00, weekly (`com.aaron.pilot-tune-budget`)
 
 **Budget tuner:**
 - Analyzes last 7 nights of token usage and runtime
@@ -178,7 +178,27 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
 
 > **Was inert until 2026-08-28.** The tuner never adjusted a single value in its life. Its Python heredoc had the positional arguments on the line *after* the `PYEOF` terminator, so `python3` ran with an empty argv — every CSV path defaulted to `""`, it found no data, and it always returned `skip: True`. Bash then tried to *execute* the CSV path as a command: "Permission denied", exit **126**, which is what `launchctl list` had been reporting. Five unit tests passed throughout, because each one re-implements the Python inside the test file and none ever ran the real script. A second bug hid behind the first: `int(row.get('commits', 0))` returns `None` on a short row (`csv.DictReader` fills missing columns with `None`, so the `get` default never applies), which crashed on the 30 ragged rows in `lift-metrics.csv`. Both fixed; the end-to-end tests now drive the real script.
 
-### 6. Stale-PR Audit
+### 6. Service Health (inside the Health Report)
+**Library:** `lib/service-health.sh` — pure function, called by `scripts/health-report.sh`
+**When:** Sunday 08:00, with the weekly Health Report
+
+Until 2026-08-28 nothing in the pipeline read launchd exit codes. That is how two agents stayed broken in plain sight for months: `tune-budget` had reported **exit 126** since its very first run, and `roadmap-synth` **exit 1** every week since 2026-05-06. Both were one column of `launchctl list` away from being obvious. The check that existed was hardcoded to three services (discover / triage / builder) and only asked whether they were *loaded* — never how they *exited* — so neither failure was reachable by it.
+
+The service list is now **derived from the committed plists**, so a new service is covered the moment it is added rather than when someone remembers to extend a list. Three questions, ordered by how long each failure can hide:
+
+| Question | Failure it catches |
+|---|---|
+| Is a committed plist not loaded? | It never runs, and nothing says so |
+| Did a loaded service exit non-zero? | It runs and fails, silently |
+| Is its log older than its own cadence? | Loaded, but never actually firing |
+
+Exit codes 126 ("command found but not executable") and 127 ("command not found") get an explanatory hint, since those two are what a broken invocation looks like — 126 is precisely what the tuner's malformed heredoc produced.
+
+Cadence for the staleness check is derived from each plist's own `StartCalendarInterval` (weekday present ⇒ weekly, else daily), with a generous `2× + 1 day` threshold so one skipped run is not noise. A plist younger than one full cadence is exempt entirely — otherwise every newly loaded service reads as broken, which is exactly what happened to the two plists loaded on 2026-08-28 before the exemption was added.
+
+Findings land in both the report's **Services** section and its **Anomalies** list, so they reach Slack. Half the tests assert it stays *quiet*: a weekly report that cries wolf gets skimmed, then ignored.
+
+### 7. Stale-PR Audit
 **Script:** `stale-pr-audit.sh`
 **Schedule:** Sunday 08:15, weekly (`com.aaron.pilot-stale-pr-audit`) — right after the Health Report, and ~14h before Sunday's Discovery so anything it flags can be closed or landed before the next build cycle picks work up
 **Model:** none — pure git/gh analysis, no AI call
@@ -195,7 +215,7 @@ Read-only against Lift: it fetches refs and uses `merge-tree`, never checking an
 
 **Why not a freshness check at build time.** Verified against the incident: when PR #1041 was opened, its "duplicate" column was not yet in master — it lived only in the still-open PR #1032, and master stayed clean for six more days. Checking the codebase at build time would have found nothing. The signal existed only in the open-PR set, which is why the collision check is the one that fires (retro-validated: it reports `exercises.plate_count_mode added by PRs [1032, 1041]` on the day #1041 was created).
 
-### 7. Doc-Drift Audit
+### 8. Doc-Drift Audit
 **Script:** `doc-drift-audit.sh` (checks live in `lib/doc-drift-check.py`)
 **Schedule:** Sunday 09:00, **biweekly** (`com.aaron.pilot-doc-drift`)
 **Model:** none — pure filesystem/plist analysis, no AI call
@@ -221,7 +241,7 @@ This does that mechanically. It is a **reporter, never an editor**: every findin
 
 **Biweekly cadence.** launchd cannot express "every two weeks", so the plist fires weekly and the script no-ops on odd ISO weeks (`--biweekly`). Calendar-anchored, so it cannot drift the way a 1,209,600-second `StartInterval` would.
 
-### 8. Issue Cleanup
+### 9. Issue Cleanup
 **Script:** `cleanup.sh`
 **When:** After each overnight session (final stage of pipeline)
 
@@ -261,16 +281,16 @@ Recycled counts are appended to `data/lift-cleanup-metrics.csv` as a fourth `rec
 
 ## Testing Infrastructure
 
-The pipeline has a bats-core test suite with **278 tests across 22 test files** in `~/development/pilot/tests/`. Tests use two-tier execution to balance speed with thoroughness:
+The pipeline has a bats-core test suite with **287 tests across 23 test files** in `~/development/pilot/tests/`. Tests use two-tier execution to balance speed with thoroughness:
 
-**Fast tier (271 tests) — pre-commit hook:**
+**Fast tier (280 tests) — pre-commit hook:**
 - Runs before every commit via `.githooks/pre-commit`
 - Covers: unit tests, adapter contract tests, argument parsing, error handling, log formatting
 - Builder tests source real functions from `lib/builder-utils.sh` (not copies of logic)
 - Parallel execution via GNU parallel (`bats -j 8`)
 - Blocks commit if any test fails
 
-**Full tier (278 tests) — GitHub Actions CI:**
+**Full tier (287 tests) — GitHub Actions CI:**
 - Runs on every push via `.github/workflows/test.yml`
 - Includes everything in the fast tier plus integration-level tests (CSV analysis, full script invocations)
 - Test paths resolve dynamically (no hardcoded local paths) for CI runner compatibility
@@ -383,7 +403,7 @@ Feedback loop → canceled issues + product decisions steer discovery;
 | `~/development/pilot/config/budget.conf` | Budget config (auto-tuned) |
 | `~/development/pilot/scripts/stale-pr-audit.sh` | Weekly audit: open PRs whose work has already shipped (no-op merges, duplicate/colliding migrations) |
 | `~/development/pilot/scripts/doc-drift-audit.sh` | Biweekly audit: docs vs. the repo's actual state (checks in `lib/doc-drift-check.py`) |
-| `~/development/pilot/tests/` | bats-core test suite (278 tests, 22 files, two-tier execution) |
+| `~/development/pilot/tests/` | bats-core test suite (287 tests, 23 files, two-tier execution) |
 | `~/development/pilot/.github/workflows/test.yml` | GitHub Actions CI — full test suite on push |
 | `~/development/pilot/.githooks/pre-commit` | Pre-commit hook — fast test tier on every commit |
 | `~/development/pilot/project.env` | Lift-specific configuration (git-ignored) |
@@ -399,6 +419,12 @@ See [Pilot Responsibilities](pilot-responsibilities.md) for the complete list of
 
 ## Changelog
 
+### 2026-08-28 — Health Report watches launchd exit codes
+
+`lib/service-health.sh` replaces the hardcoded three-service loaded/not-loaded check that let `tune-budget` (exit 126) and `roadmap-synth` (exit 1) stay broken for months. The service list is derived from the committed plists, and it reports not-loaded, non-zero last exit, and log-staler-than-cadence. Findings reach both the Services section and the Anomalies list. See agent section 6.
+
+Staleness thresholds come from each plist's own schedule and exempt plists younger than one cadence, so newly loaded services don't read as broken. Also fixes the Anomalies section printing "✅ No anomalies" above the warnings it then listed.
+
 ### 2026-08-28 — Budget tuner and roadmap-synth: both broken since inception, both fixed
 
 `tune-budget.sh` had never adjusted a value: its heredoc's positional args sat after the `PYEOF` terminator, so python3 ran with an empty argv (always `skip: True`) and bash tried to execute the CSV path — exit 126. Behind that, `int(row.get('x', 0))` crashed on `None` from short `DictReader` rows. Five unit tests passed the whole time because each re-implements the Python in the test file rather than running the script. Added `--dry-run`, and end-to-end tests that drive the real script.
@@ -413,13 +439,13 @@ Cleared the pilot PR backlog: #24 (agile-gap pass) and #22 (model bumps) merged 
 
 ### 2026-08-28 — Biweekly doc-drift audit
 
-New `doc-drift-audit.sh` (checks in `lib/doc-drift-check.py`), scheduled `com.aaron.pilot-doc-drift` at Sunday 09:00 with a biweekly no-op on odd ISO weeks. Mechanically checks the docs against the repo — see agent section 7 for the full check list and the two exemptions (changelog sections, doc tombstones) that keep it from crying wolf.
+New `doc-drift-audit.sh` (checks in `lib/doc-drift-check.py`), scheduled `com.aaron.pilot-doc-drift` at Sunday 09:00 with a biweekly no-op on odd ISO weeks. Mechanically checks the docs against the repo — see agent section 8 for the full check list and the two exemptions (changelog sections, doc tombstones) that keep it from crying wolf.
 
 First run found 19 real drifts, all fixed: a vault path missing its `Lift/` subdirectory, a stale `Fast tier (196 tests)` line, six scripts documented nowhere, and three undocumented env vars. It also caught a malformed XML comment in its own plist — `plutil -lint` accepts a `--` inside a comment, but launchd's parser and `plistlib` reject it, so the job would have silently never loaded.
 
 ### 2026-08-28 — Stale-PR audit scheduled weekly
 
-`stale-pr-audit.sh` moved from on-demand to a weekly launchd job, `com.aaron.pilot-stale-pr-audit`, at **Sunday 08:15** with `--notify`. Slotted 15 minutes after the Health Report and ~14h ahead of Sunday's Discovery, so flagged PRs can be resolved before the next build cycle claims work. See agent section 6.
+`stale-pr-audit.sh` moved from on-demand to a weekly launchd job, `com.aaron.pilot-stale-pr-audit`, at **Sunday 08:15** with `--notify`. Slotted 15 minutes after the Health Report and ~14h ahead of Sunday's Discovery, so flagged PRs can be resolved before the next build cycle claims work. See agent section 7.
 
 Also corrected the Scheduled Tasks table, which had been missing the Wednesday trio (Auditor / Roadmap Synth / Architect) and the daily Issue Digest since those services were added.
 
