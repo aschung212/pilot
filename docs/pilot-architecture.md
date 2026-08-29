@@ -281,16 +281,16 @@ Recycled counts are appended to `data/lift-cleanup-metrics.csv` as a fourth `rec
 
 ## Testing Infrastructure
 
-The pipeline has a bats-core test suite with **287 tests across 23 test files** in `~/development/pilot/tests/`. Tests use two-tier execution to balance speed with thoroughness:
+The pipeline has a bats-core test suite with **295 tests across 23 test files** in `~/development/pilot/tests/`. Tests use two-tier execution to balance speed with thoroughness:
 
-**Fast tier (280 tests) — pre-commit hook:**
+**Fast tier (288 tests) — pre-commit hook:**
 - Runs before every commit via `.githooks/pre-commit`
 - Covers: unit tests, adapter contract tests, argument parsing, error handling, log formatting
 - Builder tests source real functions from `lib/builder-utils.sh` (not copies of logic)
 - Parallel execution via GNU parallel (`bats -j 8`)
 - Blocks commit if any test fails
 
-**Full tier (287 tests) — GitHub Actions CI:**
+**Full tier (295 tests) — GitHub Actions CI:**
 - Runs on every push via `.github/workflows/test.yml`
 - Includes everything in the fast tier plus integration-level tests (CSV analysis, full script invocations)
 - Test paths resolve dynamically (no hardcoded local paths) for CI runner compatibility
@@ -403,7 +403,7 @@ Feedback loop → canceled issues + product decisions steer discovery;
 | `~/development/pilot/config/budget.conf` | Budget config (auto-tuned) |
 | `~/development/pilot/scripts/stale-pr-audit.sh` | Weekly audit: open PRs whose work has already shipped (no-op merges, duplicate/colliding migrations) |
 | `~/development/pilot/scripts/doc-drift-audit.sh` | Biweekly audit: docs vs. the repo's actual state (checks in `lib/doc-drift-check.py`) |
-| `~/development/pilot/tests/` | bats-core test suite (287 tests, 23 files, two-tier execution) |
+| `~/development/pilot/tests/` | bats-core test suite (295 tests, 23 files, two-tier execution) |
 | `~/development/pilot/.github/workflows/test.yml` | GitHub Actions CI — full test suite on push |
 | `~/development/pilot/.githooks/pre-commit` | Pre-commit hook — fast test tier on every commit |
 | `~/development/pilot/project.env` | Lift-specific configuration (git-ignored) |
@@ -418,6 +418,17 @@ See [Pilot Responsibilities](pilot-responsibilities.md) for the complete list of
 ---
 
 ## Changelog
+
+### 2026-08-28 — Pilot's own issue queue: defects-only contract, working dedupe, and a consumer
+
+The Pilot repo's issue queue was write-only: the auditor filed there, and nothing — no agent, no digest, no human surface — ever read it. Nine stale `[Audit P1]` issues sat unread for months. Worse, they were **two** findings re-filed weekly: the auditor's idempotency search (`find_existing_audit_issue`) matches the stable finding ID against the *title*, but the ID only ever appeared in the *body*, so the dedupe had never fired once. Three changes, plus a queue purge:
+
+- **Merge-bandwidth metrics no longer file issues** (`audit_issue_worthy` in `lib/auditor-utils.sh`, consulted in `pipeline-auditor.sh`'s filing loop). Aaron's ruling closing pilot#9–#19: `cost_per_pr_drift` and `time_to_merge_regression` both have *merged* PRs in the denominator, so they measure his review bandwidth, not pipeline health. Their legitimate use is backpressure (the builder's `MAX_OPEN_PRS` WIP gate); they still appear in the audit report, Slack digest, and history CSV — they just never escalate to an issue.
+- **Auditor issue titles now embed the finding ID** — `[Audit P1] [<finding_id>] <title>` — so the existing title-search dedupe actually works. Repeat findings get a comment on the standing issue instead of a weekly duplicate.
+- **The morning digest is the queue's consumer** (`digest.sh`): a "⚙️ Pilot pipeline" section lists open Pilot-repo issues with links, rendered only when the count is nonzero. The queue is defects-only and near-empty by design, so the section is silent almost every morning and loud exactly when a pipeline defect is waiting.
+- **Queue purge:** pilot#9–#19 closed as not planned (all bandwidth-metric re-filings, and the latest readings had decayed to P3 anyway). The queue's contract going forward: *pipeline defects a human must fix*, nothing else. No agent works these issues — the builder/triage/cleanup paths are hardcoded to `GITHUB_ISSUES_REPO` (Lift) and deliberately stay that way; a builder that edits its own pipeline would violate the Infrastructure Change Protocol permanently.
+
+Tests: +8 (5 auditor — the `audit_issue_worthy` gate and both regression guards on the filing loop; 3 digest — section renders, section omitted when empty, gh failure tolerated). Suite green; `digest.sh --dry-run` and `pipeline-auditor.sh --dry-run` verified live.
 
 ### 2026-08-28 — Health Report watches launchd exit codes
 

@@ -915,10 +915,18 @@ for f in findings:
       [ -z "$p1_json" ] && continue
       P1_TITLE=$(echo "$p1_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['title'])")
       P1_ID=$(echo "$p1_json"    | python3 -c "import json,sys; print(json.load(sys.stdin)['id'])")
-      ISSUE_TITLE="[Audit P1] $P1_TITLE"
-      # Idempotency: search for existing audit issue containing the metric/title fragment.
-      # We search on the finding ID (e.g. "marker_emission_collapse") which is stable
-      # across runs, unlike the title which embeds current numbers.
+      # Merge-bandwidth metrics never file issues — they measure Aaron's
+      # review latency, not a pipeline defect. See audit_issue_worthy in
+      # lib/auditor-utils.sh for the ruling. They stay in the report/digest.
+      if ! audit_issue_worthy "$P1_ID"; then
+        echo "  ⏭️  $P1_ID is P1 but backpressure-only — no issue filed (report/digest only)"
+        continue
+      fi
+      # The stable finding ID goes IN the title: find_existing_audit_issue
+      # matches on title, and titles embed current metric numbers that change
+      # every run. Without the ID there, the dedupe can never fire — that is
+      # how #9–#19 piled up as weekly re-filings of two findings.
+      ISSUE_TITLE="[Audit P1] [$P1_ID] $P1_TITLE"
       EXISTING=$(find_existing_audit_issue "$P1_ID")
       if [ -n "$EXISTING" ]; then
         ISSUES_REUSED=$((ISSUES_REUSED + 1))
