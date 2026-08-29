@@ -199,6 +199,10 @@ If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/T
 
 ## Changelog
 
+### 2026-08-28 — Pilot PR backlog cleared (#24, #22 merged; #8 closed superseded) + honest PR-creation failures
+
+All three open pilot PRs are resolved: **#24** (agile-gap pass) and **#22** (Opus 5 + architect-on-Fable-5 model bumps) merged after rebasing onto the day's main; **#8** (May builder hardening) closed as superseded — everything it fixed had since landed via the 2026-05-20 builder fixes and the 2026-08-28 `_marker_lines` work, except one live fragment ported forward here: the builder can no longer report a fabricated `pull/new/` compare link as a "PR" in Slack. A failed `gh pr create` now scores the iteration a failure, posts a ❌ alert with the preserved branch, and never inflates the nightly PR count. **No new responsibilities** — but if you ever see that ❌, the branch named in the alert holds real pushed work that needs a manual PR or deletion.
+
 ### 2026-08-28 — Biweekly doc-drift audit, and the 19 drifts it found on its first run
 
 Docs drift silently. The 2026-08-28 sweep earlier today was done by hand, and hand-reading docs against the filesystem does not scale. `scripts/doc-drift-audit.sh` (checks in `lib/doc-drift-check.py`) does it mechanically.

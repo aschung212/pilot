@@ -401,3 +401,28 @@ EOF
   run wip_gate_active "not-a-number" 8 ""
   [ "$status" -eq 1 ]
 }
+
+# ── extract_pr_url (honest PR-creation failure — ports pilot PR #8's live fragment) ──
+
+# bats test_tags=fast
+@test "builder: extract_pr_url returns the anchored PR URL" {
+  out=$(extract_pr_url "https://github.com/aschung212/Lift/pull/1234")
+  [ "$out" = "https://github.com/aschung212/Lift/pull/1234" ]
+  # embedded in surrounding gh output
+  out=$(extract_pr_url "Creating pull request...
+https://github.com/aschung212/Lift/pull/99")
+  [ "$out" = "https://github.com/aschung212/Lift/pull/99" ]
+}
+
+# bats test_tags=fast
+@test "builder: extract_pr_url rejects compare URLs and failure text" {
+  # pull/new/<branch> is GitHub's COMPARE page, not a PR — matching it is how
+  # the 2026-05-11 incident reported 12 "PRs" to Slack when only 3 existed.
+  out=$(extract_pr_url "https://github.com/aschung212/Lift/pull/new/enhance/run3-2026-05-11")
+  [ -z "$out" ]
+  # failure text that still mentions github.com must not produce a URL
+  out=$(extract_pr_url "GraphQL: something failed for https://github.com/aschung212/Lift (createPullRequest)")
+  [ -z "$out" ]
+  out=$(extract_pr_url "")
+  [ -z "$out" ]
+}
