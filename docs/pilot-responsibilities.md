@@ -112,7 +112,7 @@ Verify with `launchctl list | grep doc-drift`. It fires weekly but no-ops on odd
 - Post-merge CI failure → Slack notification
 - Slack threading: one parent message per night, all updates threaded (updated for multi-PR output)
 - Slack webhooks: all notifications are token-free (no Claude instances spawned)
-- Test suite (bats-core, 328 tests across 25 files): fast tier (297 tests) runs on every commit via pre-commit hook, full tier (328 tests) runs on push via GitHub Actions CI
+- Test suite (bats-core, 344 tests across 26 files): fast tier (297 tests) runs on every commit via pre-commit hook, full tier (344 tests) runs on push via GitHub Actions CI
 - Auto-discovery smoke tests: fail when new scripts lack test coverage — enforces that every new script gets tests
 - Linear digest: posts board snapshot to #daily-review at 6:15 AM daily (launchd)
 
@@ -171,7 +171,7 @@ If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/T
 | `~/development/lift/CLAUDE.md` | Lift project standards (design, code, workflow) |
 | `~/.claude/commands/ai-review.md` | Daily review slash command |
 | `~/.claude/CLAUDE.md` | Global Claude instructions |
-| `~/development/pilot/tests/` | bats-core test suite — 25 test files, 328 tests (fast tier, 297, runs in the pre-commit hook) |
+| `~/development/pilot/tests/` | bats-core test suite — 26 test files, 344 tests (fast tier, 297, runs in the pre-commit hook) |
 | `~/development/pilot/.github/workflows/test.yml` | GitHub Actions CI — runs full test suite on push |
 | `~/development/pilot/.githooks/pre-commit` | Git pre-commit hook — runs fast test tier before every commit |
 | `~/Documents/Scripts/lift-triage.sh` | Gemini issue triage — reviews, enhances, and plans before builder runs |
@@ -201,6 +201,23 @@ If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/T
 ---
 
 ## Changelog
+
+### 2026-08-30 — Pilot now notices when Lift's master CI is red
+
+You asked why nothing caught that master CI had been failing 41 times in a row. It's because Pilot watched CI in two places and neither was the default branch: the builder retries PRs labeled `ci:failed`, and the health report watches Pilot's own launchd exit codes. The target repo's `master` had no watcher at all.
+
+New `target-ci-watch.sh` runs as part of the **daily 06:15 Issue Digest** and puts every currently-red workflow at the top of the "waiting on you" block — failure streak, days since last green, and the exact failing job names. It escalates as the streak grows: 🔴 at one failure, ⚠️ at three, 🚨 *BROKEN* at ten.
+
+It went in the digest rather than the weekly health report deliberately: a weekly cadence would have needed six reports to notice a streak this long, and a red default branch means nothing is deploying.
+
+**It found a second outage on its first run.** `Integration Tests` has been red since 2026-08-18 — 13 consecutive failures, failing job `supabase-integration`. Nothing had ever surfaced it. That one is still open and is not fixed by tonight's work.
+
+#### ⚠️ New for Aaron
+
+- **A red workflow will now appear at the top of your morning digest** and stay there until it's green. That's the whole point — it should be annoying.
+- **`Integration Tests` is still red** (`supabase-integration`, since 2026-08-18). Worth a look; it's unrelated to the migration problem that was fixed tonight.
+- **Green is silent.** No news in the digest means every workflow passed. If the check itself can't read the branch, it says UNKNOWN rather than staying quiet.
+- Turn it off with `TARGET_CI_WATCH_ENABLED=0` if it ever becomes noise.
 
 ### 2026-08-30 — Issues you file by hand now jump the queue
 

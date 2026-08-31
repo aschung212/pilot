@@ -116,6 +116,34 @@ APPS_TOP=$(format_top "$APPS_ACTIVE" 3 linear)
 
 # Blockers section — rendered only when something is actually waiting.
 WAITING_BLOCK=""
+
+# --- Target repo's default branch CI ----------------------------------------
+# FIRST in the waiting block, ahead of the issue-level blockers: a red default
+# branch means nothing is deploying, which outranks any single stuck issue.
+#
+# Pilot watched CI in two places and neither covered this branch — the builder
+# retries PRs labeled ci:failed, and health-report.sh watches Pilot's own
+# launchd exit codes. Nothing looked at the target repo's master. On 2026-08-30
+# that branch was found red for at least 41 consecutive runs, going back as far
+# as the API window allowed and probably to 2026-05-29: migrate-db was failing,
+# so no schema change reached production for roughly three months and
+# smoke-test-production plus notify-deploy were silently skipped with it
+# (LIFT-1280). The digest is the standup, and a dead deploy pipeline belongs in
+# the standup.
+#
+# Silent when green, by the same house rule as every other section here. A
+# failure of the CHECK is not silent though — target-ci-watch.sh reports an
+# unreadable branch as UNKNOWN rather than passing, since a watcher that goes
+# quiet on error rebuilds the blindness it exists to remove.
+CI_WATCH="$SCRIPT_DIR/target-ci-watch.sh"
+if [ "${TARGET_CI_WATCH_ENABLED:-1}" != "0" ] && [ -x "$CI_WATCH" ]; then
+  CI_WATCH_BLOCK=$(bash "$CI_WATCH" --slack 2>/dev/null || true)
+  if [ -n "$CI_WATCH_BLOCK" ]; then
+    WAITING_BLOCK+="
+${CI_WATCH_BLOCK}
+"
+  fi
+fi
 if [ "${LIFT_BLOCKED_COUNT:-0}" -gt 0 ] 2>/dev/null; then
   WAITING_BLOCK+="
 ⏳ *Waiting on you* — ${LIFT_BLOCKED_COUNT} issue(s) parked on \`state:needs-input\` (answer, then flip to \`state:unstarted\`):
