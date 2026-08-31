@@ -687,7 +687,7 @@ After your final push completes, you MUST emit the full structured response belo
 - If you cannot find anything meaningful to improve, output ONLY the line "NO_IMPROVEMENTS_REMAINING" and exit
 - Commit with clear conventional commit messages (feat/fix/a11y/test/perf/style/refactor/chore prefix)
 - End every commit body with exactly this trailer (see "Commit author attribution" above): \`$COAUTHOR_TRAILER\`. Do not self-report a different model version.
-- Include \`Closes #N\` (where N is the issue number, no LIFT- prefix) in at least one commit body so GitHub auto-closes the issue when the PR merges. The pipeline depends on this — it no longer closes issues at implementation time because that orphaned issues whose PRs failed CI (see PR #467 / LIFT-436, 2026-04-30).
+- Include \`Closes #N\` (where N is the issue number, no LIFT- prefix) in at least one commit body. This is belt-and-braces only: the script writes the same keyword into the PR body it controls, because for the life of this repo the agent never once emitted it here and nothing else closed the issue. Do not rely on your own compliance, and do not close the issue yourself — the pipeline stopped closing at implementation time after that orphaned issues whose PRs failed CI (see PR #467 / LIFT-436, 2026-04-30).
 - If a test is failing when you start, you may try to fix it ONCE. If it still fails after one attempt, skip it and move on to new work. Do not spend more than 10 turns on any single fix.
 - IMPORTANT: Focus on SHIPPING, not perfecting. Commit working improvements and move on.
 - Do NOT create, switch, or rename branches — no \`git checkout\`, \`git switch\`, \`git branch\`, or \`git checkout -b\`. You are already on \`$ITER_BRANCH\`; commit directly to it. Work committed to any other branch is invisible to the pipeline and produces no PR (see "Branch-per-issue mode" above).
@@ -1012,13 +1012,20 @@ Fix the failing build/tests. Do NOT revert the feature — fix the actual issue.
         COMMIT_URL="https://github.com/$GITHUB_REPO/commit/$LATEST_COMMIT"
 
         # ── Mark ISSUE_DONE issues as In Progress, NOT closed ──────────────
-        # Actual closure happens when GitHub auto-closes the issue on PR merge
-        # via "Closes #N" in the commit message. Closing here is premature:
-        # PR #467 (LIFT-436) failed CI and never merged, but the issue was
-        # marked Done by this loop and got swept closed by cleanup.sh. The
-        # PR is still open while the issue shows Closed — orphaned state.
-        # Builder requires Claude to include "Closes #N" in commit bodies so
-        # the GitHub merge mechanism is the single source of truth.
+        # Actual closure happens when the PR merges, never here. Closing at
+        # implementation time is premature: PR #467 (LIFT-436) failed CI and
+        # never merged, but the issue was marked Done by this loop and got
+        # swept closed by cleanup.sh — PR open, issue closed, orphaned state.
+        #
+        # The merge-time close now has two independent mechanisms, because the
+        # original one was never real: the prompt asked the agent for a
+        # "Closes #N" commit body and the agent never once wrote one, so from
+        # the GitHub migration until 2026-08-30 nothing closed these issues at
+        # all and Aaron closed every one by hand.
+        #   1. This script writes `Closes #N` into the PR body below — script
+        #      controlled, so it does not depend on agent compliance.
+        #   2. cleanup.sh step 2 sweeps any state:started issue whose PR
+        #      already merged, covering older PRs and hand-opened ones.
         _marker_lines ISSUE_DONE "$RUN_LOG" | sort -u | while IFS='|' read -r marker summary; do
           issue_id=$(echo "$marker" | sed 's/ISSUE_DONE://')
           summary=${summary:-No details provided}
@@ -1046,7 +1053,13 @@ This issue will close automatically when the PR merges." 2>&1 | tee -a "$RUN_LOG
           ISSUE_TITLE=$(_marker_lines ISSUE_PROGRESS "$RUN_LOG" | head -1 | sed "s/ISSUE_PROGRESS:${ISSUE_PREFIX}-[0-9]*|//" || echo "Improvements")
         fi
         ISSUE_URL=""
-        [ -n "$PRIMARY_ISSUE" ] && ISSUE_URL=$(bash "$TRACKER" issue-url "$PRIMARY_ISSUE")
+        PRIMARY_ISSUE_NUM=""
+        if [ -n "$PRIMARY_ISSUE" ]; then
+          ISSUE_URL=$(bash "$TRACKER" issue-url "$PRIMARY_ISSUE")
+          # Bare number for the PR body's `Closes #N`. GitHub's closing-keyword
+          # parser only understands `#N`, never the LIFT-N prefix.
+          PRIMARY_ISSUE_NUM="${PRIMARY_ISSUE##*-}"
+        fi
 
         PLAN=$(sed -n '/^## Plan/,/^## /p' "$RUN_LOG" 2>/dev/null | grep -v '^## ' | head -5)
         CHANGES=$(sed -n '/^## Changes/,/^## /p' "$RUN_LOG" 2>/dev/null | grep -v '^## ' | head -10)
@@ -1120,6 +1133,8 @@ This issue will close automatically when the PR merges." 2>&1 | tee -a "$RUN_LOG
           --body "$(cat <<PRBODY
 ## Summary
 ${PRIMARY_ISSUE:+**Issue:** [$PRIMARY_ISSUE]($ISSUE_URL)
+}${PRIMARY_ISSUE_NUM:+
+Closes #$PRIMARY_ISSUE_NUM
 }
 $PLAN
 

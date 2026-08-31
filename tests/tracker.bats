@@ -177,3 +177,58 @@ TRACKER="$PILOT_DIR/adapters/tracker.sh"
   [ "$status" -eq 1 ]
   [[ "$output" == *"Unknown tracker command"* ]]
 }
+
+# ── close reason normalization ───────────────────────────────────────────────
+# `gh issue close --reason` accepts only {completed|not planned} and REJECTS
+# anything else before closing. Every caller spells it `not_planned` (the
+# Linear enum), so cleanup.sh's dedupe and backlog-expiry closes were silent
+# no-ops with incrementing counters until 2026-08-30.
+
+_stub_gh_recording() {
+  mkdir -p "$TEST_TMPDIR/bin"
+  cat > "$TEST_TMPDIR/bin/gh" <<GHEOF
+#!/bin/bash
+echo "\$*" >> "$TEST_TMPDIR/gh-writes"
+# Reject anything real gh would reject, so a bad reason fails the test.
+case "\$*" in
+  *"--reason"*) case "\$*" in
+      *"--reason completed"*|*"--reason not planned"*) : ;;
+      *) echo "invalid argument for --reason" >&2; exit 1 ;;
+    esac ;;
+esac
+echo ""
+exit 0
+GHEOF
+  chmod +x "$TEST_TMPDIR/bin/gh"
+  export PATH="$TEST_TMPDIR/bin:$PATH"
+  export GITHUB_ISSUES_REPO="aaron/testrepo"
+}
+
+# bats test_tags=fast
+@test "tracker: close translates not_planned into gh's 'not planned'" {
+  _stub_gh_recording
+  run bash "$PILOT_DIR/adapters/tracker.sh" close TEST-7 not_planned
+  [ "$status" -eq 0 ]
+  grep -q -- "issue close 7 .*--reason not planned" "$TEST_TMPDIR/gh-writes"
+  [[ "$output" == *"Closed TEST-7 (not planned)"* ]]
+}
+
+# bats test_tags=fast
+@test "tracker: close defaults to completed and reports a real failure" {
+  _stub_gh_recording
+  run bash "$PILOT_DIR/adapters/tracker.sh" close TEST-8
+  [ "$status" -eq 0 ]
+  grep -q -- "issue close 8 .*--reason completed" "$TEST_TMPDIR/gh-writes"
+
+  # A close that gh rejects must not report success — the old unconditional
+  # "✓ Closed" is how the not_planned failure stayed invisible.
+  cat > "$TEST_TMPDIR/bin/gh" <<'GHEOF'
+#!/bin/bash
+exit 1
+GHEOF
+  chmod +x "$TEST_TMPDIR/bin/gh"
+  run bash "$PILOT_DIR/adapters/tracker.sh" close TEST-9 completed
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Close FAILED"* ]]
+  [[ "$output" != *"✓ Closed"* ]]
+}

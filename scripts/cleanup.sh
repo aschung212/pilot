@@ -4,7 +4,8 @@
 #
 # What it does:
 #   1. Closes all completed and canceled issues (via tracker.sh)
-#   2. Recycles abandoned in-progress issues (claimed but no PR ever opened)
+#   2. Closes in-progress issues whose PR merged, and recycles abandoned ones
+#      (claimed but no PR ever opened)
 #   2b. Snapshots rejected-PR issues for the morning digest and harvests
 #       Aaron's closing comments on unmerged PRs into lift-build-learnings.md
 #       (the builder feeds these back into its prompt)
@@ -78,31 +79,86 @@ done
 # run 3 and the entire 2026-07-24 session after a single iteration with
 # NO_IMPROVEMENTS_REMAINING and zero PRs.
 #
-# Recycle rule — deliberately conservative: reset to state:unstarted ONLY
-# when NO pull request of ANY state references the issue. An issue whose PR
-# was closed unmerged is left alone and reported instead, because closing a
-# PR may have been a deliberate rejection and auto-recycling it would rebuild
-# work Aaron already declined. Issues with a merged PR are also left alone —
-# those are complete and belong to the close path, not the recycle path.
+# Sorting rule for every state:started issue, by the PR set that references it:
+#   * a MERGED PR      -> the work shipped; close the issue as completed
+#   * an OPEN PR       -> in flight awaiting review; leave alone
+#   * only CLOSED PRs  -> report, never auto-recycle (may be a deliberate
+#                         rejection, and rebuilding it would churn)
+#   * no PR at all     -> recycle to state:unstarted so it can be picked again
+#
+# The merged branch used to `continue` here with a comment deferring to "the
+# close path". There was no close path. Step 1 asks the tracker for `completed`
+# issues, and that query lists issues that are ALREADY CLOSED on GitHub — so it
+# can only ever re-close what is already closed, never close an open issue.
+# builder.sh (line ~690) meanwhile told the coding agent to write `Closes #N`
+# into a commit body and leave the closing to GitHub's merge mechanism; the
+# agent has never once emitted it — same class as the marker-separator bug in
+# CLAUDE.md, where the prompt's documented format was not the observed format.
+# Net effect: from the GitHub migration until 2026-08-30, NOTHING closed an
+# issue when its PR merged. Every close on the board was Aaron doing it by
+# hand, and the pile was visible only as the "📋 N issue(s) still state:started
+# with a MERGED PR" line printed at the end of this script.
+#
+# builder.sh now writes `Closes #N` into the PR body it controls (deterministic
+# — no agent compliance required), so new PRs auto-close on merge. This branch
+# is the backstop: it catches PRs merged before that change, PRs opened by
+# hand, and any PR where the keyword did not take.
 RECYCLED=0
 RECYCLED_LIST=""
 DONE_AWAITING_CLOSE=0
+MERGED_CLOSED=0
+MERGED_CLOSED_LIST=""
 IN_FLIGHT=0
 REJECTED_PR=0
 REJECTED_PR_LIST=""
 REJECTED_PR_IDS=""
 
-# Two API calls for every PR title, rather than a per-issue search (~145
+# Row cap for the PR queries below. `gh pr list` truncates silently at --limit
+# with no error, exactly like `gh issue list` (see the two incidents in
+# tracker.sh). This was 500 against 558 merged / 687 total PRs on 2026-08-30,
+# so the oldest 58 merged and 187 overall were already invisible — and an issue
+# whose only PR fell off the end reads as "no PR ever" and gets RECYCLED, which
+# rebuilds work that already shipped.
+GH_PR_LIMIT="${GH_PR_LIMIT:-2000}"
+_warn_if_pr_truncated() {
+  local n="$1" what="$2"
+  if [ "${n:-0}" -ge "$GH_PR_LIMIT" ] 2>/dev/null; then
+    echo "  ⚠️  cleanup: '$what' returned $n rows at the ${GH_PR_LIMIT} cap — list is probably TRUNCATED. Raise GH_PR_LIMIT." >&2
+  fi
+}
+
+# Three API calls for every PR title, rather than a per-issue search (~145
 # calls). Builder PR titles always embed the issue as `type(LIFT-N): ...`,
 # and manual PRs use `#N`, so title matching covers both conventions.
 _pr_refs() {
   grep -oE "(${ISSUE_PREFIX}-|#)[0-9]+" | sed -E "s/^#/${ISSUE_PREFIX}-/" | sort -u
 }
-ALL_PR_REFS=$(gh pr list --repo "$GITHUB_ISSUES_REPO" --state all --limit 500 \
-  --json title -q '.[].title' 2>/dev/null | _pr_refs || true)
-MERGED_PR_REFS=$(gh pr list --repo "$GITHUB_ISSUES_REPO" --state merged --limit 500 \
-  --json title -q '.[].title' 2>/dev/null | _pr_refs || true)
-OPEN_PR_REFS=$(gh pr list --repo "$GITHUB_ISSUES_REPO" --state open --limit 500 \
+# Same extraction, but keeping the PR number alongside each issue ref, so the
+# close comment can name the PR that shipped the work. Emits "<ISSUE_ID>\t<PR>".
+_pr_pairs() {
+  local _num _title _ref
+  while IFS=$'\t' read -r _num _title; do
+    [ -n "$_num" ] || continue
+    for _ref in $(echo "$_title" | _pr_refs); do
+      printf '%s\t%s\n' "$_ref" "$_num"
+    done
+  done
+}
+_merged_pr_for() {
+  # Highest (most recent) merged PR number referencing this issue.
+  echo "$MERGED_PR_PAIRS" | awk -F'\t' -v id="$1" '$1 == id { print $2 }' | sort -rn | head -1
+}
+
+ALL_PR_TITLES=$(gh pr list --repo "$GITHUB_ISSUES_REPO" --state all --limit "$GH_PR_LIMIT" \
+  --json title -q '.[].title' 2>/dev/null || true)
+_warn_if_pr_truncated "$(echo "$ALL_PR_TITLES" | grep -c . | tr -d ' \n')" "all PRs"
+ALL_PR_REFS=$(echo "$ALL_PR_TITLES" | _pr_refs || true)
+
+MERGED_PR_PAIRS=$(gh pr list --repo "$GITHUB_ISSUES_REPO" --state merged --limit "$GH_PR_LIMIT" \
+  --json number,title -q '.[] | "\(.number)\t\(.title)"' 2>/dev/null | _pr_pairs || true)
+MERGED_PR_REFS=$(echo "$MERGED_PR_PAIRS" | cut -f1 | sort -u)
+
+OPEN_PR_REFS=$(gh pr list --repo "$GITHUB_ISSUES_REPO" --state open --limit "$GH_PR_LIMIT" \
   --json title -q '.[].title' 2>/dev/null | _pr_refs || true)
 
 STARTED_IDS=$(bash "$TRACKER" list started 2>/dev/null | grep -oE "${ISSUE_PREFIX}-[0-9]+" | sort -u || true)
@@ -110,8 +166,25 @@ STARTED_IDS=$(bash "$TRACKER" list started 2>/dev/null | grep -oE "${ISSUE_PREFI
 for issue_id in $STARTED_IDS; do
   # grep -qx anchors the whole line, so LIFT-96 cannot match LIFT-966.
   if echo "$MERGED_PR_REFS" | grep -qx "$issue_id"; then
-    # Work merged but the issue was never closed — belongs to the close path.
+    # Work merged but the issue is still open. Close it as completed.
     DONE_AWAITING_CLOSE=$((DONE_AWAITING_CLOSE + 1))
+    pr_num=$(_merged_pr_for "$issue_id")
+    if [ "$DRY_RUN" = "--dry-run" ]; then
+      echo "  [dry-run] Would close $issue_id (merged PR #${pr_num:-?}) → completed"
+    else
+      bash "$TRACKER" comment-add "$issue_id" "Closed automatically: ${pr_num:+PR #${pr_num} }merged, so the work described here has shipped. Reopen if the merged change does not actually resolve this." >/dev/null 2>&1 || true
+      if bash "$TRACKER" close "$issue_id" "completed" >/dev/null 2>&1; then
+        # Drop state:started only AFTER the close lands. If the label came off
+        # first and the close then failed, the issue would fall straight back
+        # into the builder's picking pool and get rebuilt from scratch.
+        gh issue edit "${issue_id##*-}" --repo "$GITHUB_ISSUES_REPO" \
+          --remove-label "state:started" >/dev/null 2>&1 || true
+        MERGED_CLOSED=$((MERGED_CLOSED + 1))
+        MERGED_CLOSED_LIST+="  • ${issue_id} (PR #${pr_num:-?})\n"
+      else
+        echo "  ⚠️  close failed for $issue_id (merged PR #${pr_num:-?}) — left open" >&2
+      fi
+    fi
     continue
   fi
   if echo "$OPEN_PR_REFS" | grep -qx "$issue_id"; then
@@ -319,17 +392,20 @@ fi
 
 # Cleanup metrics CSV
 # Column history: `recycled` appended as a 4th column 2026-07-27, `expired` as
-# a 5th on 2026-08-28. Rows written earlier have 3 or 4 fields — anything
-# parsing this file must tolerate all widths.
+# a 5th on 2026-08-28, `merged_closed` as a 6th on 2026-08-30. Rows written
+# earlier have 3, 4 or 5 fields — anything parsing this file must tolerate all
+# widths. (`int(row.get('x') or 0)`, never `int(row.get('x', 0))`: DictReader
+# fills a short row's missing columns with None, so the key exists and the get
+# default never fires — see CLAUDE.md.)
 CLEANUP_METRICS_CSV="$OUTPUT_DIR/lift-cleanup-metrics.csv"
 if [ ! -f "$CLEANUP_METRICS_CSV" ]; then
-  echo "date,closed,deduped,recycled,expired" > "$CLEANUP_METRICS_CSV"
+  echo "date,closed,deduped,recycled,expired,merged_closed" > "$CLEANUP_METRICS_CSV"
 fi
 
 if [ "$DRY_RUN" != "--dry-run" ]; then
-  echo "$DATE,$CLOSED,$DEDUPED,$RECYCLED,$EXPIRED" >> "$CLEANUP_METRICS_CSV"
-  log_info "Cleanup: $CLOSED closed, $DEDUPED deduped, $RECYCLED recycled, $EXPIRED expired, $HARVESTED learnings harvested ($ALREADY_CLOSED already closed, skipped)"
-  echo "  ✅ Cleanup: $CLOSED closed, $DEDUPED deduped, $RECYCLED recycled, $EXPIRED expired, $HARVESTED learnings harvested ($ALREADY_CLOSED already closed, skipped)"
+  echo "$DATE,$CLOSED,$DEDUPED,$RECYCLED,$EXPIRED,$MERGED_CLOSED" >> "$CLEANUP_METRICS_CSV"
+  log_info "Cleanup: $CLOSED closed, $MERGED_CLOSED merge-closed, $DEDUPED deduped, $RECYCLED recycled, $EXPIRED expired, $HARVESTED learnings harvested ($ALREADY_CLOSED already closed, skipped)"
+  echo "  ✅ Cleanup: $CLOSED closed, $MERGED_CLOSED merge-closed, $DEDUPED deduped, $RECYCLED recycled, $EXPIRED expired, $HARVESTED learnings harvested ($ALREADY_CLOSED already closed, skipped)"
   if [ "$EXPIRED" -gt 0 ] && [ -n "$EXPIRED_LIST" ]; then
     echo "  🗑  Expired stale P4 issues (reopen if still relevant):"
     echo -e "$EXPIRED_LIST"
@@ -337,6 +413,10 @@ if [ "$DRY_RUN" != "--dry-run" ]; then
   if [ -n "$CLOSED_LIST" ]; then
     echo "  Closed issues:"
     echo -e "$CLOSED_LIST"
+  fi
+  if [ -n "$MERGED_CLOSED_LIST" ]; then
+    echo "  ✅ Closed as completed (PR merged):"
+    echo -e "$MERGED_CLOSED_LIST"
   fi
   if [ -n "$RECYCLED_LIST" ]; then
     echo "  ♻️  Recycled to unstarted (claimed but no PR ever opened):"
@@ -346,10 +426,12 @@ else
   echo "  [dry-run] Cleanup preview complete ($ALREADY_CLOSED already closed, skipped)."
 fi
 
-# Always surface the two categories cleanup deliberately will NOT touch, so a
-# growing pile of either is visible instead of silently shrinking the backlog.
-if [ "$DONE_AWAITING_CLOSE" -gt 0 ]; then
-  echo "  📋 $DONE_AWAITING_CLOSE issue(s) still state:started with a MERGED PR — work is done, issue never closed."
+# Surface anything the merged-PR close path saw but could not finish, plus the
+# one category cleanup deliberately will NOT touch, so a growing pile of either
+# is visible instead of silently shrinking the backlog.
+STILL_AWAITING=$((DONE_AWAITING_CLOSE - MERGED_CLOSED))
+if [ "$DRY_RUN" != "--dry-run" ] && [ "$STILL_AWAITING" -gt 0 ]; then
+  echo "  📋 $STILL_AWAITING issue(s) still state:started with a MERGED PR — the close attempt did not land. Check gh auth."
 fi
 if [ "$REJECTED_PR" -gt 0 ]; then
   echo "  ⚠️  $REJECTED_PR issue(s) stuck at state:started whose PR was closed unmerged — needs your call"

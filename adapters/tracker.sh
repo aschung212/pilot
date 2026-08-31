@@ -337,9 +337,31 @@ gh_board_url() {
 gh_close() {
   local num
   num=$(gh_number "$1")
+  # `gh issue close --reason` takes exactly {completed|not planned} and REJECTS
+  # anything else outright — it errors before closing, it does not close and
+  # then complain. Every caller in this repo spells it `not_planned` (the
+  # Linear enum this adapter grew out of), so for the entire life of the GitHub
+  # backend cleanup.sh's dedupe (step 3) and backlog-expiry (step 4) closes
+  # were silent no-ops while their counters still incremented and the summary
+  # still reported them as closed. Normalize here rather than at the three call
+  # sites, so no caller has to know which backend it is talking to.
   local reason="${2:-completed}"
-  gh issue close "$num" --repo "$GITHUB_ISSUES_REPO" --reason "$reason" >/dev/null 2>&1
-  echo "✓ Closed ${ISSUE_PREFIX}-${num}"
+  case "$reason" in
+    not_planned|not-planned|"not planned"|canceled|cancelled) reason="not planned" ;;
+    completed|Done|done)                                      reason="completed" ;;
+    *)
+      echo "⚠️  tracker: unknown close reason '$reason' — closing as completed" >&2
+      reason="completed"
+      ;;
+  esac
+  # Report what actually happened. The old unconditional "✓ Closed" is how the
+  # not_planned failure stayed invisible for so long.
+  if gh issue close "$num" --repo "$GITHUB_ISSUES_REPO" --reason "$reason" >/dev/null 2>&1; then
+    echo "✓ Closed ${ISSUE_PREFIX}-${num} ($reason)"
+  else
+    echo "✗ Close FAILED for ${ISSUE_PREFIX}-${num} ($reason)" >&2
+    return 1
+  fi
 }
 
 gh_state() {

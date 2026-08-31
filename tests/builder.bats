@@ -426,3 +426,44 @@ https://github.com/aschung212/Lift/pull/99")
   out=$(extract_pr_url "")
   [ -z "$out" ]
 }
+
+# ── PR body carries the closing keyword (script-controlled) ──────────────────
+# builder.sh used to tell the coding agent to write `Closes #N` into a commit
+# body and leave closing to GitHub's merge mechanism. The agent never once did,
+# so from the GitHub migration until 2026-08-30 nothing closed an issue when
+# its PR merged. The keyword now lives in the PR body the script itself writes,
+# so it does not depend on agent compliance.
+
+# bats test_tags=fast
+@test "builder: PR body emits Closes #N for the primary issue, and nothing when there is none" {
+  # Extract the real heredoc from builder.sh rather than restating it, so this
+  # test cannot drift away from the body the script actually sends.
+  BODY_TMPL=$(awk '/<<PRBODY$/{f=1;next} f && /^PRBODY$/{exit} f' "$PILOT_DIR/scripts/builder.sh")
+  [ -n "$BODY_TMPL" ]
+  [[ "$BODY_TMPL" == *"## Summary"* ]]
+
+  render() {
+    PRIMARY_ISSUE="$1" ISSUE_URL="http://x/$1" PLAN="the plan" \
+      bash -c 'PRIMARY_ISSUE_NUM="${PRIMARY_ISSUE##*-}"
+               [ -z "$PRIMARY_ISSUE" ] && PRIMARY_ISSUE_NUM=""
+               cat <<PRBODY
+'"$BODY_TMPL"'
+PRBODY'
+  }
+
+  OUT=$(render "TEST-1238")
+  [[ "$OUT" == *"Closes #1238"* ]]
+  [[ "$OUT" == *"**Issue:** [TEST-1238]"* ]]
+  # Bare number only — GitHub's parser does not understand the TEST-/LIFT- prefix
+  [[ "$OUT" != *"Closes #TEST-1238"* ]]
+
+  # A chore/manual PR with no issue must not emit a dangling `Closes #`
+  OUT=$(render "")
+  [[ "$OUT" != *"Closes #"* ]]
+}
+
+# bats test_tags=fast
+@test "builder: derives the bare issue number from PRIMARY_ISSUE for the PR body" {
+  grep -q 'PRIMARY_ISSUE_NUM="${PRIMARY_ISSUE##\*-}"' "$PILOT_DIR/scripts/builder.sh"
+  grep -q 'Closes #\$PRIMARY_ISSUE_NUM' "$PILOT_DIR/scripts/builder.sh"
+}
