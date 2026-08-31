@@ -323,7 +323,13 @@ GEMINI_APPEND
 echo "  🧠 Phase 2: Claude analysis and issue creation..." | tee -a "$RUN_LOG"
 DISCOVER_JSON="$OUTPUT_DIR/lift-discover-$DATE-output.json"
 # Discovery allowlist — read-only repo access + issue tracker. No shell, no git push.
-DISCOVER_ALLOWED_TOOLS="Read,Glob,Grep,Bash(gh:*),Bash(git log:*),Bash(git diff:*),Bash(git show:*),Bash(ls:*),Bash(cat:*),Bash(wc:*)"
+# WebSearch/WebFetch are what make the Phase 1 fallback real: when Gemini research
+# fails, the log says "Claude will self-research", and without these two tools that
+# claim was false — Claude had no way to reach the web and silently degraded to pure
+# codebase introspection. The 2026-08-30 run recorded it in its own search log:
+# 'SEARCH:WebSearch ... — BLOCKED (tool not permitted this run)'. Do not remove these
+# without also rewording the fallback message in Phase 1.
+DISCOVER_ALLOWED_TOOLS="Read,Glob,Grep,WebSearch,WebFetch,Bash(gh:*),Bash(git log:*),Bash(git diff:*),Bash(git show:*),Bash(ls:*),Bash(cat:*),Bash(wc:*)"
 if ! claude --allowedTools "$DISCOVER_ALLOWED_TOOLS" --model "${AI_CODE_MODEL:-claude-opus-5[1m]}" --effort "${AI_CODE_EFFORT:-max}" --output-format json -p "$(cat "$PROMPT_FILE")" --max-turns "${DISCOVER_MAX_TURNS:-30}" 2>&1 > "$DISCOVER_JSON"; then
   echo "  ❌ Claude analysis failed (exit code $?)" | tee -a "$RUN_LOG"
   slack_send "🚨 *Discovery Agent — Claude analysis failed*

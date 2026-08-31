@@ -17,7 +17,7 @@ Every night, Pilot:
 
 You wake up to a PR with passing tests, a Slack thread summarizing what was done, and a clean issue board.
 
-The pipeline includes a **test suite** (113 bats tests, two-tier execution, pre-commit hook) to validate adapter contracts and pipeline logic before any code ships.
+The pipeline includes a **test suite** (330 bats tests, two-tier execution, pre-commit hook) to validate adapter contracts and pipeline logic before any code ships.
 
 ## How It Works
 

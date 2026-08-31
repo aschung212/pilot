@@ -79,7 +79,9 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
 **Models:** Gemini 2.5 Flash (web research, via the Gemini REST API + Google Search grounding) + Claude Opus (analysis)
 
 **What it does:**
-- Phase 1 (Gemini): Searches the web for the current focus area. Runs through the `ai-research.sh` adapter, which calls the Gemini API with the `GEMINI_API_KEY` (Flash is free-tier; the retired OAuth CLI is no longer used). If research fails it **alerts loudly** and Claude self-researches instead of degrading silently.
+- Phase 1 (Gemini): Searches the web for the current focus area. Runs through the `ai-research.sh` adapter, which calls the Gemini API with the `GEMINI_API_KEY` (Flash is free-tier; the retired OAuth CLI is no longer used). If research fails it **alerts loudly** and Claude self-researches via `WebSearch`/`WebFetch` instead of degrading silently.
+  - Grounding is the only reason Gemini is in this pipeline, and **grounded calls draw on a separate, smaller free-tier bucket than ungrounded ones**. Keep `AI_RESEARCH_MODEL` on a model with free grounded quota (2.5-flash). Bumping the model to dodge an ungrounded rate limit silently costs discovery its web access — that is exactly what happened on 2026-08-30.
+  - The fallback's web tools are load-bearing: until 2026-08-30 `DISCOVER_ALLOWED_TOOLS` had no `WebSearch`/`WebFetch`, so "Claude self-researches" was false — every Gemini failure silently degraded discovery to pure codebase introspection.
 - Phase 2 (Claude): Cross-references findings against the codebase, existing backlog, canceled issues, and product decisions. Creates specific, actionable GitHub issues.
 
 **Focus area rotation (GA-readiness mode, since 2026-08-21):** Lift is feature-complete and in beta; discovery now hunts only stabilization work. Six focus areas in a weighted 20-slot cycle (~6.5 weeks at 3 runs/week): `bug-hunt` ×5 (codebase bug hunting: races, unhandled rejections, data loss, edge cases), `performance` ×4, `ux-polish` ×4 (refinement of existing flows — states, consistency, friction), `accessibility` ×3, `pwa-reliability` ×2 (offline sync correctness, SW update flow), `security-deps` ×2. The discovery prompt forbids net-new feature and test-only issues, requires every finding to cite a code location, and caps output at 2–6 discoveries (zero is valid — no quota padding). Retired feature-research areas (competitors, ui-trends, testing, seo-aso, data-viz, onboarding, dx-cicd, monetization, marketing, growth, pwa-patterns) keep their prompts for manual runs (`discover.sh <focus>`) but never enter the rotation. A `QUEUE_VERSION` stamp (`data/lift-discovery-queue.version`) discards any queue written by an older rotation, so stale focus areas can't run after a rotation change ships.
@@ -428,7 +430,7 @@ Pipeline is fully decomposed — each service has its own launchd plist. No orch
 
 | Agent | Model | Rationale |
 |---|---|---|
-| Discovery (research) | Gemini 2.5 Flash (Gemini API + Google Search grounding) | Grounded web search returns real URLs/versions, saves Claude tokens. Free tier via `GEMINI_API_KEY`. |
+| Discovery (research) | Gemini 2.5 Flash (Gemini API + Google Search grounding) | Free grounded web search via `GEMINI_API_KEY`; saves Claude tokens. Falls back to Claude + `WebSearch` when the grounded bucket is dry. Caveat: the adapter returns prose only — Gemini's `groundingMetadata` citations are discarded, so its findings arrive uncited (measured 2026-08-30: 0 URLs vs 24 from Claude Sonnet 5 on the same prompt). |
 | Discovery (analysis) | Claude Opus 5 (1M, max effort) | Best at codebase reasoning + issue creation |
 | Triage | Gemini 2.5 Flash via Gemini API (Claude Sonnet fallback) | Good at planning; free-tier Flash via `GEMINI_API_KEY`. **Not** Google AI Pro — that consumer subscription grants no API access. |
 | Builder | Claude Opus 5 (1M, max effort) | Best coding model, complex multi-file changes |

@@ -194,3 +194,30 @@ LOG
   run check_lost "$RUN_LOG" 0 1
   [ "$status" -eq 1 ]
 }
+
+# bats test_tags=fast
+@test "discover: Phase 1 fallback allowlist actually grants Claude web access" {
+  # Regression guard for 2026-08-30. The Phase 1 failure path has always told the
+  # operator "Claude will self-research", but DISCOVER_ALLOWED_TOOLS carried no web
+  # tool, so on every Gemini failure Claude silently degraded to codebase-only
+  # introspection. Assert against the SHIPPED script, not a copy of the string.
+  run grep -E '^DISCOVER_ALLOWED_TOOLS=' "$PILOT_DIR/scripts/discover.sh"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"WebSearch"* ]]
+  [[ "$output" == *"WebFetch"* ]]
+
+  # The promise and the capability must stay in sync: if the fallback message
+  # still claims self-research, the tools above are what make it true.
+  run grep -c 'Claude self-researches\|Claude will self-research' "$PILOT_DIR/scripts/discover.sh"
+  [ "$status" -eq 0 ]
+}
+
+# bats test_tags=fast
+@test "discover: research adapter is called grounded (grounding is why Gemini is here)" {
+  # Discovery's Phase 1 must NOT pass --no-grounding. Ungrounded Flash returns
+  # unsourced prose; grounded is the entire reason this call exists. triage.sh is
+  # the one caller that legitimately passes --no-grounding.
+  run grep -n 'AI_RESEARCH" prompt "\$RESEARCH_PROMPT"' "$PILOT_DIR/scripts/discover.sh"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"--no-grounding"* ]]
+}
