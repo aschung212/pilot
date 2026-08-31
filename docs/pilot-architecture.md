@@ -387,16 +387,16 @@ Reporter only — never mutates an issue, PR, or branch.
 
 ## Testing Infrastructure
 
-The pipeline has a bats-core test suite with **344 tests across 26 test files** in `~/development/pilot/tests/`. Tests use two-tier execution to balance speed with thoroughness:
+The pipeline has a bats-core test suite with **360 tests across 26 test files** in `~/development/pilot/tests/`. Tests use two-tier execution to balance speed with thoroughness:
 
-**Fast tier (297 tests) — pre-commit hook:**
+**Fast tier (313 tests) — pre-commit hook:**
 - Runs before every commit via `.githooks/pre-commit`
 - Covers: unit tests, adapter contract tests, argument parsing, error handling, log formatting
 - Builder tests source real functions from `lib/builder-utils.sh` (not copies of logic)
 - Parallel execution via GNU parallel (`bats -j 8`)
 - Blocks commit if any test fails
 
-**Full tier (344 tests) — GitHub Actions CI:**
+**Full tier (360 tests) — GitHub Actions CI:**
 - Runs on every push via `.github/workflows/test.yml`
 - Includes everything in the fast tier plus integration-level tests (CSV analysis, full script invocations)
 - Test paths resolve dynamically (no hardcoded local paths) for CI runner compatibility
@@ -510,7 +510,7 @@ Feedback loop → canceled issues + product decisions steer discovery;
 | `~/development/pilot/scripts/stale-pr-audit.sh` | Weekly audit: open PRs whose work has already shipped (no-op merges, duplicate/colliding migrations) |
 | `~/development/pilot/scripts/pr-close-reconcile.sh` | Closes/re-triages issues whose PR was closed unmerged — the state:started leak that hid 69% of the backlog from Triage |
 | `~/development/pilot/scripts/doc-drift-audit.sh` | Biweekly audit: docs vs. the repo's actual state (checks in `lib/doc-drift-check.py`) |
-| `~/development/pilot/tests/` | bats-core test suite (344 tests, 26 files, two-tier execution) |
+| `~/development/pilot/tests/` | bats-core test suite (360 tests, 26 files, two-tier execution) |
 | `~/development/pilot/.github/workflows/test.yml` | GitHub Actions CI — full test suite on push |
 | `~/development/pilot/.githooks/pre-commit` | Pre-commit hook — fast test tier on every commit |
 | `~/development/pilot/project.env` | Lift-specific configuration (git-ignored) |
