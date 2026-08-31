@@ -346,12 +346,12 @@ New `target-ci-watch.sh` runs as part of the **daily 06:15 Issue Digest** and pu
 
 It went in the digest rather than the weekly health report deliberately: a weekly cadence would have needed six reports to notice a streak this long, and a red default branch means nothing is deploying.
 
-**It found a second outage on its first run.** `Integration Tests` has been red since 2026-08-18 — 13 consecutive failures, failing job `supabase-integration`. Nothing had ever surfaced it. That one is still open and is not fixed by tonight's work.
+**It found a second outage on its first run.** `Integration Tests` was red with 13 consecutive failures, failing job `supabase-integration`. Nothing had ever surfaced it. It was not fixed by tonight's work — see the 2026-08-31 entry at the bottom of this changelog, where it turned out the workflow had never been green *once*, in any run, since it was created in May.
 
 #### ⚠️ New for Aaron
 
 - **A red workflow will now appear at the top of your morning digest** and stay there until it's green. That's the whole point — it should be annoying.
-- **`Integration Tests` is still red** (`supabase-integration`, since 2026-08-18). Worth a look; it's unrelated to the migration problem that was fixed tonight.
+- ~~**`Integration Tests` is still red** (`supabase-integration`, since 2026-08-18). Worth a look; it's unrelated to the migration problem that was fixed tonight.~~ **Fixed 2026-08-31** (Lift #1283 / PR #1284) — green for the first time in its history.
 - **Green is silent.** No news in the digest means every workflow passed. If the check itself can't read the branch, it says UNKNOWN rather than staying quiet.
 - Turn it off with `TARGET_CI_WATCH_ENABLED=0` if it ever becomes noise.
 
@@ -1428,3 +1428,14 @@ Repaired `lift-metrics.csv` in place (one-shot script reconstructed 46 split row
   *"fatal: this operation must be run in a work tree"* until `git config core.bare false`
   is restored. That happened during this work and was repaired. Use
   `git config --worktree core.hooksPath .githooks` instead.
+
+### 2026-08-31 — Lift: the `Integration Tests` workflow had never once been green (#1283, PR #1284)
+
+- **What.** `target-ci-watch.sh`'s first find is closed. The nightly `Integration Tests` workflow is green, and ran a real `17 passed (17)` rather than skipping itself into a green.
+- **It was worse than the digest could see.** The digest reported 13–14 consecutive failures since 2026-08-18. That was just the edge of GitHub's retained-run window: the true count is **95 of 95 runs, never green, back to its first scheduled run on 2026-05-29**. The workflow shipped broken and stayed broken for three months.
+- **Root cause — a wrong premise written into a comment.** `supabaseIntegration.test.ts` documented that it "uses the service_role key (bypasses RLS) so tests can insert rows with any user_id without needing auth.users entries." `service_role` bypasses row-level security; it does **not** bypass foreign keys, which Postgres enforces from the table definition regardless of role. Every synced Lift table declares `user_id uuid not null references auth.users(id) on delete cascade`, so each test's invented UUID failed its first insert with SQLSTATE `23503` and every later assertion in that test then ran against an empty result set. 17 tests, every night, for three months.
+- **Not the CLI.** The failing log is dominated by `supabase/setup-cli`'s own Alpine/musl troubleshooting scaffolding — `libstdc++`, `nodejs`, "Supabase CLI npm installs require Node.js 20+". That is the action's *echoed error-handling script*, not output: the step succeeds, exactly as it does in `ci.yml`'s `migrate-db`. Anyone reading `--log-failed` would be sent straight at the wrong component, which is part of why this sat for so long.
+- **Fix.** Tests now mint a real `auth.users` row through the Admin API (reachable for the same reason RLS is bypassed — we hold the service_role key), and cleanup hard-deletes that user and lets the FK's `on delete cascade` take the domain rows. Cleanup no longer enumerates tables in FK order, so a future synced table needs no change there. The comment that encoded the wrong premise is corrected in place.
+- **Also closed the false-GREEN next door.** The suite `describe.skip`s itself when its env vars are empty — right for a local run without Supabase, but in CI an empty service-role key would have reported the job **green having run zero tests**. The credential step now runs under `set -euo pipefail`, uses jq's `// empty` so a missing field yields `""` rather than the literal string `"null"`, and fails loudly on an empty key.
+- **Verified both directions, not just the happy one.** Against a real local Supabase: 17/17 pass with the change; 17/17 fail with the identical `23503` assertion when the file alone is reverted to master. CI dispatch on the branch: [run 33419253626](https://github.com/aschung212/Lift/actions/runs/33419253626), `17 passed (17)`.
+- **New responsibility for Aaron.** None. One thing to know: **this workflow is `schedule` + `workflow_dispatch` only, so it still never runs on a PR and still cannot block a merge.** A schema/RLS-breaking change merges green and is caught the next morning at best. That gap is Lift #1011 and was deliberately left open — wiring a Dockerised Supabase into every PR is its own change with its own cost. Until then, `target-ci-watch.sh` is the only thing standing between a broken real-DB suite and silence, which is precisely the job it was built for.
