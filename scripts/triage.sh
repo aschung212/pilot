@@ -95,6 +95,33 @@ else
   echo "$RECONCILE_OUT" | grep -E "^(  [✖↩？]|Closed:)" | sed 's/^/    /' | tee -a "$TRIAGE_LOG" || true
 fi
 
+# ── Promote issues Aaron filed by hand ───────────────────────────────────
+# Also BEFORE the triageable query, and after reconcile: an issue Aaron filed
+# through the GitHub UI has no state:* label, so it is already triageable —
+# but it has no priority either, and the GA-readiness policy below would SKIP
+# it to priority:4-low if it proposes a feature. This pre-step stamps
+# origin:aaron + priority:1-urgent first, so the GA carve-out keyed on
+# origin:aaron fires during this same run.
+#
+# Pre-step, not a gate — a failure must never stop triage. Kill switch:
+# MANUAL_CLAIM_ENABLED=0.
+CLAIM_MANUAL="$SCRIPT_DIR/claim-manual-issues.sh"
+if [ "${MANUAL_CLAIM_ENABLED:-1}" = "0" ]; then
+  echo "  ⏭  Manual-issue claim disabled (MANUAL_CLAIM_ENABLED=0)" | tee -a "$TRIAGE_LOG"
+elif [ ! -x "$CLAIM_MANUAL" ]; then
+  echo "  ⚠️  Manual-issue claim not found at $CLAIM_MANUAL — skipping" | tee -a "$TRIAGE_LOG"
+  log_warn "claim-manual-issues.sh missing or not executable"
+else
+  CLAIM_MODE="--apply"
+  [ "$DRY_RUN" = "--dry-run" ] && CLAIM_MODE="--dry-run"
+  echo "  🙋 Manual-issue claim ($CLAIM_MODE)..." | tee -a "$TRIAGE_LOG"
+  CLAIM_OUT=$(bash "$CLAIM_MANUAL" "$CLAIM_MODE" --notify 2>&1) || {
+    echo "  ⚠️  Manual-issue claim failed — continuing with triage" | tee -a "$TRIAGE_LOG"
+    log_warn "claim-manual-issues failed: $(echo "$CLAIM_OUT" | tail -3 | tr '\n' ' ')"
+  }
+  echo "$CLAIM_OUT" | grep -E "^(  [⤴⚠]|Promoted:)" | sed 's/^/    /' | tee -a "$TRIAGE_LOG" || true
+fi
+
 # Get every issue in scope for triage. "triageable" is exclusion-based:
 # every open issue that is NOT in {state:started, state:blocked, state:canceled}.
 # This includes state:triage, state:backlog, state:unstarted, AND issues with
@@ -217,6 +244,30 @@ for issue_id in $UNTRIAGED_IDS; do
   # Load triage learnings (self-improving context from past corrections)
   TRIAGE_LEARNINGS=$(cat "$OUTPUT_DIR/lift-triage-learnings.md" 2>/dev/null | head -40 | tr '\n' ' ' || echo "No learnings yet.")
 
+  # ── GA-policy carve-out for hand-filed issues ──────────────────────────
+  # Read the label off the API rather than grepping ISSUE_DETAIL: the marker
+  # comment claim-manual-issues.sh leaves contains the literal string
+  # "origin:aaron", so a substring match over the issue text would false-
+  # positive on any issue that merely quotes it.
+  _issue_num="${issue_id#${ISSUE_PREFIX}-}"
+  MANUAL_FILED=""
+  if gh issue view "$_issue_num" --repo "$GITHUB_ISSUES_REPO" --json labels \
+       --jq '[.labels[].name] | index("origin:aaron")' 2>/dev/null | grep -qE '^[0-9]+$'; then
+    MANUAL_FILED="1"
+  fi
+
+  if [ -n "$MANUAL_FILED" ]; then
+    GA_CARVEOUT="
+OVERRIDE — THIS ISSUE IS EXEMPT FROM THE GA-READINESS POLICY ABOVE. It carries the \`origin:aaron\` label, meaning Aaron filed it by hand rather than a Pilot agent proposing it. Standing rule (2026-08-30): if Aaron takes the time to file a ticket himself, it gets addressed ASAP. Therefore:
+- You MUST NOT return SKIP on the grounds that it is a net-new feature, a new screen, a new integration, or growth/monetization work. 'Deferred until post-GA' does NOT apply to this issue.
+- Treat it as APPROVE or ENHANCE. Prefer ENHANCE when the issue is loosely specified — tighten the scope and add implementation guidance rather than punting.
+- Leave SUGGESTED_PRIORITY at 1. It has already been promoted to priority:1-urgent deliberately; do not lower it.
+- SKIP remains valid ONLY for reasons unrelated to the GA policy — e.g. it is a true duplicate of an existing issue, or it is already implemented. Say which, explicitly.
+- FLAG remains valid if there is a genuine product decision only Aaron can make, subject to the two-concrete-options rule below."
+  else
+    GA_CARVEOUT=""
+  fi
+
   # Build a concise triage prompt — keep under shell arg limits
   TRIAGE_PROMPT="Triage this issue for $PROJECT_NAME ($TECH_STACK).
 
@@ -233,6 +284,7 @@ GA-READINESS POLICY (in effect since 2026-08, supersedes any older triage verdic
 - Large refactors: APPROVE only if they directly unblock a bug, performance, or reliability fix — not for cleanliness alone.
 - Bug reports, perf issues, UX polish, a11y, and security issues triage normally under the rules below.
 - SUGGESTED_PRIORITY under this policy: 1=crash/data loss/security, 2=user-visible bug or significant perf problem, 3=UX friction/polish, 4=cosmetic or deferred.
+$GA_CARVEOUT
 
 $RESCOPE_GUIDANCE
 
@@ -386,7 +438,18 @@ $REASON
 
 ---
 _Automated triage — can be overridden by moving to Unstarted._" || true
-      bash "$TRACKER" update "$issue_id" --priority 4 || true
+      # Deterministic backstop for the GA carve-out. The prompt tells the model
+      # not to SKIP an origin:aaron issue, but a prompt is a request, not a
+      # guarantee — and the demotion to priority:4 is exactly what buries a
+      # hand-filed issue for good. Keep the SKIP comment (the reasoning may be
+      # worth reading) but refuse the demotion.
+      if [ -n "$MANUAL_FILED" ]; then
+        echo "    ⚠️  SKIP verdict on hand-filed $issue_id — keeping priority:1-urgent (GA carve-out)" | tee -a "$TRIAGE_LOG"
+        log_warn "triage returned SKIP on origin:aaron issue $issue_id; demotion suppressed"
+        bash "$TRACKER" comment-add "$issue_id" "⚠️ The SKIP above was **not** applied to this issue's priority. It carries \`origin:aaron\` (filed by hand), so the GA-readiness policy does not defer it and it stays at \`priority:1-urgent\`. If this really should be dropped, remove the \`origin:aaron\` label." || true
+      else
+        bash "$TRACKER" update "$issue_id" --priority 4 || true
+      fi
       RESULTS+="  • ⏭️ <${ISSUE_URL}|${issue_id}>: ${ISSUE_TITLE} — _${REASON:-no reason}_\n"
       ;;
     FLAG)

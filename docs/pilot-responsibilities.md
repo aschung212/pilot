@@ -112,7 +112,7 @@ Verify with `launchctl list | grep doc-drift`. It fires weekly but no-ops on odd
 - Post-merge CI failure → Slack notification
 - Slack threading: one parent message per night, all updates threaded (updated for multi-PR output)
 - Slack webhooks: all notifications are token-free (no Claude instances spawned)
-- Test suite (bats-core, 316 tests across 24 files): fast tier (297 tests) runs on every commit via pre-commit hook, full tier (316 tests) runs on push via GitHub Actions CI
+- Test suite (bats-core, 328 tests across 25 files): fast tier (297 tests) runs on every commit via pre-commit hook, full tier (328 tests) runs on push via GitHub Actions CI
 - Auto-discovery smoke tests: fail when new scripts lack test coverage — enforces that every new script gets tests
 - Linear digest: posts board snapshot to #daily-review at 6:15 AM daily (launchd)
 
@@ -171,7 +171,7 @@ If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/T
 | `~/development/lift/CLAUDE.md` | Lift project standards (design, code, workflow) |
 | `~/.claude/commands/ai-review.md` | Daily review slash command |
 | `~/.claude/CLAUDE.md` | Global Claude instructions |
-| `~/development/pilot/tests/` | bats-core test suite — 24 test files, 316 tests (fast tier, 297, runs in the pre-commit hook) |
+| `~/development/pilot/tests/` | bats-core test suite — 25 test files, 328 tests (fast tier, 297, runs in the pre-commit hook) |
 | `~/development/pilot/.github/workflows/test.yml` | GitHub Actions CI — runs full test suite on push |
 | `~/development/pilot/.githooks/pre-commit` | Git pre-commit hook — runs fast test tier before every commit |
 | `~/Documents/Scripts/lift-triage.sh` | Gemini issue triage — reviews, enhances, and plans before builder runs |
@@ -201,6 +201,36 @@ If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/T
 ---
 
 ## Changelog
+
+### 2026-08-30 — Issues you file by hand now jump the queue
+
+You asked: *"any issues i manually create myself (not automated via pilot) should still be picked up with top priority, even with the ongoing GA readiness policy. as a rule, if i take the time to file a ticket myself, I want it addressed asap."*
+
+Before this, an issue you filed by hand was **actively buried within hours**. Three gates: Triage's GA policy SKIPped it as a net-new feature and stamped `priority:4-low`; the builder's pre-pick sorted feature-shaped issues last; and the builder only runs Mon–Fri. LIFT-1271 and LIFT-1272 were both headed there.
+
+Now a new `claim-manual-issues.sh` runs as a pre-step of both Triage and the Builder. Anything open, authored by you, with no `state:*` label gets `origin:aaron` + `priority:1-urgent` + `state:unstarted` and a comment explaining the promotion. Triage may no longer SKIP it for being feature-shaped, and the builder's pre-pick takes it ahead of everything else.
+
+The detector is exact rather than heuristic: every issue Pilot creates gets a `state:*` label at creation, so "no state label" means a human filed it. Checked against all 109 open issues — zero false positives, nothing to backfill.
+
+#### ⚠️ New for Aaron
+
+- **Just file the issue. Don't add labels.** The detector keys on the *absence* of a `state:*` label. If you add one yourself, the issue looks Pilot-created and won't be promoted. Title + body is all it needs.
+- **It only promotes issues authored by you.** Lift is a public repo, so this is gated on the GitHub author — otherwise a stranger's first bug report would outrank your whole backlog. Set `MANUAL_ISSUE_AUTHOR` if that ever needs to change.
+- **To opt an issue out**, remove the `origin:aaron` label and set the priority you want. To turn the whole thing off, `MANUAL_CLAIM_ENABLED=0`.
+- **`priority:1-urgent` now means something.** Nothing else in the backlog carries it. If you start using it by hand, your issues and Pilot's will compete.
+
+### 2026-08-30 — Three builder defects, found while your two feature issues failed to build
+
+Forcing LIFT-1271 through the builder exposed problems that were costing every run, not just this one.
+
+- **The pre-pick never saw priority labels.** Its prompt said priorities "appear in the issue list", but the underlying query has emitted bare `LIFT-N Title` rows in *every revision in this repo's history*. Your backlog has been ordered by title vibes, not priority, for the life of the pipeline. Fixed — the builder now annotates and pre-sorts the list itself.
+- **330 permission denials across 51 August runs** (~6.5 per run). 57% were the agent trying to pin which binary runs (`PATH=…`, absolute paths) — shapes the allowlist can never match. The builder now hands every `claude` child an explicit `BUILDER_PATH`, and the prompt tells the agent that retrying a denied command with a PATH prefix is the one change guaranteed not to help.
+- **Failed runs destroyed their own work silently.** LIFT-1271 was fully implemented, then hit the 100-turn ceiling on denied verification commands; the branch was deleted and 513 verified insertions were left uncommitted where the next run would wipe them. `BUILDER_MAX_TURNS` is now 150, failures print why they failed, and uncommitted work is parked on a `recovered/…` branch.
+
+#### ⚠️ New for Aaron
+
+- **Check for `recovered/…` branches after a failed run.** A failed iteration now parks its work there and posts to #lift-automation. Nothing is pushed — it's yours to keep or delete.
+- **LIFT-1271 shipped as [Lift PR #1273](https://github.com/aschung212/Lift/pull/1273)** — recovered by hand from the failed run and verified (typecheck, lint, 3710 tests, build). Review it like any other Pilot PR; the provenance is in the PR body.
 
 ### 2026-08-28 — Backlog audit: 149 of 255 Lift issues closed, and the leak that let them pile up
 
@@ -1101,29 +1131,3 @@ Repaired `lift-metrics.csv` in place (one-shot script reconstructed 46 split row
 - **Notable resolutions beyond textual conflicts.** (1) **#1111 was rebuilt, not merged** — its commit had absorbed ~1,000 lines of unrelated LIFT-1108 progress-photos WIP (the PR's own body flagged this); the branch was reset to master and re-committed with only the three LIFT-1109 files. The WIP is preserved untouched on **`wip/LIFT-1108-progress-photos`**. (2) **#1044**: dropped its stray `target_e1rm` migration (orphan column — nothing reads it, and `databaseTypesDrift.test.ts` would fail CI), fixed a latent typecheck error in `notify`'s `actions` typing, made the Notification-constructor fallback strip `actions` (Chrome throws on them — the notification would otherwise silently not show), and added `sw-notification-handler.js` to the vercel.json SPA-rewrite lookahead per the #1155 rule. (3) **#1031**: master's metric selector (#1042) landed after the PR and made `dailyBest` metric-dependent, so plateau detection was pinned to a dedicated daily-best **e1RM** series — the badge would otherwise have claimed "no new e1RM best" from volume/reps data. (4) **#1067**: master's peak-moment reveal (#1060) was routed through the PR's centralized `revealBanner` so install-banner impressions are logged from every reveal path.
 - **New responsibility for Aaron.** `wip/LIFT-1108-progress-photos` holds the half-wired progress-photos WIP for whenever LIFT-1108 is picked up — delete the branch if that feature is abandoned. Nothing else day-to-day.
 - **Tests.** All four gates (lint / typecheck / vitest / build) run green locally on every PR after resolution; full CI (incl. e2e + Lighthouse) green before each merge. Final master state after the fifth merge: 3657 tests passing locally at resolution time.
-
-### 2026-08-30 — Pilot: nothing ever closed an issue when its PR merged
-
-- **Symptom.** Aaron spotted `state:started` issues sitting open in the Lift backlog whose PRs had already merged — LIFT-1238 (PR #1265) and LIFT-1264 (PR #1267), both merged 2026-08-29 06:35.
-- **Root cause: there is no close path.** Three mechanisms each looked like they covered merge-time closure and none did.
-  1. `builder.sh` told the coding agent to write `Closes #N` into a commit body and left the closing to GitHub. **The agent has never once emitted it** — checked across every recent overnight commit. Same failure as the marker separators already catalogued in CLAUDE.md: the prompt's documented format was never the observed format.
-  2. `cleanup.sh` step 1 closes issues the tracker reports as `completed` — but that query lists issues **already closed on GitHub**, so it can only ever re-close what is already closed (hence the ~103 "already closed, skipped" every run).
-  3. `cleanup.sh` step 2 detected the condition *exactly right* and then `continue`d, with a comment deferring to "the close path" in (1)/(2).
-  Net: for the life of the GitHub backend, **every close on the Lift board was Aaron doing it by hand.** The pile was reported nightly as "📋 N issue(s) still state:started with a MERGED PR" and never acted on — the architecture doc records it hitting 150 on 2026-08-28 and calls it expected behaviour.
-- **Fix, in two independent places.** `builder.sh` now writes `Closes #N` into the **PR body it generates itself** — script-controlled, so it needs no agent compliance and GitHub closes the issue on merge. `cleanup.sh` step 2 now actually closes the merged bucket (comment naming the shipping PR → close as completed → drop `state:started`, in that order: label-first would drop a still-open issue straight back into the builder's picking pool to be rebuilt). Dry-run previews without writing.
-- **Second bug, found while verifying the first: `gh issue close --reason not_planned` is invalid.** It accepts only `{completed|not planned}` and **errors out before closing anything**. Every caller spells it `not_planned` (the Linear enum this adapter grew out of), so cleanup's duplicate-close (step 3) and backlog-expiry (step 4) have never once closed an issue — while their counters incremented and the summary reported them as done. `tracker.sh`'s `gh_close` now normalizes both spellings, and reports a failure instead of printing "✓ Closed" unconditionally.
-- **Third bug, same area: `cleanup.sh`'s PR queries were capped at `--limit 500` against 558 merged / 687 total PRs.** `gh pr list` truncates silently, so the oldest PRs were already invisible — and an issue whose only PR fell off the end reads as "no PR ever" and gets **recycled**, rebuilding work that already shipped. Now `GH_PR_LIMIT` (default 2000) with an at-the-cap stderr warning, mirroring `GH_OPEN_LIMIT`.
-- **Board fixed.** LIFT-1238 and LIFT-1264 closed as completed with `state:started` removed. The only remaining `state:started` issue is LIFT-1271, which the builder is actively working.
-- **New responsibility for Aaron.** None day-to-day — this removes manual work rather than adding it. Two things to know: (1) `GH_PR_LIMIT` is a new `project.env` knob (default 2000, documented in `project.env.example` and written by `init.sh`); existing `project.env` files inherit the default, no edit needed. (2) The nightly cleanup will close the backlog of already-merged issues on its first run after this merges, so expect a burst of closures in that report — they are real, and each carries a comment naming the PR that shipped it.
-- **Known adjacent hazard, not fixed here.** The dry run showed cleanup would have recycled **LIFT-1271** mid-build — the builder flips `state:started` at pre-pick and cleanup sees no PR yet. That is the pre-existing "never run cleanup while the builder is running" constraint in CLAUDE.md, unchanged by this work.
-- **Tests.** 316 passing (was 307): 5 new end-to-end cleanup tests driving the real script against a scripted `gh` (merged → closes; open PR → untouched; closed-unmerged → reported not closed; dry-run → no writes; cap → warns), 2 tracker close-reason tests, 2 builder PR-body tests that extract the real heredoc from the script rather than restating it. Full suite green; `bash -n` clean on every modified script.
-
-### 2026-08-28 — Lift: streak catch-up reverted by the progression fetch — toast and badge disagreed (#1269, PR #1270)
-
-- **Symptom.** Aaron's screenshot: the XP toast announced `4-week streak! Duration bonus: 1.25×` while the weekly-goal badge directly beneath it read `1-week streak`. Both render `progressionStore.streakWeeks` — the same field, read a few hundred ms apart.
-- **Root cause.** `App.vue`'s `onMounted` runs the streak catch-up (`evaluatePendingWeeks`) against LOCAL state and fires the milestone toast with what it computed, while `initSupabase().then(initAuth)` sits beside it deliberately un-awaited. `progression._fetchFromSupabase` therefore resolves *after* the catch-up, and adopted `streak_weeks` / `streak_history` remote-wins — discarding the evaluation the app had just performed. The badge re-rendered the reverted value; the already-scheduled toast still carried the pre-merge one.
-- **Why it was permanent, not a one-off race.** `evaluateWeek` enqueues its upsert under the `progression-sync` queue key, and the `_syncToSupabase()` at the tail of `_fetchFromSupabase` enqueues under that SAME key before the 1s debounce flushes. The queue is a `Map` keyed by that string, so the reverted payload *replaced* the fresh one and wrote the stale streak back to the server — re-arming the identical revert, and the identical toast, on every single launch. Aaron's streak had been stuck at 1 while the app recomputed 4 each morning.
-- **Fix.** Remote-wins is only correct for values the *user* sets, never for values the client recomputes at launch. `streakHistory` is append-only and week-ordered, so it has a real "further along": `mergeStreakHistory` keeps whichever side's latest `weekStart` is later (ties → longer history, then remote), and `streakWeeks` is read off that history's latest `streakCount` — `evaluateWeek` already stamps the post-update count onto every entry, so the history IS the streak. `data.streak_weeks` survives as a fallback only when neither side has any history.
-- **Why tests missed it.** `progression.test.ts` mocks `syncQueue` and never drives `_fetchFromSupabase`; the fetch-path suites (`supabaseFetchResilience`, `supabaseApiError`) only assert failure modes. No test had ever landed a **successful** remote row on top of locally-advanced streak state — the entire merge branch was untested. New `progressionStreakMerge.test.ts` does exactly that, and was verified to fail with the reported `expected 1 to be 4` when the store change is reverted.
-- **New responsibility for Aaron.** Review + merge [PR #1270](https://github.com/aschung212/Lift/pull/1270). The server row still holds the stale streak; it self-repairs on the first launch after deploy, when the catch-up's value is no longer reverted and gets pushed. Going forward: any derived-then-synced field needs the same treatment as streaks — the rule is now in Lift's CLAUDE.md.
-- **Tests.** 3689 passed (207 files; +8 new); lint (0 errors) / typecheck / build clean; full CI green on the PR incl. WebKit e2e + Lighthouse.

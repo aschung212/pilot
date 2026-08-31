@@ -98,6 +98,7 @@ All logs, metrics, queues, and outputs live in `pilot/data/` (gitignored). Key f
 - `lift-enhance-YYYY-MM-DD-runN.md` — per-iteration build logs
 - `lift-discover-YYYY-MM-DD.md` — discovery run logs
 - `lift-stale-pr-audit-YYYY-MM-DD.md` — stale-PR audit report (weekly, Sun 08:15)
+- `lift-claim-manual-YYYY-MM-DD.md` — hand-filed issues promoted to top priority (pre-step of triage and the builder)
 - `lift-doc-drift-YYYY-MM-DD.md` — doc-drift audit report (biweekly, Sun 09:00)
 - `lift-build-learnings.md` — Aaron's closing comments on rejected (closed-unmerged) PRs; harvested by cleanup.sh, injected into the builder prompt
 - `lift-needs-decision.txt` — nightly snapshot of rejected-PR issues awaiting Aaron's decision; read by digest.sh
