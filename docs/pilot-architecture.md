@@ -262,12 +262,16 @@ Cleanup now sorts every `state:started` issue into four buckets by cross-referen
 |---|---|---|
 | Recycle | no PR of **any** state references it | auto-reset to `state:unstarted` |
 | In flight | has an **open** PR | none (normal state) |
-| Done, awaiting close | has a **merged** PR | reported as a count |
+| Done | has a **merged** PR | auto-closed as completed, `state:started` removed |
 | Needs your call | every PR was **closed unmerged** | reported by ID — never auto-recycled |
 
-The rule is deliberately conservative: only the "no PR ever" case is unambiguous. A closed-unmerged PR may have been a deliberate rejection, so auto-recycling it would rebuild work Aaron already declined — those are surfaced for a human decision instead.
+The rule is deliberately conservative on the *recycle* side: only the "no PR ever" case is unambiguous. A closed-unmerged PR may have been a deliberate rejection, so auto-recycling it would rebuild work Aaron already declined — those are surfaced for a human decision instead.
 
-Recycled counts are appended to `data/lift-cleanup-metrics.csv` as a fourth `recycled` column; `expired` was added as a fifth on 2026-08-28. Rows written earlier have three or four fields, so parsers must tolerate all widths.
+**Merged-PR close (since 2026-08-30).** The "Done" bucket used to `continue` with a comment deferring to "the close path". There was no close path — see the callout below. It now comments the shipping PR number on the issue, closes it as completed, and removes `state:started` *after* the close lands (label-first would drop a still-open issue back into the builder's picking pool to be rebuilt). `--dry-run` previews without writing.
+
+> **Nothing closed an issue when its PR merged — for the life of the GitHub backend.** Three mechanisms each looked like they covered it and none did. (1) `builder.sh` told the coding agent to write `Closes #N` into a commit body and left closing to GitHub's merge mechanism; the agent never once emitted it — the same "the prompt's documented format is not the observed format" failure as the marker separators in CLAUDE.md. (2) Cleanup step 1 closes issues the tracker reports as `completed`, but that query lists issues **already closed on GitHub**, so it can only re-close what is already closed. (3) Cleanup step 2 saw the condition exactly and deferred it to (1)/(2). Net: every close on the Lift board was Aaron doing it by hand, and the backlog of them showed only as the "📋 N issue(s) still state:started with a MERGED PR" line printed at the end of a cleanup run — reported for months, never acted on. Fixed 2026-08-30 in two independent places: `builder.sh` now writes `Closes #N` into the **PR body it controls** (no agent compliance required), and cleanup step 2 sweeps anything that mechanism misses.
+
+Recycled counts are appended to `data/lift-cleanup-metrics.csv` as a fourth `recycled` column; `expired` was added as a fifth on 2026-08-28 and `merged_closed` as a sixth on 2026-08-30. Rows written earlier have three, four or five fields, so parsers must tolerate all widths — and must use `int(row.get('x') or 0)`, never `int(row.get('x', 0))`, since `csv.DictReader` fills a short row's missing columns with `None`.
 
 **Needs-your-call snapshot + rejection-learnings harvest (step 2b, since 2026-08-28).** The "closed unmerged — needs your call" bucket used to live only in an overnight log; now it feeds two consumers:
 - `data/lift-needs-decision.txt` — a nightly overwrite of the current rejected-PR issue IDs. The morning digest reads it and renders the "⚖️ Needs your call" line, so these decisions surface in the daily standup instead of rotting.
@@ -276,6 +280,8 @@ Recycled counts are appended to `data/lift-cleanup-metrics.csv` as a fourth `rec
 **Backlog expiry (step 4, since 2026-08-28).** Triage SKIP demotes issues to `priority:4-low` and nothing ever revisited them — they accumulate forever and creep toward the adapter's silent `--limit 200` truncation cliff. Any open `priority:4-low` issue untouched for `BACKLOG_EXPIRY_DAYS` (default 56, `0` disables) is closed as not planned with a reopen invitation. Parked issues (`state:started` / `state:blocked` / `state:needs-input`) never expire — those are waiting on a human, not forgotten.
 
 > **Adapter query limits.** Every open-issue query in `tracker.sh` shares a single cap, `GH_OPEN_LIMIT` (default **1000**, overridable by env). Truncation here fails *silently* — `gh issue list` just returns a short list with no error — so a stale cap hides issues from every consumer at once. This has bitten twice: `list <state>` was capped at 100 until 2026-07-27, hiding 31 `state:started` issues from the recycler; the 200 cap that replaced it was found on 2026-08-28 hiding **8 of 10** triageable issues and **3 of 5** pickable ones behind 265 open issues, leaving the builder to choose from a pool of 2. `gh_list` now also warns on stderr when an open-issue query comes back at exactly the cap, which is the only externally visible symptom of truncation. Keep `GH_OPEN_LIMIT` comfortably above the real open-issue count.
+>
+> The same cliff exists on the **PR** side. `cleanup.sh`'s three `gh pr list` calls were hard-coded to `--limit 500` against **558 merged / 687 total** PRs on 2026-08-30, so the oldest PRs were invisible — and an issue whose only PR fell off the end reads as "no PR ever" and gets **recycled**, rebuilding work that already shipped. Now `GH_PR_LIMIT` (default **2000**, overridable by env), with the same at-the-cap stderr warning.
 
 ### 10. PR-Close Reconcile
 **Script:** `pr-close-reconcile.sh`
@@ -307,16 +313,16 @@ Defaults to a dry run when invoked bare; Triage passes `--apply`. Writes `data/l
 
 ## Testing Infrastructure
 
-The pipeline has a bats-core test suite with **307 tests across 24 test files** in `~/development/pilot/tests/`. Tests use two-tier execution to balance speed with thoroughness:
+The pipeline has a bats-core test suite with **316 tests across 24 test files** in `~/development/pilot/tests/`. Tests use two-tier execution to balance speed with thoroughness:
 
-**Fast tier (288 tests) — pre-commit hook:**
+**Fast tier (297 tests) — pre-commit hook:**
 - Runs before every commit via `.githooks/pre-commit`
 - Covers: unit tests, adapter contract tests, argument parsing, error handling, log formatting
 - Builder tests source real functions from `lib/builder-utils.sh` (not copies of logic)
 - Parallel execution via GNU parallel (`bats -j 8`)
 - Blocks commit if any test fails
 
-**Full tier (307 tests) — GitHub Actions CI:**
+**Full tier (316 tests) — GitHub Actions CI:**
 - Runs on every push via `.github/workflows/test.yml`
 - Includes everything in the fast tier plus integration-level tests (CSV analysis, full script invocations)
 - Test paths resolve dynamically (no hardcoded local paths) for CI runner compatibility
@@ -430,7 +436,7 @@ Feedback loop → canceled issues + product decisions steer discovery;
 | `~/development/pilot/scripts/stale-pr-audit.sh` | Weekly audit: open PRs whose work has already shipped (no-op merges, duplicate/colliding migrations) |
 | `~/development/pilot/scripts/pr-close-reconcile.sh` | Closes/re-triages issues whose PR was closed unmerged — the state:started leak that hid 69% of the backlog from Triage |
 | `~/development/pilot/scripts/doc-drift-audit.sh` | Biweekly audit: docs vs. the repo's actual state (checks in `lib/doc-drift-check.py`) |
-| `~/development/pilot/tests/` | bats-core test suite (307 tests, 23 files, two-tier execution) |
+| `~/development/pilot/tests/` | bats-core test suite (316 tests, 24 files, two-tier execution) |
 | `~/development/pilot/.github/workflows/test.yml` | GitHub Actions CI — full test suite on push |
 | `~/development/pilot/.githooks/pre-commit` | Pre-commit hook — fast test tier on every commit |
 | `~/development/pilot/project.env` | Lift-specific configuration (git-ignored) |
@@ -733,11 +739,15 @@ triage       ─→ state:backlog | state:unstarted | (closed canceled)
 architect    ─→ (intended state:unstarted, currently no label — separate bug)
 builder pick ─→ state:started     (deterministic at pre-pick stage)
 builder done ─→ state:started     (PR opened; closure deferred to PR merge)
-PR merge     ─→ closed            (GitHub auto-closes via "Closes #N")
+PR merge     ─→ closed            (PR body's "Closes #N"; cleanup sweeps misses)
 stalled      ─→ state:started     (lingers; manual triage)
 ```
 
-Closure is GitHub-driven, not pipeline-driven: the builder requires Claude to include `Closes #N` in at least one commit body, and GitHub auto-closes the issue when the PR merges. The pipeline never calls `gh issue close` for an `ISSUE_DONE` marker — that produced orphaned closures when the PR failed CI (PR #467 / LIFT-436, 2026-04-30: PR stayed open with typecheck errors, but the issue closed on a subsequent night via `cleanup.sh` after the builder's `--state Done` flip).
+Closure happens at **PR merge**, never at implementation time. The pipeline does not call `gh issue close` for an `ISSUE_DONE` marker — that produced orphaned closures when the PR failed CI (PR #467 / LIFT-436, 2026-04-30: PR stayed open with typecheck errors, but the issue closed on a subsequent night via `cleanup.sh` after the builder's `--state Done` flip).
+
+Two independent mechanisms deliver the merge-time close, because the original single one was never real (see the callout in section 9):
+1. **`builder.sh` writes `Closes #N` into the PR body it generates** — script-controlled, so it does not depend on the coding agent doing anything. GitHub closes the issue the moment the PR merges into the default branch. The prompt still *asks* the agent for the same keyword in a commit body, but that is belt-and-braces now, not the mechanism.
+2. **`cleanup.sh` step 2 sweeps** any `state:started` issue whose PR already merged. This covers PRs merged before mechanism 1 existed, PRs opened by hand, and any case where the keyword did not take.
 
 **Single source of truth per question.**
 

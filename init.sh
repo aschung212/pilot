@@ -158,6 +158,7 @@ LINEAR_PROJECT=""
 LINEAR_ORG=""
 ISSUE_PREFIX=""
 GH_OPEN_LIMIT="${GH_OPEN_LIMIT:-1000}"
+GH_PR_LIMIT="${GH_PR_LIMIT:-2000}"
 OBSIDIAN_VAULT="${OBSIDIAN_VAULT:-}"
 AUDITOR_USE_AI_SYNTHESIS="${AUDITOR_USE_AI_SYNTHESIS:-1}"
 LAUNCHD_LOG_DIR="${LAUNCHD_LOG_DIR:-}"
@@ -365,6 +366,10 @@ ISSUE_PREFIX="$ISSUE_PREFIX"
 # Row cap for tracker.sh's open-issue queries. gh truncates silently, so keep
 # this comfortably above your open-issue count; tracker.sh warns at the cap.
 GH_OPEN_LIMIT="$GH_OPEN_LIMIT"
+# Same cliff on the PR side: cleanup.sh reads PR titles to decide whether a
+# state:started issue shipped, is in flight, was rejected, or was abandoned.
+# Below your total PR count, old PRs vanish and their issues get recycled.
+GH_PR_LIMIT="$GH_PR_LIMIT"
 # Optional knobs (safe defaults; see project.env.example for what they do)
 OBSIDIAN_VAULT="$OBSIDIAN_VAULT"
 AUDITOR_USE_AI_SYNTHESIS="$AUDITOR_USE_AI_SYNTHESIS"

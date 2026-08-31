@@ -73,7 +73,7 @@ for title, ids in by_title.items():
   run bash "$CLEANUP"
   [ "$status" -eq 0 ]
   [[ "$output" == *"Cleanup:"* ]]
-  [[ "$output" == *"0 closed, 0 deduped"* ]]
+  [[ "$output" == *"0 closed, 0 merge-closed, 0 deduped"* ]]
 }
 
 # ── Needs-decision snapshot + rejection-learnings harvest (step 2b) ──────────
@@ -194,4 +194,130 @@ JSON
   run bash "$CLEANUP" --dry-run
   [ "$status" -eq 0 ]
   [[ "$output" != *"Would expire"* ]]
+}
+
+# ── Merged-PR close path (step 2) ────────────────────────────────────────────
+# These drive the real script end-to-end against a scripted gh, rather than
+# re-implementing its logic in the test — a unit test over a pasted copy of the
+# logic proves nothing about the original (see CLAUDE.md, tune-budget.bats).
+
+# Scripts a gh that reports one state:started issue per id in $1, with the PR
+# state given by $2 (merged|open|closed). Records every write to $TEST_TMPDIR/gh-writes.
+_stub_gh_for_started() {
+  local issue_num="$1" pr_state="$2"
+  mkdir -p "$TEST_TMPDIR/bin"
+  cat > "$TEST_TMPDIR/bin/gh" <<GHEOF
+#!/bin/bash
+echo "\$*" >> "$TEST_TMPDIR/gh-writes"
+TITLE="fix(TEST-${issue_num}): ship the thing"
+case "\$*" in
+  *"pr list"*closedAt*)          echo "[]" ;;
+  *"pr list"*"--state merged"*)  [ "$pr_state" = merged ] && printf '9001\t%s\n' "\$TITLE" ;;
+  *"pr list"*"--state open"*)    [ "$pr_state" = open ]   && echo "\$TITLE" ;;
+  *"pr list"*"--state all"*)     echo "\$TITLE" ;;
+  *"issue list"*state:started*)  echo "TEST-${issue_num} ship the thing" ;;
+  *) echo "" ;;
+esac
+exit 0
+GHEOF
+  chmod +x "$TEST_TMPDIR/bin/gh"
+  export PATH="$TEST_TMPDIR/bin:$PATH"
+  export GITHUB_ISSUES_REPO="aaron/testrepo"
+}
+
+# bats test_tags=fast
+@test "cleanup: closes a state:started issue whose PR merged" {
+  _stub_gh_for_started 42 merged
+
+  run bash "$PILOT_DIR/scripts/cleanup.sh"
+  [ "$status" -eq 0 ]
+
+  # Closed as completed, with the merged PR named in a comment first
+  grep -q "issue close 42 .*--reason completed" "$TEST_TMPDIR/gh-writes"
+  grep -q "issue comment 42 .*PR #9001 merged" "$TEST_TMPDIR/gh-writes"
+  # …and the now-meaningless label dropped, only after the close
+  grep -q "issue edit 42 .*--remove-label state:started" "$TEST_TMPDIR/gh-writes"
+  CLOSE_LINE=$(grep -n "issue close 42" "$TEST_TMPDIR/gh-writes" | head -1 | cut -d: -f1)
+  EDIT_LINE=$(grep -n "issue edit 42 .*--remove-label state:started" "$TEST_TMPDIR/gh-writes" | head -1 | cut -d: -f1)
+  [ "$CLOSE_LINE" -lt "$EDIT_LINE" ]
+
+  # Reported and counted, not silently swept
+  [[ "$output" == *"1 merge-closed"* ]]
+  [[ "$output" == *"TEST-42 (PR #9001)"* ]]
+  # The old "still state:started with a MERGED PR" backlog note is now clear
+  [[ "$output" != *"still state:started with a MERGED PR"* ]]
+
+  # Sixth CSV column carries the count
+  CSV="$OUTPUT_DIR/lift-cleanup-metrics.csv"
+  [ "$(head -1 "$CSV")" = "date,closed,deduped,recycled,expired,merged_closed" ]
+  [ "$(tail -1 "$CSV" | cut -d, -f6)" = "1" ]
+}
+
+# bats test_tags=fast
+@test "cleanup: leaves a state:started issue alone while its PR is still open" {
+  _stub_gh_for_started 43 open
+
+  run bash "$PILOT_DIR/scripts/cleanup.sh"
+  [ "$status" -eq 0 ]
+
+  # In flight — never closed, never recycled, label untouched
+  ! grep -q "issue close 43" "$TEST_TMPDIR/gh-writes"
+  ! grep -q "remove-label state:started" "$TEST_TMPDIR/gh-writes"
+  [[ "$output" == *"0 merge-closed"* ]]
+}
+
+# bats test_tags=fast
+@test "cleanup: reports but never closes an issue whose PR was closed unmerged" {
+  _stub_gh_for_started 44 closed
+
+  run bash "$PILOT_DIR/scripts/cleanup.sh"
+  [ "$status" -eq 0 ]
+
+  ! grep -q "issue close 44" "$TEST_TMPDIR/gh-writes"
+  [[ "$output" == *"needs your call"* ]]
+  [[ "$output" == *"TEST-44"* ]]
+  # Snapshot handed to digest.sh
+  grep -q "TEST-44" "$OUTPUT_DIR/lift-needs-decision.txt"
+}
+
+# bats test_tags=fast
+@test "cleanup: dry-run previews the merged-PR close without writing" {
+  _stub_gh_for_started 45 merged
+
+  run bash "$PILOT_DIR/scripts/cleanup.sh" --dry-run
+  [ "$status" -eq 0 ]
+
+  [[ "$output" == *"[dry-run] Would close TEST-45 (merged PR #9001)"* ]]
+  ! grep -q "issue close 45" "$TEST_TMPDIR/gh-writes"
+  ! grep -q "issue comment 45" "$TEST_TMPDIR/gh-writes"
+  ! grep -q "remove-label state:started" "$TEST_TMPDIR/gh-writes"
+}
+
+# bats test_tags=fast
+@test "cleanup: PR queries are capped well above the real PR count and warn at the cap" {
+  # The cap was 500 against 558 merged / 687 total PRs on 2026-08-30, so the
+  # oldest PRs were invisible — and an issue whose only PR fell off the end
+  # reads as "no PR ever" and gets recycled, rebuilding shipped work.
+  grep -q 'GH_PR_LIMIT="${GH_PR_LIMIT:-2000}"' "$PILOT_DIR/scripts/cleanup.sh"
+  ! grep -q 'gh pr list .*--limit 500' "$PILOT_DIR/scripts/cleanup.sh"
+
+  # A response sitting exactly at the cap is the only visible symptom.
+  mkdir -p "$TEST_TMPDIR/bin"
+  cat > "$TEST_TMPDIR/bin/gh" <<'GHEOF'
+#!/bin/bash
+case "$*" in
+  *"pr list"*closedAt*)      echo "[]" ;;
+  *"pr list"*"--state all"*) seq 1 3 | sed 's/^/chore: pr /' ;;
+  *) echo "" ;;
+esac
+exit 0
+GHEOF
+  chmod +x "$TEST_TMPDIR/bin/gh"
+  export PATH="$TEST_TMPDIR/bin:$PATH"
+  export GITHUB_ISSUES_REPO="aaron/testrepo"
+  export GH_PR_LIMIT=3
+
+  run bash "$PILOT_DIR/scripts/cleanup.sh"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"probably TRUNCATED"* ]]
 }
