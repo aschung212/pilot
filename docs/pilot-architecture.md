@@ -351,9 +351,36 @@ It deliberately does **not** carry the `Triaged by` marker that `triage.sh` grep
 
 ---
 
+### 12. Target-CI Watch
+**Script:** `target-ci-watch.sh`
+**When:** As a pre-step of the **Issue Digest** (daily 06:15), rendered at the top of its "waiting on a human" block. Kill switch: `TARGET_CI_WATCH_ENABLED=0`. Also runnable by hand, and `--notify` posts to #lift-automation for standalone use.
+
+**The blind spot.** Pilot watched CI in two places and neither covered the branch that matters:
+
+| Watcher | Scope |
+|---|---|
+| `builder.sh` + `pipeline-auditor.sh` | PR-level — labels a PR `ci:failed`, retries it, flags retry loops that stop healing |
+| `health-report.sh` | Pilot's own launchd services' exit codes |
+
+**Nothing ever looked at the target repo's default branch.** On 2026-08-30 it was found red for at least 41 consecutive runs — every run in the API's 60-run window, reaching past 2026-08-20 and probably back to 2026-05-29 (LIFT-1280). `migrate-db` was failing, so no schema change reached production for roughly three months, and `smoke-test-production` and `notify-deploy` were silently skipped along with it. The pipeline kept merging PRs into a branch whose deploy verification had been dead for months.
+
+It was invisible because the failing job is gated on pushes to the default branch — PRs skip it and report fully green.
+
+**Why the digest and not the health report.** `health-report.sh` runs weekly; this streak would have needed six weekly reports to reach the length it did. `digest.sh` runs daily and is what Aaron actually reads each morning, so the count lands in front of him every day and escalates: 🔴 at 1, ⚠️ at 3, 🚨 *BROKEN* at 10.
+
+**Streaks are computed per workflow — this is load-bearing.** The branch runs several workflows (CI, `npm audit`, Integration Tests). A green `npm audit` interleaved with red CI runs would otherwise reset the streak to zero and report the branch healthy, recreating the exact bug. It reports **every** currently-red workflow, not just the worst — on its first live run it surfaced a *second* unknown outage, `Integration Tests` red since 2026-08-18.
+
+**Silence is not success.** A green branch prints nothing on stdout, matching the digest's house style. But an unreadable branch is reported as **UNKNOWN, not green** — a watcher that goes quiet when `gh` breaks rebuilds the blindness it exists to remove. It also never lets the scan window imply a bound on the outage: when every run of a workflow in the window failed, it says the streak is *at least* that long rather than stating it as fact.
+
+> `lib/log.sh`'s `_log` writes to **stdout**, and in `--slack` mode stdout IS the payload the digest embeds. Every log call in this script is therefore redirected to stderr; without that, a log line lands inside the Slack message. A test pins this.
+
+Reporter only — never mutates an issue, PR, or branch.
+
+---
+
 ## Testing Infrastructure
 
-The pipeline has a bats-core test suite with **328 tests across 25 test files** in `~/development/pilot/tests/`. Tests use two-tier execution to balance speed with thoroughness:
+The pipeline has a bats-core test suite with **344 tests across 26 test files** in `~/development/pilot/tests/`. Tests use two-tier execution to balance speed with thoroughness:
 
 **Fast tier (297 tests) — pre-commit hook:**
 - Runs before every commit via `.githooks/pre-commit`
@@ -362,7 +389,7 @@ The pipeline has a bats-core test suite with **328 tests across 25 test files** 
 - Parallel execution via GNU parallel (`bats -j 8`)
 - Blocks commit if any test fails
 
-**Full tier (328 tests) — GitHub Actions CI:**
+**Full tier (344 tests) — GitHub Actions CI:**
 - Runs on every push via `.github/workflows/test.yml`
 - Includes everything in the fast tier plus integration-level tests (CSV analysis, full script invocations)
 - Test paths resolve dynamically (no hardcoded local paths) for CI runner compatibility
@@ -476,7 +503,7 @@ Feedback loop → canceled issues + product decisions steer discovery;
 | `~/development/pilot/scripts/stale-pr-audit.sh` | Weekly audit: open PRs whose work has already shipped (no-op merges, duplicate/colliding migrations) |
 | `~/development/pilot/scripts/pr-close-reconcile.sh` | Closes/re-triages issues whose PR was closed unmerged — the state:started leak that hid 69% of the backlog from Triage |
 | `~/development/pilot/scripts/doc-drift-audit.sh` | Biweekly audit: docs vs. the repo's actual state (checks in `lib/doc-drift-check.py`) |
-| `~/development/pilot/tests/` | bats-core test suite (328 tests, 25 files, two-tier execution) |
+| `~/development/pilot/tests/` | bats-core test suite (344 tests, 26 files, two-tier execution) |
 | `~/development/pilot/.github/workflows/test.yml` | GitHub Actions CI — full test suite on push |
 | `~/development/pilot/.githooks/pre-commit` | Pre-commit hook — fast test tier on every commit |
 | `~/development/pilot/project.env` | Lift-specific configuration (git-ignored) |
@@ -491,6 +518,17 @@ See [Pilot Responsibilities](pilot-responsibilities.md) for the complete list of
 ---
 
 ## Changelog
+
+### 2026-08-30 — Nothing was watching the target repo's default branch
+
+Pilot merged PRs into a `master` whose CI had been red for at least 41 consecutive runs — likely three months — and never said a word. `migrate-db` was failing on an out-of-order migration, so no schema change reached production and the deploy-verification chain (`smoke-test-production` → `notify-deploy`) was silently skipped with it. See Lift #1280.
+
+- **New `target-ci-watch.sh`** (architecture section 12), a pre-step of the daily Issue Digest. Reports every currently-red workflow on the target repo's default branch, with per-workflow failure streaks, days since last green, and the failing job names. Escalates 🔴 → ⚠️ → 🚨 *BROKEN* at 10.
+- **Streaks are per workflow.** A green `npm audit` interleaved with red CI runs would otherwise zero the streak — the precise shape of the bug being fixed. Its first live run found a second unknown outage: `Integration Tests`, red since 2026-08-18.
+- **Silence is not success.** Green prints nothing; an unreadable branch reports UNKNOWN rather than passing, and a window with no green run says the streak is *at least* that long instead of implying a bound.
+- **Log output redirected to stderr.** `lib/log.sh` writes to stdout, which in `--slack` mode is the payload the digest embeds — an unredirected log call would land inside the Slack message. Caught by a test, and pinned by one.
+
+16 new bats tests driving the real script through a `gh` shim.
 
 ### 2026-08-30 — Hand-filed issues jump the queue; three builder defects fixed
 
