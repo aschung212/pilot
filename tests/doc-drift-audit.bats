@@ -175,3 +175,145 @@ EOF
   [[ "$output" == *"No drift detected"* ]]
   [[ "$output" == *"TOTALCOUNT=0"* ]]
 }
+
+# ── test counts: read from the files, never by running the suite ────────────
+#
+# The old check shelled out to `run-tests.sh --tap` with a 900s timeout. The
+# suite outgrew it, so on 2026-08-31 the audit's only test-count finding was
+# its own breakage: "could not count the suite (… timed out after 900 seconds)".
+# These pin the replacement — the numbers come from parsing tests/*.bats, and
+# they are what bats itself would report.
+#
+# Assertion style: bats does NOT abort a test on a failing bare `[[ ]]` unless
+# it happens to be the last line (a conditional expression is exempt from the
+# errexit that catches `false`). Non-final assertions below therefore go
+# through _has/_lacks, which are simple commands and do abort.
+
+_has()   { grep -qF -- "$1" <<<"$output"; }
+_lacks() { ! grep -qF -- "$1" <<<"$output"; }
+
+# tests/fixtures/bats-count/ is a real directory, not a heredoc: bats rewrites
+# every line matching its @test pattern even inside a heredoc body, so a
+# fixture suite written inline lands on disk mangled. See that dir's README for
+# its shape (3 files, 7 tests, 4 of them fast) and why each file is there.
+_fixture_suite() {
+  cp "$FIXTURES_DIR"/bats-count/*.bats "$FIXTURE/tests/"
+  cp "$FIXTURES_DIR"/bats-count/run-tests.sh "$FIXTURE/tests/"
+}
+
+# A claim no real suite can match, so the checker has to report what it counted.
+_claim_wrong_counts() {
+  echo 'The suite has 9999 tests across 88 test files.' >> "$FIXTURE/docs/pilot-architecture.md"
+}
+
+# bats test_tags=fast
+@test "doc-drift-audit: counts tests, files and the fast tier statically" {
+  _fixture_suite
+  _claim_wrong_counts
+  run _check
+  _has "claims 9999 tests; the suite has 7 (fast tier 4)"
+  _has "claims 88 test files; there are 3"
+}
+
+# bats test_tags=fast
+@test "doc-drift-audit: counting never executes the test suite" {
+  _fixture_suite
+  _claim_wrong_counts
+  run _check
+  # The fixture runner touches this the moment it is executed. The checker is
+  # only allowed to read it.
+  [ ! -e "$FIXTURE/tests/suite-was-run" ]
+  _has "the suite has 7 (fast tier 4)"
+  _lacks "could not count the suite"
+}
+
+# bats test_tags=fast
+@test "doc-drift-audit: the fast tier is a tag filter, not total minus slow" {
+  _fixture_suite
+  _claim_wrong_counts
+  run _check
+  # 7 tests: 4 fast, 2 slow, 1 untagged. The untagged one runs in neither tier,
+  # so anyone deriving fast from 7 - 2 would say 5 and be wrong.
+  _has "the suite has 7 (fast tier 4)"
+  _lacks "fast tier 5"
+}
+
+# bats test_tags=fast
+@test "doc-drift-audit: a doc quoting either tier is not drift" {
+  _fixture_suite
+  echo 'Full tier: 77 tests. Fast tier: 44 tests. Spread over 33 test files.' \
+    >> "$FIXTURE/docs/pilot-architecture.md"
+  run _check
+  _has "Test counts"          # the wrong numbers above are flagged...
+  _lacks "the suite has 77"
+  # ...and now the right ones, either tier, are not.
+  : > "$FIXTURE/docs/pilot-architecture.md"
+  echo 'Full tier: 7 tests. Fast tier: 4 tests. Across 3 test files.' \
+    >> "$FIXTURE/docs/pilot-architecture.md"
+  run _check
+  _lacks "Test counts"
+}
+
+# bats test_tags=fast
+@test "doc-drift-audit: the fast tier follows the tag run-tests.sh filters on" {
+  _fixture_suite
+  # Rename the tier tag in the runner and retag one test to match. The count
+  # must follow the runner rather than a hardcoded "fast".
+  cat > "$FIXTURE/tests/run-tests.sh" <<'RUNNER'
+#!/bin/bash
+case "$1" in
+  --fast) FILTER="--filter-tags quick" ;;
+esac
+RUNNER
+  sed -i.bak 's/test_tags=slow/test_tags=quick/' "$FIXTURE/tests/alpha.bats"
+  rm -f "$FIXTURE/tests/alpha.bats.bak"
+  _claim_wrong_counts
+  run _check
+  _has "the suite has 7 (fast tier 1)"
+}
+
+# bats test_tags=fast
+@test "doc-drift-audit: flags a runner that no longer maps --fast to a tag" {
+  _fixture_suite
+  cat > "$FIXTURE/tests/run-tests.sh" <<'RUNNER'
+#!/bin/bash
+case "$1" in
+  --fast) FILTER="--some-new-flag" ;;
+esac
+RUNNER
+  run _check
+  _has "no longer maps --fast to a --filter-tags tag"
+}
+
+# bats test_tags=fast
+@test "doc-drift-audit: a repo with no test files claims nothing about counts" {
+  _claim_wrong_counts
+  run _check
+  _lacks "Test counts"
+}
+
+# The fixture above pins the parsing rules; this pins the parser against bats
+# itself, on the suite whose numbers the docs actually quote. It is the only
+# thing that would catch a divergence the fixture does not model — a new tag
+# syntax, or an @test line inside a heredoc (bats never registers those; this
+# counter would count one). Slow tier: `bats --count` over 26 files costs ~30s,
+# which is worth paying in CI and not on every commit.
+# bats test_tags=slow
+@test "doc-drift-audit: the static count agrees with bats on the real suite" {
+  command -v bats >/dev/null || skip "bats not installed"
+  real="$TEST_TMPDIR/realrepo"
+  mkdir -p "$real/docs"
+  ln -s "$PILOT_DIR/tests" "$real/tests"
+  : > "$real/README.md"; : > "$real/CLAUDE.md"; : > "$real/project.env.example"
+  : > "$real/docs/pilot-responsibilities.md"
+  echo 'The suite has 9999 tests across 8888 test files.' > "$real/docs/pilot-architecture.md"
+
+  full=$(bats --count "$PILOT_DIR"/tests/*.bats)
+  fast=$(bats --count --filter-tags fast "$PILOT_DIR"/tests/*.bats)
+  files=$(ls "$PILOT_DIR"/tests/*.bats | wc -l | tr -d ' ')
+
+  run env REPO_ROOT="$real" PRODUCT_DECISIONS_FILE="" PRODUCT_FEATURES_FILE="" \
+    python3 "$PILOT_DIR/lib/doc-drift-check.py"
+  _has "the suite has $full (fast tier $fast)"
+  _has "claims 8888 test files; there are $files"
+}

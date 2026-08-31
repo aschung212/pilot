@@ -250,12 +250,14 @@ This does that mechanically. It is a **reporter, never an editor**: every findin
 | 2 | A `*.sh` named in the docs that no longer exists | The Review Tuner class of decay |
 | 3 | Plists missing from, or disagreeing with, the schedule tables | The Wednesday-trio omission; wrong times |
 | 4 | Plist `ProgramArguments` pointing at a missing script | A service that silently never runs |
-| 5 | Test counts claimed vs. the real suite (both tiers) | Stale numbers after adding tests |
+| 5 | Test counts claimed vs. the test files (both tiers) | Stale numbers after adding tests |
 | 6 | Adapters absent from CLAUDE.md | Undocumented backends |
 | 7 | Pilot env vars read by scripts but undocumented | The env-var half of the mandate |
 | 8 | Obsidian vault paths Pilot depends on that don't resolve | Silent degradation of discovery/triage |
 
 **Two design rules keep it trustworthy.** Changelog sections are excluded from every check — history is *supposed* to describe the past. And doc **tombstones** ("the old `ai-review.sh` was deleted 2026-07-17") are recognized as the docs doing their job, not as drift; a line announcing a removal suppresses the finding. Both are pinned by tests, along with scripts that legitimately live outside the repo (`~/Documents/Scripts/set-claude-token.sh`) and counts that quote either test tier. Without those exemptions the report cries wolf, and a report that cries wolf gets ignored.
+
+**Test counts are parsed, never run.** Check 5 counts `@test` lines and bats tag comments in `tests/*.bats`; it does not execute the suite. It used to: `run-tests.sh --tap` under a 900-second timeout. The suite outgrew that budget, and from then on the check's only finding was its own breakage — *"could not count the suite (… timed out after 900 seconds)"* on 2026-08-31 — while verifying nothing. Every number the docs quote is a property of the source, so reading it takes milliseconds and cannot time out. Which tag the fast tier selects is read out of `run-tests.sh` rather than hardcoded, so renaming the tier cannot leave the check silently counting a tier that no longer exists. The parser is pinned two ways: against `tests/fixtures/bats-count/`, a 3-file fixture suite covering per-test tags, `file_tags`, comma lists and untagged tests; and, in the slow tier, against `bats --count` over Pilot's own suite, which is what would catch a divergence the fixture does not model. Note that the fast tier is a *tag filter*, so untagged tests run in neither tier and fast ≠ total − slow. One behaviour went away with the suite run: the check used to also report *"the full suite has N FAILING test(s)"*. That was a side effect of running the tests, not a doc-drift signal, and the pre-commit hook and CI both own it already.
 
 **Vault scope.** Only the vault files Pilot itself reads or names are checked — `PRODUCT_DECISIONS_FILE`, `PRODUCT_FEATURES_FILE`, and vault paths cited in Pilot docs. Aaron's vault workflows are a separate domain and are not audited. A broken path here is a *Pilot* bug: discovery and triage degrade silently without it.
 
@@ -387,16 +389,16 @@ Reporter only — never mutates an issue, PR, or branch.
 
 ## Testing Infrastructure
 
-The pipeline has a bats-core test suite with **360 tests across 26 test files** in `~/development/pilot/tests/`. Tests use two-tier execution to balance speed with thoroughness:
+The pipeline has a bats-core test suite with **368 tests across 26 test files** in `~/development/pilot/tests/`. Tests use two-tier execution to balance speed with thoroughness:
 
-**Fast tier (313 tests) — pre-commit hook:**
+**Fast tier (320 tests) — pre-commit hook:**
 - Runs before every commit via `.githooks/pre-commit`
 - Covers: unit tests, adapter contract tests, argument parsing, error handling, log formatting
 - Builder tests source real functions from `lib/builder-utils.sh` (not copies of logic)
 - Parallel execution via GNU parallel (`bats -j 8`)
 - Blocks commit if any test fails
 
-**Full tier (360 tests) — GitHub Actions CI:**
+**Full tier (368 tests) — GitHub Actions CI:**
 - Runs on every push via `.github/workflows/test.yml`
 - Includes everything in the fast tier plus integration-level tests (CSV analysis, full script invocations)
 - Test paths resolve dynamically (no hardcoded local paths) for CI runner compatibility
@@ -510,7 +512,7 @@ Feedback loop → canceled issues + product decisions steer discovery;
 | `~/development/pilot/scripts/stale-pr-audit.sh` | Weekly audit: open PRs whose work has already shipped (no-op merges, duplicate/colliding migrations) |
 | `~/development/pilot/scripts/pr-close-reconcile.sh` | Closes/re-triages issues whose PR was closed unmerged — the state:started leak that hid 69% of the backlog from Triage |
 | `~/development/pilot/scripts/doc-drift-audit.sh` | Biweekly audit: docs vs. the repo's actual state (checks in `lib/doc-drift-check.py`) |
-| `~/development/pilot/tests/` | bats-core test suite (360 tests, 26 files, two-tier execution) |
+| `~/development/pilot/tests/` | bats-core test suite (368 tests, 26 files, two-tier execution) |
 | `~/development/pilot/.github/workflows/test.yml` | GitHub Actions CI — full test suite on push |
 | `~/development/pilot/.githooks/pre-commit` | Pre-commit hook — fast test tier on every commit |
 | `~/development/pilot/project.env` | Lift-specific configuration (git-ignored) |

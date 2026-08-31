@@ -17,7 +17,7 @@
 #   2. Dead references — a *.sh named in the docs that no longer exists
 #   3. launchd plists missing from, or disagreeing with, the schedule tables
 #   4. Plist ProgramArguments pointing at a script this repo does not have
-#   5. Test counts claimed in docs vs the real suite
+#   5. Test counts claimed in docs vs the test files (parsed, never run)
 #   6. Adapters undocumented in CLAUDE.md
 #   7. Pilot env vars read by scripts but absent from project.env.example
 #   8. Obsidian vault paths Pilot depends on that do not resolve
@@ -82,6 +82,20 @@ FINDINGS=$(REPO_ROOT="$REPO_ROOT" \
   PRODUCT_FEATURES_FILE="${PRODUCT_FEATURES_FILE:-}" \
   python3 "$SCRIPT_DIR/../lib/doc-drift-check.py")
 RC=$?
+
+# The checker is a pure reporter: a non-zero exit means it crashed, not that it
+# found something. Nothing used to read $RC, so a crash left FINDINGS empty,
+# TOTAL defaulted to 0, and the audit cheerfully printed "✅ Docs match the
+# repo." — reporting a success it never checked.
+if [ "$RC" -ne 0 ]; then
+  echo "📋 Doc-Drift Audit — $DATE" | tee "$REPORT"
+  echo "❌ lib/doc-drift-check.py exited $RC — the docs were NOT checked." | tee -a "$REPORT"
+  if [ -n "$DO_NOTIFY" ]; then
+    bash "$NOTIFY" send automation \
+      "📋 *Doc-drift audit — $DATE*: checker failed (exit $RC) — the docs were not checked." >/dev/null 2>&1 || true
+  fi
+  exit 1
+fi
 
 echo "📋 Doc-Drift Audit — $DATE" | tee "$REPORT"
 echo "$FINDINGS" | grep -v '^TOTALCOUNT=' | tee -a "$REPORT"
