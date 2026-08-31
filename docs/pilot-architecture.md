@@ -122,7 +122,9 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
 - **Auth preflight (before the loop):** one cheap `claude` probe down the real code path. If the keychain OAuth token is expired/logged-out, every iteration would 401; rather than burn the loop silently, the builder aborts immediately and alerts #lift-automation. Auth failures are classified by `is_auth_failure()` in `builder-utils.sh`; transient/network errors are *not* auth signatures and fall through to normal per-iteration handling. Skippable with `SKIP_AUTH_PREFLIGHT=1`. (Added 2026-06-23 after two silent zero-PR nights.)
 - **WIP limit (since 2026-08-28):** before each iteration the loop counts open PRs; at `MAX_OPEN_PRS` (default 8, `0` disables) it stops for the night with a Slack notice instead of growing Aaron's review queue — Kanban backpressure pointed at the human constraint. Retry iterations for `ci:failed` PRs are exempt (their old PR is closed at startup, so they don't grow the queue). Decision logic: `wip_gate_active` in `lib/builder-utils.sh`.
 - **Rejection learnings (since 2026-08-28):** every iteration's prompt carries the tail of `data/lift-build-learnings.md` — Aaron's closing comments on PRs he closed unmerged, harvested nightly by cleanup — as binding do-not-repeat guidance. This restores the human-feedback loop that died with the review tuner (2026-05-11).
-- Picks the highest-priority triaged issue from the backlog (GA tie-break since 2026-08-21: at equal priority, user-facing bug fixes > performance/reliability > UX/a11y polish; refactors, test-only work, and feature-shaped issues last). The per-iteration inline discovery follows the same GA rules — defects and refinements only, no feature or test-coverage issues.
+- Promotes hand-filed issues first (since 2026-08-30) by calling `claim-manual-issues.sh --apply` before fetching the backlog — see section 11. The builder runs Mon–Fri while Triage runs Sun/Tue/Thu, so without this call an issue filed on a Monday would wait a full extra day to be promoted.
+- Picks the highest-priority triaged issue from the backlog. An `origin:aaron` issue outranks everything (2026-08-30). Otherwise the GA tie-break applies (since 2026-08-21: at equal priority, user-facing bug fixes > performance/reliability > UX/a11y polish; refactors, test-only work, and feature-shaped issues last). The per-iteration inline discovery follows the same GA rules — defects and refinements only, no feature or test-coverage issues.
+  - **The pre-pick could not see priority labels until 2026-08-30.** Its prompt claimed "Priority labels … appear in the issue list", but `tracker.sh`'s `gh_list "pickable"` emits bare `LIFT-N Title` rows and has done so in **every revision in the repo's history** — no labels, ever. The pre-pick was ranking the backlog on titles alone. The builder now annotates the filtered backlog with each issue's `priority:*`/`origin:*` labels and pre-sorts it (hand-filed first, then by priority) before injecting it into both prompts. Fixed in `builder.sh` rather than the adapter on purpose: `list pickable` is a shared contract and appending fields to it risks the silent-parser-break class of bug this repo has been bitten by twice.
 - Reads the triage agent's implementation plan from comments
 - Creates a dedicated branch per issue: `enhance/LIFT-{id}-{date}`
 - Implements the change: writes code, runs tests, commits with conventional prefixes (feat/fix/a11y/test/perf/style/refactor/chore)
@@ -134,6 +136,17 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
 - Failed PR retry: PRs labeled `ci:failed` from previous nights are auto-retried
 - Updates issue tracker (marks issues In Progress/Blocked; closure deferred to PR merge via "Closes #N"). Post-run marker parsing goes through `_marker_lines` in `builder-utils.sh`, which accepts every separator the agent actually emits (`ISSUE_DONE:LIFT-N:summary`, `|`, em dash, or a bare marker) and normalizes them to a single pipe. The parsers previously required the pipe form the prompt asks for, which the agent had never once emitted — see the 2026-08-28 changelog entry.
 - Repeats for up to 12 iterations or 500K output tokens
+
+**Agent environment and the permission-denial tax** (2026-08-30). The tool allowlist (`BUILDER_ALLOWED_TOOLS`) matches on a command's **literal prefix**, which the agent routinely defeats without meaning to. Measured across the 51 August 2026 runs: **330 permission denials, ~6.5 per run**; 152 were commands prefixed `PATH=…`/`env …` and 35 used an absolute path — **57% of all denials were the agent trying to pin which binary runs**. `PATH=/opt/homebrew/bin:$PATH npm run typecheck` cannot match `Bash(npm run typecheck:*)` however the allowlist is written, so those are unfixable there. Three mitigations instead:
+
+- **`BUILDER_PATH`** is now passed explicitly to every `claude` child (`env PATH="$BUILDER_PATH" claude …`), so the environment is deterministic and the agent has no reason to pin anything. launchd starts the builder with `PATH=/bin:/usr/bin:/usr/ucb:/usr/local/bin` and `~/.zshenv` exports no PATH, which is what made the agent's shell differ from Aaron's.
+  > **`$HOME/.local/bin` must stay first in `BUILDER_PATH`.** Two claude CLIs are installed: `~/.local/bin/claude` (2.1.218, what every run has used) and `/opt/homebrew/bin/claude` (2.1.112, April, and the build that emits the Bun "CPU lacks AVX" preamble). `env PATH=… claude` re-resolves the binary against that list, so a homebrew-first order silently downgrades the builder and reintroduces the Bun-preamble JSON corruption.
+- **The prompt** now tells the agent its PATH is correct and that retrying a denied command with a PATH prefix, absolute path, or `env` wrapper is the one change guaranteed not to help.
+- **`which` and `npm i`** were added to the allowlist (cheap, safe, repeatedly denied). `npx:*` and `node:*` were deliberately **not** added — both allow arbitrary code execution and would gut the injection defense the list exists to provide.
+
+**Failure diagnostics and work recovery** (2026-08-30). A non-zero, non-timeout exit previously logged only `Run N failed`. The LIFT-1271 failure left a six-line run log whose cause was recoverable only by hand-parsing the output JSON. The builder now prints `stop_reason`, turn count, cost, and the top denied commands on failure, and flags a `stop_reason=tool_use` exit as hitting the turn ceiling. It also parks any uncommitted work from a failed run on `recovered/run{N}-{date}-{issue}` instead of letting the branch delete and next-iteration reset destroy it — that path lost 513 verified insertions on 2026-08-30. Nothing is pushed; Aaron decides.
+
+`BUILDER_MAX_TURNS` was raised 100 → 150 the same day: LIFT-1271 was a 16-file, 513-insertion feature that was fully implemented and then died at turn 101 with `stop_reason=tool_use`, having spent 12 turns on denied verification commands. August's successful runs land at 21–65 turns, so 150 is headroom without masking a runaway (`BUILDER_ITERATION_TIMEOUT` still bounds it).
 
 **Controls** (auto-tuned **weekly**, Sunday 21:00, by `tune-budget.sh`; `--dry-run` reports what it would change without writing):
 - Max iterations per night (default: 12)
@@ -262,16 +275,12 @@ Cleanup now sorts every `state:started` issue into four buckets by cross-referen
 |---|---|---|
 | Recycle | no PR of **any** state references it | auto-reset to `state:unstarted` |
 | In flight | has an **open** PR | none (normal state) |
-| Done | has a **merged** PR | auto-closed as completed, `state:started` removed |
+| Done, awaiting close | has a **merged** PR | reported as a count |
 | Needs your call | every PR was **closed unmerged** | reported by ID — never auto-recycled |
 
-The rule is deliberately conservative on the *recycle* side: only the "no PR ever" case is unambiguous. A closed-unmerged PR may have been a deliberate rejection, so auto-recycling it would rebuild work Aaron already declined — those are surfaced for a human decision instead.
+The rule is deliberately conservative: only the "no PR ever" case is unambiguous. A closed-unmerged PR may have been a deliberate rejection, so auto-recycling it would rebuild work Aaron already declined — those are surfaced for a human decision instead.
 
-**Merged-PR close (since 2026-08-30).** The "Done" bucket used to `continue` with a comment deferring to "the close path". There was no close path — see the callout below. It now comments the shipping PR number on the issue, closes it as completed, and removes `state:started` *after* the close lands (label-first would drop a still-open issue back into the builder's picking pool to be rebuilt). `--dry-run` previews without writing.
-
-> **Nothing closed an issue when its PR merged — for the life of the GitHub backend.** Three mechanisms each looked like they covered it and none did. (1) `builder.sh` told the coding agent to write `Closes #N` into a commit body and left closing to GitHub's merge mechanism; the agent never once emitted it — the same "the prompt's documented format is not the observed format" failure as the marker separators in CLAUDE.md. (2) Cleanup step 1 closes issues the tracker reports as `completed`, but that query lists issues **already closed on GitHub**, so it can only re-close what is already closed. (3) Cleanup step 2 saw the condition exactly and deferred it to (1)/(2). Net: every close on the Lift board was Aaron doing it by hand, and the backlog of them showed only as the "📋 N issue(s) still state:started with a MERGED PR" line printed at the end of a cleanup run — reported for months, never acted on. Fixed 2026-08-30 in two independent places: `builder.sh` now writes `Closes #N` into the **PR body it controls** (no agent compliance required), and cleanup step 2 sweeps anything that mechanism misses.
-
-Recycled counts are appended to `data/lift-cleanup-metrics.csv` as a fourth `recycled` column; `expired` was added as a fifth on 2026-08-28 and `merged_closed` as a sixth on 2026-08-30. Rows written earlier have three, four or five fields, so parsers must tolerate all widths — and must use `int(row.get('x') or 0)`, never `int(row.get('x', 0))`, since `csv.DictReader` fills a short row's missing columns with `None`.
+Recycled counts are appended to `data/lift-cleanup-metrics.csv` as a fourth `recycled` column; `expired` was added as a fifth on 2026-08-28. Rows written earlier have three or four fields, so parsers must tolerate all widths.
 
 **Needs-your-call snapshot + rejection-learnings harvest (step 2b, since 2026-08-28).** The "closed unmerged — needs your call" bucket used to live only in an overnight log; now it feeds two consumers:
 - `data/lift-needs-decision.txt` — a nightly overwrite of the current rejected-PR issue IDs. The morning digest reads it and renders the "⚖️ Needs your call" line, so these decisions surface in the daily standup instead of rotting.
@@ -280,8 +289,6 @@ Recycled counts are appended to `data/lift-cleanup-metrics.csv` as a fourth `rec
 **Backlog expiry (step 4, since 2026-08-28).** Triage SKIP demotes issues to `priority:4-low` and nothing ever revisited them — they accumulate forever and creep toward the adapter's silent `--limit 200` truncation cliff. Any open `priority:4-low` issue untouched for `BACKLOG_EXPIRY_DAYS` (default 56, `0` disables) is closed as not planned with a reopen invitation. Parked issues (`state:started` / `state:blocked` / `state:needs-input`) never expire — those are waiting on a human, not forgotten.
 
 > **Adapter query limits.** Every open-issue query in `tracker.sh` shares a single cap, `GH_OPEN_LIMIT` (default **1000**, overridable by env). Truncation here fails *silently* — `gh issue list` just returns a short list with no error — so a stale cap hides issues from every consumer at once. This has bitten twice: `list <state>` was capped at 100 until 2026-07-27, hiding 31 `state:started` issues from the recycler; the 200 cap that replaced it was found on 2026-08-28 hiding **8 of 10** triageable issues and **3 of 5** pickable ones behind 265 open issues, leaving the builder to choose from a pool of 2. `gh_list` now also warns on stderr when an open-issue query comes back at exactly the cap, which is the only externally visible symptom of truncation. Keep `GH_OPEN_LIMIT` comfortably above the real open-issue count.
->
-> The same cliff exists on the **PR** side. `cleanup.sh`'s three `gh pr list` calls were hard-coded to `--limit 500` against **558 merged / 687 total** PRs on 2026-08-30, so the oldest PRs were invisible — and an issue whose only PR fell off the end reads as "no PR ever" and gets **recycled**, rebuilding work that already shipped. Now `GH_PR_LIMIT` (default **2000**, overridable by env), with the same at-the-cap stderr warning.
 
 ### 10. PR-Close Reconcile
 **Script:** `pr-close-reconcile.sh`
@@ -311,9 +318,42 @@ Defaults to a dry run when invoked bare; Triage passes `--apply`. Writes `data/l
 
 ---
 
+### 11. Claim Manual Issues
+**Script:** `claim-manual-issues.sh`
+**When:** Automatically, as a pre-step of **both** Triage (right after PR-Close Reconcile, before `list triageable`) and the **Builder** (before it fetches the backlog for the pre-pick). Both callers pass `--apply --notify` and treat a failure as non-fatal. Kill switch: `MANUAL_CLAIM_ENABLED=0`. Also runnable by hand; defaults to a dry run.
+
+**The rule.** Aaron, 2026-08-30: *"any issues i manually create myself (not automated via pilot) should still be picked up with top priority, even with the ongoing GA readiness policy. as a rule, if i take the time to file a ticket myself, I want it addressed asap."*
+
+**Why an issue Aaron filed by hand otherwise went nowhere.** Three independent gates buried LIFT-1271 and LIFT-1272 within hours of filing:
+
+1. Triage's GA-readiness policy `SKIP`s any net-new feature as "deferred until post-GA", which stamps `priority:4-low`.
+2. The builder's pre-pick sorts "anything feature-shaped last".
+3. The builder only runs Mon–Fri 23:00, so a weekend filing waits regardless.
+
+**How a manual issue is identified.** Every issue Pilot creates routes through `tracker.sh`'s `gh_create`, which always attaches a `state:*` label — true for all three producers (`discover.sh`, `architect.sh`, and the builder's `ISSUE_DISCOVER`/`ISSUE_CREATE` markers). An issue filed through the GitHub UI has no `state:*` label until the pipeline gives it one. So:
+
+> **open + authored by `MANUAL_ISSUE_AUTHOR` + no `state:*` label == hand-filed**
+
+Verified 2026-08-30: 0 of 109 open issues lacked a `state:*` label, so the predicate had no false positives across the entire live backlog and needed **no backfill**.
+
+> **The author check is load-bearing — do not remove it.** `aschung212/Lift` is a **public** repo. Without it, the first bug report from a stranger would promote itself to `priority:1-urgent` ahead of Aaron's whole backlog. External issues fall through untouched and triage normally.
+
+**What it does.** For each hand-filed issue: adds `origin:aaron` (durable marker, survives triage and re-triage), `priority:1-urgent`, and `state:unstarted`, then leaves a marker comment. Idempotent — `origin:aaron` is the marker, and the `state:unstarted` it adds also removes the issue from its own selection predicate on later runs.
+
+It deliberately does **not** carry the `Triaged by` marker that `triage.sh` greps for. A promoted issue *should* still be triaged; the GA carve-out is what stops it being SKIPped, not an idempotency dodge.
+
+**Downstream effects.** Two consumers honor `origin:aaron`:
+
+| Stage | Behavior |
+|---|---|
+| **Triage** | An `origin:aaron` issue gets an OVERRIDE block in its prompt: it may not be SKIPped for being feature-shaped, `SUGGESTED_PRIORITY` stays 1, and SKIP remains valid only for reasons unrelated to the GA policy (true duplicate, already implemented). A **deterministic backstop** suppresses the `priority:4` demotion even if the model returns SKIP anyway. |
+| **Builder pre-pick** | `origin:aaron` outranks everything, ahead of the GA-readiness ordering. |
+
+---
+
 ## Testing Infrastructure
 
-The pipeline has a bats-core test suite with **316 tests across 24 test files** in `~/development/pilot/tests/`. Tests use two-tier execution to balance speed with thoroughness:
+The pipeline has a bats-core test suite with **328 tests across 25 test files** in `~/development/pilot/tests/`. Tests use two-tier execution to balance speed with thoroughness:
 
 **Fast tier (297 tests) — pre-commit hook:**
 - Runs before every commit via `.githooks/pre-commit`
@@ -322,7 +362,7 @@ The pipeline has a bats-core test suite with **316 tests across 24 test files** 
 - Parallel execution via GNU parallel (`bats -j 8`)
 - Blocks commit if any test fails
 
-**Full tier (316 tests) — GitHub Actions CI:**
+**Full tier (328 tests) — GitHub Actions CI:**
 - Runs on every push via `.github/workflows/test.yml`
 - Includes everything in the fast tier plus integration-level tests (CSV analysis, full script invocations)
 - Test paths resolve dynamically (no hardcoded local paths) for CI runner compatibility
@@ -436,7 +476,7 @@ Feedback loop → canceled issues + product decisions steer discovery;
 | `~/development/pilot/scripts/stale-pr-audit.sh` | Weekly audit: open PRs whose work has already shipped (no-op merges, duplicate/colliding migrations) |
 | `~/development/pilot/scripts/pr-close-reconcile.sh` | Closes/re-triages issues whose PR was closed unmerged — the state:started leak that hid 69% of the backlog from Triage |
 | `~/development/pilot/scripts/doc-drift-audit.sh` | Biweekly audit: docs vs. the repo's actual state (checks in `lib/doc-drift-check.py`) |
-| `~/development/pilot/tests/` | bats-core test suite (316 tests, 24 files, two-tier execution) |
+| `~/development/pilot/tests/` | bats-core test suite (328 tests, 25 files, two-tier execution) |
 | `~/development/pilot/.github/workflows/test.yml` | GitHub Actions CI — full test suite on push |
 | `~/development/pilot/.githooks/pre-commit` | Pre-commit hook — fast test tier on every commit |
 | `~/development/pilot/project.env` | Lift-specific configuration (git-ignored) |
@@ -451,6 +491,18 @@ See [Pilot Responsibilities](pilot-responsibilities.md) for the complete list of
 ---
 
 ## Changelog
+
+### 2026-08-30 — Hand-filed issues jump the queue; three builder defects fixed
+
+**Aaron's standing rule:** *"if i take the time to file a ticket myself, I want it addressed asap"* — manually-created issues are now exempt from the GA-readiness policy and picked first.
+
+- **New `claim-manual-issues.sh`** (architecture section 11), called as a pre-step by both Triage and the Builder. Detects `open + authored by MANUAL_ISSUE_AUTHOR + no state:* label` — exact, because Pilot's `gh_create` always stamps a `state:*` label — and adds `origin:aaron` + `priority:1-urgent` + `state:unstarted`. Verified against all 109 open issues: zero false positives, no backfill needed. Gated on issue author because Lift is a **public** repo.
+- **Triage GA carve-out.** An `origin:aaron` issue gets an OVERRIDE block forbidding a feature-shaped SKIP, plus a deterministic backstop that suppresses the `priority:4` demotion even if the model returns SKIP anyway.
+- **The pre-pick had never seen priority labels.** Its prompt claimed they "appear in the issue list"; `gh_list "pickable"` has emitted bare `LIFT-N Title` rows in every revision of the repo's history. It was ranking the backlog on titles alone. The builder now annotates and pre-sorts the backlog itself, leaving the shared adapter contract untouched.
+- **The permission-denial tax:** 330 denials across 51 August runs, 57% of them the agent trying to pin which binary runs. `BUILDER_PATH` is now passed explicitly to every `claude` child; the prompt tells the agent not to retry denied commands with PATH prefixes; `which` and `npm i` added to the allowlist (`npx:*`/`node:*` deliberately not).
+- **`BUILDER_MAX_TURNS` 100 → 150**, and failed runs now report `stop_reason`/turns/cost/top denials instead of a bare "Run N failed", and park uncommitted work on a `recovered/…` branch.
+
+**What triggered this:** LIFT-1271 was force-built on 2026-08-30, fully implemented, then died at turn 101 on denied verification commands — branch deleted, 513 verified insertions stranded uncommitted, $6.17 spent for nothing. Recovered by hand and shipped as Lift PR #1273.
 
 ### 2026-08-28 — Backlog audit (149 issues closed) + PR-close reconcile
 
@@ -739,15 +791,11 @@ triage       ─→ state:backlog | state:unstarted | (closed canceled)
 architect    ─→ (intended state:unstarted, currently no label — separate bug)
 builder pick ─→ state:started     (deterministic at pre-pick stage)
 builder done ─→ state:started     (PR opened; closure deferred to PR merge)
-PR merge     ─→ closed            (PR body's "Closes #N"; cleanup sweeps misses)
+PR merge     ─→ closed            (GitHub auto-closes via "Closes #N")
 stalled      ─→ state:started     (lingers; manual triage)
 ```
 
-Closure happens at **PR merge**, never at implementation time. The pipeline does not call `gh issue close` for an `ISSUE_DONE` marker — that produced orphaned closures when the PR failed CI (PR #467 / LIFT-436, 2026-04-30: PR stayed open with typecheck errors, but the issue closed on a subsequent night via `cleanup.sh` after the builder's `--state Done` flip).
-
-Two independent mechanisms deliver the merge-time close, because the original single one was never real (see the callout in section 9):
-1. **`builder.sh` writes `Closes #N` into the PR body it generates** — script-controlled, so it does not depend on the coding agent doing anything. GitHub closes the issue the moment the PR merges into the default branch. The prompt still *asks* the agent for the same keyword in a commit body, but that is belt-and-braces now, not the mechanism.
-2. **`cleanup.sh` step 2 sweeps** any `state:started` issue whose PR already merged. This covers PRs merged before mechanism 1 existed, PRs opened by hand, and any case where the keyword did not take.
+Closure is GitHub-driven, not pipeline-driven: the builder requires Claude to include `Closes #N` in at least one commit body, and GitHub auto-closes the issue when the PR merges. The pipeline never calls `gh issue close` for an `ISSUE_DONE` marker — that produced orphaned closures when the PR failed CI (PR #467 / LIFT-436, 2026-04-30: PR stayed open with typecheck errors, but the issue closed on a subsequent night via `cleanup.sh` after the builder's `--state Done` flip).
 
 **Single source of truth per question.**
 

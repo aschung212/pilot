@@ -38,7 +38,45 @@ slack_send() {
 # Blocks arbitrary shell, curl, env var exfil, and network access beyond git/gh.
 # This is the primary defense against indirect prompt injection from web research.
 # Note: git push is allowed but the security scan runs before any push in the loop.
-BUILDER_ALLOWED_TOOLS="Read,Edit,Write,Glob,Grep,Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(git checkout:*),Bash(git branch:*),Bash(git log:*),Bash(git diff:*),Bash(git status:*),Bash(git fetch:*),Bash(git merge:*),Bash(git stash:*),Bash(git show:*),Bash(git rev-parse:*),Bash(git config user:*),Bash(gh:*),Bash(npm run build:*),Bash(npm run lint:*),Bash(npm run typecheck:*),Bash(npm test:*),Bash(npx vitest:*),Bash(npm run dev:*),Bash(npm ci:*),Bash(npm install:*),Bash(ls:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(mkdir:*),Bash(cp:*),Bash(mv:*)"
+#
+# MATCHING IS PREFIX-BASED, AND THAT IS THE WHOLE PROBLEM. Measured across the
+# 51 August 2026 runs: 330 permission denials, ~6.5 per run. 152 of them were
+# commands prefixed `PATH=...` or `env ...`, and another 35 used an absolute
+# path — 57% of all denials were the agent trying to pin WHICH binary runs.
+# `PATH=/opt/homebrew/bin:$PATH npm run typecheck` cannot match
+# `Bash(npm run typecheck:*)` no matter how the allowlist is written, so those
+# denials are unfixable here. They are addressed two other ways:
+#   * BUILDER_PATH below makes the environment deterministic, so the agent has
+#     no reason to pin anything.
+#   * The prompt tells it explicitly to use bare `npm run ...` forms.
+# Do NOT try to fix this by adding Bash(npx:*) or Bash(node:*) — both allow
+# arbitrary code execution and would gut the injection defense this list exists
+# to provide.
+#
+# `which` and `npm i` are added because they are cheap, safe, and were denied
+# repeatedly: the agent uses `which` to diagnose a toolchain it cannot see, and
+# `npm i` is the shorthand it reaches for when `npm install` is what's allowed.
+BUILDER_ALLOWED_TOOLS="Read,Edit,Write,Glob,Grep,Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(git checkout:*),Bash(git branch:*),Bash(git log:*),Bash(git diff:*),Bash(git status:*),Bash(git fetch:*),Bash(git merge:*),Bash(git stash:*),Bash(git show:*),Bash(git rev-parse:*),Bash(git config user:*),Bash(gh:*),Bash(npm run build:*),Bash(npm run lint:*),Bash(npm run typecheck:*),Bash(npm test:*),Bash(npx vitest:*),Bash(npm run dev:*),Bash(npm ci:*),Bash(npm install:*),Bash(npm i:*),Bash(which:*),Bash(ls:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(mkdir:*),Bash(cp:*),Bash(mv:*)"
+
+# PATH handed to every `claude` child process below.
+#
+# launchd starts builder.sh with PATH=/bin:/usr/bin:/usr/ucb:/usr/local/bin, and
+# ~/.zshenv does not export a PATH, so the agent's shell sees a different search
+# order than Aaron's interactive one. Both node installs are currently v25.8.2,
+# so this is not a version mismatch — but the agent cannot verify that from
+# inside its sandbox (`which` was denied until now), and it spent 152 denials in
+# August trying to pin the binary anyway. Making PATH explicit removes the
+# ambiguity that provokes it.
+#
+# $HOME/.local/bin MUST COME FIRST, and this is not cosmetic. Two claude CLIs are
+# installed on this machine:
+#   ~/.local/bin/claude    -> 2.1.218  (current; what every run has used)
+#   /opt/homebrew/bin/claude -> 2.1.112  (April, stale, and the build that emits
+#                                        the Bun "CPU lacks AVX" preamble)
+# `env PATH=... claude` re-resolves the binary against THIS list, so a
+# homebrew-first order would silently downgrade the builder by 106 versions and
+# reintroduce the Bun-preamble JSON corruption documented in CLAUDE.md.
+BUILDER_PATH="${BUILDER_PATH:-$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
 
 # Builder DISALLOWED tools — explicitly deny subagent invocation so Claude does
 # the work in its own session and emits ISSUE_DONE markers in its final message.
@@ -93,7 +131,14 @@ ALERT_THRESHOLD_PCT="${ALERT_THRESHOLD_PCT:-80}"
 DEFAULT_STOP_TIME="${DEFAULT_STOP_TIME:-07:00}"
 
 # Per-agent turn caps (from project.env; safe fallbacks if unset)
-BUILDER_MAX_TURNS="${BUILDER_MAX_TURNS:-100}"
+#
+# 100 → 150 on 2026-08-30. LIFT-1271 was a 16-file, 513-insertion feature; it
+# was fully implemented and then died at turn 101 with stop_reason=tool_use,
+# having spent 12 turns on denied verification commands. The work was stranded
+# uncommitted and the branch deleted — $6.17 for nothing. August's successful
+# runs land at 21-65 turns, so 150 leaves real headroom for a large issue
+# without masking a genuine runaway (BUILDER_ITERATION_TIMEOUT still bounds it).
+BUILDER_MAX_TURNS="${BUILDER_MAX_TURNS:-150}"
 BUILDER_FIX_MAX_TURNS="${BUILDER_FIX_MAX_TURNS:-30}"
 BUILDER_PREPICK_MAX_TURNS="${BUILDER_PREPICK_MAX_TURNS:-2}"
 
@@ -301,6 +346,23 @@ $(sed -n '/## Plan/,/## /p' "$f" 2>/dev/null | head -20)
   TEST_COUNT=$(cd "$REPO" && npm test -- --reporter=dot 2>&1 | tail -5 || echo "unknown")
   GIT_LOG=$(cd "$REPO" && git log --oneline -10)
 
+  # ── Promote issues Aaron filed by hand ─────────────────────────────────
+  # Runs BEFORE the backlog fetch so an issue filed during the day is already
+  # carrying priority:1-urgent + origin:aaron when the pre-pick reads the list.
+  # triage.sh runs this too, but only Sun/Tue/Thu — the builder runs Mon-Fri,
+  # so without this call an issue filed on a Monday would wait until Tuesday
+  # night to be promoted and Wednesday night to be built.
+  #
+  # Pre-step, not a gate. Kill switch: MANUAL_CLAIM_ENABLED=0.
+  CLAIM_MANUAL="$SCRIPT_DIR/claim-manual-issues.sh"
+  if [ "${MANUAL_CLAIM_ENABLED:-1}" = "0" ]; then
+    echo "  ⏭  Manual-issue claim disabled (MANUAL_CLAIM_ENABLED=0)" | tee -a "$RUN_LOG"
+  elif [ ! -x "$CLAIM_MANUAL" ]; then
+    echo "  ⚠️  Manual-issue claim not found at $CLAIM_MANUAL — skipping" | tee -a "$RUN_LOG"
+  else
+    bash "$CLAIM_MANUAL" --apply --notify 2>&1 | grep -E "^(  [⤴⚠]|Promoted:)" | tee -a "$RUN_LOG" || true
+  fi
+
   # Pull pickable issue backlog. "pickable" is exclusion-based: every open
   # issue NOT in {state:triage, state:backlog, state:started, state:blocked,
   # state:canceled}. Issues without any state:* label (architect orphans, old
@@ -377,6 +439,54 @@ $detail
     echo "  🧹 Backlog filter: ${_backlog_before} pickable → ${_backlog_after} after removing already-claimed/attempted issues" | tee -a "$RUN_LOG"
   fi
 
+  # ── Annotate the backlog with the labels the pre-pick is told to read ───
+  # The pre-pick prompt says "Priority labels (priority:1-urgent / 2-high /
+  # 3-medium / 4-low) appear in the issue list". They did not. tracker.sh's
+  # gh_list "pickable" has emitted bare "LIFT-N Title" lines in every revision
+  # of the repo's history — no labels, ever — so the pre-pick has been ranking
+  # the backlog off titles alone while being told it could see priorities.
+  #
+  # Fixed here rather than in the adapter on purpose: `list pickable` is a
+  # shared contract, and appending fields to it risks the silent-parser-break
+  # class of bug this repo has been bitten by before. builder.sh:311 is its
+  # only functional consumer, and the filtering above depends on the bare
+  # "LIFT-N " prefix, so annotation happens AFTER filtering and feeds the
+  # prompt only.
+  #
+  # One API call, not one per issue.
+  BACKLOG_FOR_PROMPT="$BACKLOG_ISSUES"
+  _label_map=$(gh issue list --repo "$GITHUB_ISSUES_REPO" --state open \
+    --limit "${GH_OPEN_LIMIT:-1000}" --json number,labels \
+    --jq '.[] | "'"${ISSUE_PREFIX}"'-\(.number)\t\([.labels[].name
+          | select(startswith("priority:") or startswith("origin:"))] | join(",") )"' 2>/dev/null || true)
+  if [ -n "$_label_map" ]; then
+    BACKLOG_FOR_PROMPT=$(BACKLOG="$BACKLOG_ISSUES" LABELS="$_label_map" python3 <<'PYEOF'
+import os
+labels = {}
+for line in os.environ["LABELS"].splitlines():
+    if "\t" in line:
+        k, v = line.split("\t", 1)
+        labels[k] = v
+out = []
+for line in os.environ["BACKLOG"].splitlines():
+    if not line.strip():
+        continue
+    key = line.split(" ", 1)[0]
+    tags = labels.get(key, "")
+    out.append(f"{line}  [{tags}]" if tags else line)
+# Hand-filed issues first, then by priority number, then original order.
+def rank(row):
+    return (0 if "origin:aaron" in row else 1,
+            next((int(d) for d in "1234" if f"priority:{d}-" in row), 9))
+out.sort(key=rank)
+print("\n".join(out))
+PYEOF
+) || BACKLOG_FOR_PROMPT="$BACKLOG_ISSUES"
+  fi
+  _manual_waiting=$(echo "$BACKLOG_FOR_PROMPT" | grep -c "origin:aaron" | tr -d ' \n')
+  [ "${_manual_waiting:-0}" -gt 0 ] && \
+    echo "  🙋 ${_manual_waiting} hand-filed issue(s) at the front of the picking pool" | tee -a "$RUN_LOG"
+
   # ── Create a branch for this iteration ───────────────────────────────────
   # Branch name will be updated once we know which issue Claude picks.
   # Start on a temporary branch; rename after we parse the run log.
@@ -415,12 +525,14 @@ $detail
   PRE_PICK_JSON="$OUTPUT_DIR/lift-enhance-$DATE-run${RUN}-prepick.json"
   # Pin the Opus-tier model for picking quality, but deliberately NOT max effort:
   # choosing one issue from titles is trivial, so max effort would only add cost/latency.
-  PRE_PICK_RESULT=$(run_with_timeout "$BUILDER_PREPICK_TIMEOUT" claude --allowedTools "Read,Glob,Grep" --disallowedTools "$BUILDER_DISALLOWED_TOOLS" --model "${AI_CODE_MODEL:-claude-opus-5[1m]}" --output-format json --max-turns "$BUILDER_PREPICK_MAX_TURNS" -p "$(cat <<PREPICK
+  PRE_PICK_RESULT=$(run_with_timeout "$BUILDER_PREPICK_TIMEOUT" env PATH="$BUILDER_PATH" claude --allowedTools "Read,Glob,Grep" --disallowedTools "$BUILDER_DISALLOWED_TOOLS" --model "${AI_CODE_MODEL:-claude-opus-5[1m]}" --output-format json --max-turns "$BUILDER_PREPICK_MAX_TURNS" -p "$(cat <<PREPICK
 You are the pre-pick stage of the overnight builder pipeline for $PROJECT_NAME. Your only job in this call is to pick exactly ONE issue from the unstarted backlog to work on next. You are NOT implementing anything in this call — that happens in the next stage. Pick the issue and exit immediately.
 
 ## Unstarted backlog (pickable)
 
-$BACKLOG_ISSUES
+Each row is \`${ISSUE_PREFIX}-N Title  [labels]\`. Rows are pre-sorted: hand-filed issues first, then by priority.
+
+$BACKLOG_FOR_PROMPT
 
 ## Issues already IN PROGRESS — do NOT pick
 
@@ -440,7 +552,11 @@ ${SKIPPED_ISSUES:-None}
 
 ## How to pick
 
-Pick the highest-priority unstarted issue that is NOT in any of the do-not-pick lists above. Priority labels (priority:1-urgent / 2-high / 3-medium / 4-low) appear in the issue list. $PROJECT_NAME is stabilizing for a GA release: if two issues are equal priority, prefer user-facing bug fixes first, then performance/reliability fixes, then UI/UX and accessibility polish. Put refactors, test-only additions, and anything feature-shaped last.
+Pick the highest-priority unstarted issue that is NOT in any of the do-not-pick lists above. Priority labels (priority:1-urgent / 2-high / 3-medium / 4-low) appear in brackets at the end of each row.
+
+**An issue labeled \`origin:aaron\` outranks everything else.** Aaron filed it by hand rather than an agent proposing it, and the standing rule is that his own tickets get addressed first. If any such issue is pickable, pick it — regardless of how it compares to the GA-readiness preferences below, and regardless of whether it looks feature-shaped. If several are, take the one listed first.
+
+Otherwise: $PROJECT_NAME is stabilizing for a GA release, so if two issues are equal priority, prefer user-facing bug fixes first, then performance/reliability fixes, then UI/UX and accessibility polish. Put refactors, test-only additions, and anything feature-shaped last. That ordering applies only to issues WITHOUT the \`origin:aaron\` label.
 
 You do NOT need to read the issue bodies or the codebase in this stage — just pick from titles and priorities. The next stage has the full context.
 
@@ -545,7 +661,7 @@ ASSIGNED
     STEP2_TEXT="**Pick exactly ONE issue** from the unstarted backlog to implement fully"
   fi
 
-  run_with_timeout "$BUILDER_ITERATION_TIMEOUT" claude --allowedTools "$BUILDER_ALLOWED_TOOLS" --disallowedTools "$BUILDER_DISALLOWED_TOOLS" --model "${AI_CODE_MODEL:-claude-opus-5[1m]}" --effort "${AI_CODE_EFFORT:-max}" --output-format json -p "$(cat <<PROMPT
+  run_with_timeout "$BUILDER_ITERATION_TIMEOUT" env PATH="$BUILDER_PATH" claude --allowedTools "$BUILDER_ALLOWED_TOOLS" --disallowedTools "$BUILDER_DISALLOWED_TOOLS" --model "${AI_CODE_MODEL:-claude-opus-5[1m]}" --effort "${AI_CODE_EFFORT:-max}" --output-format json -p "$(cat <<PROMPT
 You are iteration $RUN of the overnight self-improving enhancer for $PROJECT_NAME at $REPO. This is Aaron Chung's portfolio project — he's an ex-AWS SDE2 targeting SWE roles at companies like Notion, Airtable, and Linear.
 
 You are running in a loop. Previous iterations tonight and from recent days have already made improvements. Your job is to find the NEXT most impactful thing to do that hasn't been done yet.
@@ -599,7 +715,9 @@ $PREVIOUS_SUMMARIES
 
 ## Issue backlog (UNSTARTED issues for $PROJECT_NAME — these are pickable)
 
-$BACKLOG_ISSUES
+Each row is \`${ISSUE_PREFIX}-N Title  [labels]\`, pre-sorted with hand-filed (\`origin:aaron\`) issues first, then by priority. An \`origin:aaron\` issue is one Aaron wrote himself and outranks everything else, including the GA-readiness preferences.
+
+$BACKLOG_FOR_PROMPT
 
 ## Issues already IN PROGRESS — DO NOT PICK (work already underway)
 
@@ -679,6 +797,7 @@ After your final push completes, you MUST emit the full structured response belo
 ## Rules
 
 - NEVER fabricate, guess, or invent URLs, domains, API keys, or external identifiers. If you need the deployment URL, read CLAUDE.md (the "Live:" field). If you need a repo URL, use the git remote. If you cannot find the authoritative value, SKIP the task — do not make one up.
+- **Run shell commands in their plain form.** Your PATH is already correct: \`node\`, \`npm\`, \`npx\`, \`git\`, and \`gh\` all resolve to the right binaries, and node is v25.8.2 — the same one the repo's node_modules was built against. The tool allowlist matches on a command's literal prefix, so \`npm run typecheck\` is permitted but \`PATH=... npm run typecheck\`, \`env PATH=... npm run typecheck\`, \`/opt/homebrew/bin/npm run typecheck\`, and \`node node_modules/.bin/vitest\` are all DENIED — the prefix no longer matches. Across the 51 runs in August 2026 this wasted 187 denied tool calls, and on 2026-08-30 it burned an entire 100-turn budget and lost a finished feature. If a command is denied, do NOT retry it with a PATH prefix, an absolute path, or an \`env\` wrapper; that is the one change guaranteed not to help. Use the plain form, or say in your final message that you could not run it.
 - Pick ONE issue — do not mix multiple unrelated changes in one iteration
 - Do NOT redo work from previous iterations — if tests exist, don't rewrite them
 - Do NOT break existing functionality — run tests after each change
@@ -762,6 +881,50 @@ PROMPT
     echo "⏱️  Run $RUN timed out after ${BUILDER_ITERATION_TIMEOUT}s — killed the hung claude call" | tee -a "$RUN_LOG"
     log_error "Run $RUN timed out after ${BUILDER_ITERATION_TIMEOUT}s (hung claude implement call killed)"
     thread_send "⏱️ *Builder Run $RUN timed out* — the implement call exceeded ${BUILDER_ITERATION_TIMEOUT}s and was killed. Scored as a failure; the loop continues."
+  elif [ "$CLAUDE_EXIT" -ne 0 ]; then
+    # Explain WHY a run failed. Until 2026-08-30 a non-zero, non-timeout exit
+    # wrote nothing but "Run N failed" — the LIFT-1271 failure left a six-line
+    # run log and the cause (turn ceiling + denied verification commands) was
+    # only recoverable by hand-parsing the JSON afterwards. Everything below is
+    # already in $CLAUDE_JSON; it just was never surfaced.
+    FAIL_DIAG=$(CJ="$CLAUDE_JSON" python3 <<'PYEOF'
+import json, os, collections
+try:
+    d = json.load(open(os.environ["CJ"]))
+except Exception as e:
+    print(f"could not parse claude output JSON: {e}")
+    raise SystemExit
+den = d.get("permission_denials") or []
+bits = [f"stop_reason={d.get('stop_reason')}",
+        f"turns={d.get('num_turns')}",
+        f"cost=${d.get('total_cost_usd', 0):.2f}",
+        f"denials={len(den)}"]
+print("  " + "  ".join(bits))
+if d.get("stop_reason") == "tool_use":
+    print("  ⚠️  hit the turn ceiling mid-tool-call — raise BUILDER_MAX_TURNS or cut scope")
+for cmd, n in collections.Counter(
+        (x.get("tool_input", {}).get("command", "") or x.get("tool_name", "?"))[:90]
+        for x in den).most_common(5):
+    print(f"    {n}x denied: {cmd}")
+PYEOF
+) || FAIL_DIAG="  (diagnostics unavailable)"
+    echo "❌ Run $RUN failed (claude exit $CLAUDE_EXIT)" | tee -a "$RUN_LOG"
+    echo "$FAIL_DIAG" | tee -a "$RUN_LOG"
+    log_error "Run $RUN failed (exit $CLAUDE_EXIT): $(echo "$FAIL_DIAG" | tr '\n' ' ')"
+
+    # A failed run leaves its work uncommitted; the branch is deleted below and
+    # the changes land back on the default branch, where the next iteration's
+    # reset destroys them. LIFT-1271 lost 513 verified insertions this way.
+    # Park them on a recovery branch instead — cheap, and inspectable in the
+    # morning. Nothing is pushed; Aaron decides what to do with it.
+    if [ -n "$(git -C "$REPO" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+      RECOVERY_BRANCH="recovered/run${RUN}-$DATE${PICKED_ISSUE:+-${PICKED_ISSUE}}"
+      if git -C "$REPO" checkout -b "$RECOVERY_BRANCH" 2>/dev/null \
+         && git -C "$REPO" commit -qam "wip: recovered from failed builder run $RUN ($DATE)${PICKED_ISSUE:+ — $PICKED_ISSUE}" 2>/dev/null; then
+        echo "  💾 Uncommitted work parked on $RECOVERY_BRANCH" | tee -a "$RUN_LOG"
+        thread_send "💾 Run $RUN failed but had uncommitted work — parked on \`$RECOVERY_BRANCH\` for review."
+      fi
+    fi
   fi
   if [ "$CLAUDE_EXIT" -eq 0 ]; then
     # Extract text result and append to run log
@@ -964,7 +1127,7 @@ $PRIMARY_ISSUE"
               # Merge conflict — ask Claude to resolve
               CONFLICT_FILES=$(git diff --name-only --diff-filter=U 2>/dev/null || true)
               if [ -n "$CONFLICT_FILES" ]; then
-                run_with_timeout "$BUILDER_FIX_TIMEOUT" claude --allowedTools "$BUILDER_ALLOWED_TOOLS" --disallowedTools "$BUILDER_DISALLOWED_TOOLS" --model "${AI_CODE_MODEL:-claude-opus-5[1m]}" --effort "${AI_CODE_EFFORT:-max}" -p "You are in the $REPO repo on branch $ITER_BRANCH. There are merge conflicts with master in these files:
+                run_with_timeout "$BUILDER_FIX_TIMEOUT" env PATH="$BUILDER_PATH" claude --allowedTools "$BUILDER_ALLOWED_TOOLS" --disallowedTools "$BUILDER_DISALLOWED_TOOLS" --model "${AI_CODE_MODEL:-claude-opus-5[1m]}" --effort "${AI_CODE_EFFORT:-max}" -p "You are in the $REPO repo on branch $ITER_BRANCH. There are merge conflicts with master in these files:
 $CONFLICT_FILES
 
 Resolve all merge conflicts, keeping the intent of both sides. Then run npm test and npm run build to verify. Commit the resolution with message 'fix: resolve merge conflicts with master'. End the commit body with exactly this trailer (do not self-report a different model version): $COAUTHOR_TRAILER" --max-turns "$BUILDER_FIX_MAX_TURNS" 2>&1 | tee -a "$RUN_LOG" || true
@@ -979,7 +1142,7 @@ Resolve all merge conflicts, keeping the intent of both sides. Then run npm test
             if [ "$CI_PASS" = "false" ]; then
               FAIL_SNIPPET=$(echo "$BUILD_OUT" | tail -30)
               TEST_SNIPPET=$(echo "$TEST_OUT" | tail -30)
-              run_with_timeout "$BUILDER_FIX_TIMEOUT" claude --allowedTools "$BUILDER_ALLOWED_TOOLS" --disallowedTools "$BUILDER_DISALLOWED_TOOLS" --model "${AI_CODE_MODEL:-claude-opus-5[1m]}" --effort "${AI_CODE_EFFORT:-max}" -p "You are in the $REPO repo on branch $ITER_BRANCH. The CI build or tests are failing. Fix the issues and commit the fix.
+              run_with_timeout "$BUILDER_FIX_TIMEOUT" env PATH="$BUILDER_PATH" claude --allowedTools "$BUILDER_ALLOWED_TOOLS" --disallowedTools "$BUILDER_DISALLOWED_TOOLS" --model "${AI_CODE_MODEL:-claude-opus-5[1m]}" --effort "${AI_CODE_EFFORT:-max}" -p "You are in the $REPO repo on branch $ITER_BRANCH. The CI build or tests are failing. Fix the issues and commit the fix.
 
 Build output (last 30 lines):
 $FAIL_SNIPPET
