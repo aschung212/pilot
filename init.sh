@@ -235,13 +235,22 @@ read -r AI_ARCHITECT_MODEL
 AI_ARCHITECT_MODEL="${AI_ARCHITECT_MODEL:-claude-fable-5}"
 
 if [ -n "${GEMINI_API_KEY:-}" ]; then
-  ok "GEMINI_API_KEY found — web research + triage enabled (free-tier Flash via the Gemini API)"
-  ask "Research model [gemini-2.5-flash]: "
+  ok "GEMINI_API_KEY found — Gemini available for triage and as the research fallback"
+  ask "Gemini model (triage + research fallback) [gemini-2.5-flash]: "
   read -r AI_RESEARCH_MODEL
   AI_RESEARCH_MODEL="${AI_RESEARCH_MODEL:-gemini-2.5-flash}"
+  echo ""
+  echo "  Discovery's web research picks a backend. Measured 2026-08-30 on the same"
+  echo "  prompt: Gemini 2.5 Flash returned 0 cited URLs; Claude Sonnet 5 returned 24"
+  echo "  across 14 domains, with App Store data that verifies against Apple's API."
+  echo "  Whichever you pick, the other is the automatic fallback."
+  ask "Discovery research backend (claude/gemini) [claude]: "
+  read -r DISCOVER_RESEARCH_BACKEND
+  DISCOVER_RESEARCH_BACKEND="${DISCOVER_RESEARCH_BACKEND:-claude}"
 else
-  warn "GEMINI_API_KEY not set (add it to ~/.zshenv). Research falls back to Claude; triage uses its Claude fallback."
+  warn "GEMINI_API_KEY not set (add it to ~/.zshenv). Discovery research uses Claude with no fallback; triage uses its Claude fallback."
   AI_RESEARCH_MODEL=""
+  DISCOVER_RESEARCH_BACKEND="claude-only"
 fi
 
 echo ""
@@ -385,6 +394,8 @@ AI_CODE_MODEL="$AI_CODE_MODEL"
 AI_CODE_EFFORT="$AI_CODE_EFFORT"
 AI_ARCHITECT_MODEL="$AI_ARCHITECT_MODEL"
 AI_RESEARCH_MODEL="$AI_RESEARCH_MODEL"
+AI_RESEARCH_CLAUDE_MODEL="claude-sonnet-5"
+DISCOVER_RESEARCH_BACKEND="$DISCOVER_RESEARCH_BACKEND"
 
 # ── Agent Tuning ─────────────────────────────────────────────
 # Advanced knobs — sensible defaults below; edit to tune cost/performance/behavior.
@@ -575,7 +586,7 @@ echo "  Repo:       $REPO_PATH"
 echo "  Tracker:    $TRACKER_ADAPTER"
 echo "  Builder:    ${AI_CODE_MODEL} (effort: ${AI_CODE_EFFORT}) ($(echo "$BUILDER_DAYS" | tr ',' '/' | sed 's/1/Mon/;s/2/Tue/;s/3/Wed/;s/4/Thu/;s/5/Fri/'))"
 echo "  Architect:  ${AI_ARCHITECT_MODEL} (weekly)"
-echo "  Discovery:  ${AI_RESEARCH_MODEL:-disabled} ($(echo "$DISCOVER_DAYS" | tr ',' '/' | sed 's/0/Sun/;s/2/Tue/;s/4/Thu/'))"
+echo "  Discovery:  research via ${DISCOVER_RESEARCH_BACKEND} (gemini model: ${AI_RESEARCH_MODEL:-none}) ($(echo "$DISCOVER_DAYS" | tr ',' '/' | sed 's/0/Sun/;s/2/Tue/;s/4/Thu/'))"
 echo ""
 echo "  Next steps:"
 echo "  1. Add SLACK_BOT_TOKEN and SLACK_WEBHOOK_URL to ~/.zshenv"

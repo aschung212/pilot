@@ -81,3 +81,89 @@ AI_RESEARCH="$PILOT_DIR/adapters/ai-research.sh"
   [ "$status" -eq 0 ]
   [[ "$output" == *"finding one"* ]]
 }
+
+# ── Backend routing (added 2026-08-30) ───────────────────────────────────────
+
+# bats test_tags=fast
+@test "ai-research: default backend is gemini — triage must not silently move to Claude" {
+  run bash "$AI_RESEARCH" prompt "test"
+  [ "$status" -eq 0 ]
+  [ -f "$TEST_TMPDIR/mock_calls/curl" ]
+  [ ! -f "$TEST_TMPDIR/mock_calls/claude" ]
+}
+
+# bats test_tags=fast
+@test "ai-research: unknown backend fails loud instead of falling through to gemini" {
+  run bash "$AI_RESEARCH" prompt "test" --backend bogus
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"unknown backend"* ]]
+  [ ! -f "$TEST_TMPDIR/mock_calls/curl" ]
+}
+
+# bats test_tags=fast
+@test "ai-research: --backend claude calls the claude CLI, never curl" {
+  MOCK_CLAUDE_OUTPUT='{"result": "findings here", "is_error": false}' \
+    run bash "$AI_RESEARCH" prompt "test" --backend claude
+  [ "$status" -eq 0 ]
+  [ -f "$TEST_TMPDIR/mock_calls/claude" ]
+  [ ! -f "$TEST_TMPDIR/mock_calls/curl" ]
+}
+
+# bats test_tags=fast
+@test "ai-research: grounded claude backend allows web tools and blocks Task fan-out" {
+  # Task is disallowed deliberately: unbounded subagent fan-out is what made the
+  # Opus arm of the 2026-08-30 bake-off take 1187s instead of 137s.
+  MOCK_CLAUDE_OUTPUT='{"result": "findings", "is_error": false}' \
+    run bash "$AI_RESEARCH" prompt "test" --backend claude
+  [ "$status" -eq 0 ]
+  grep -q -- "--allowedTools WebSearch,WebFetch" "$TEST_TMPDIR/mock_calls/claude"
+  grep -q -- "Task" "$TEST_TMPDIR/mock_calls/claude"
+}
+
+# bats test_tags=fast
+@test "ai-research: --no-grounding on the claude backend removes web access" {
+  MOCK_CLAUDE_OUTPUT='{"result": "reasoned answer", "is_error": false}' \
+    run bash "$AI_RESEARCH" prompt "test" --backend claude --no-grounding
+  [ "$status" -eq 0 ]
+  run grep -o -- "--allowedTools [^ ]*" "$TEST_TMPDIR/mock_calls/claude"
+  [[ "$output" != *"WebSearch"* ]]
+  grep -q -- "--disallowedTools WebSearch,WebFetch" "$TEST_TMPDIR/mock_calls/claude"
+}
+
+# bats test_tags=fast
+@test "ai-research: claude backend uses AI_RESEARCH_CLAUDE_MODEL, not AI_RESEARCH_MODEL" {
+  AI_RESEARCH_CLAUDE_MODEL="claude-sonnet-5" \
+  MOCK_CLAUDE_OUTPUT='{"result": "x", "is_error": false}' \
+    run bash "$AI_RESEARCH" prompt "test" --backend claude
+  [ "$status" -eq 0 ]
+  grep -q -- "--model claude-sonnet-5" "$TEST_TMPDIR/mock_calls/claude"
+}
+
+# bats test_tags=fast
+@test "ai-research: claude backend fails loud when the CLI reports is_error" {
+  MOCK_CLAUDE_OUTPUT='{"result": "", "is_error": true, "subtype": "error_max_turns"}' \
+    run bash "$AI_RESEARCH" prompt "test" --backend claude
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Claude request failed"* ]]
+}
+
+# bats test_tags=fast
+@test "ai-research: claude backend survives the Bun AVX preamble before the JSON" {
+  # `claude --output-format json` is not valid JSON at line 1 on this host — Bun
+  # prints a CPU warning first. This broke every pre-pick on 2026-05-19.
+  MOCK_CLAUDE_OUTPUT='warn: CPU lacks AVX support, strange crashes may occur.
+{"result": "real findings", "is_error": false}' \
+    run bash "$AI_RESEARCH" prompt "test" --backend claude
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"real findings"* ]]
+}
+
+# bats test_tags=fast
+@test "ai-research: claude backend writes --output to file" {
+  local out_file="$TEST_TMPDIR/claude-research.md"
+  MOCK_CLAUDE_OUTPUT='{"result": "cited findings", "is_error": false}' \
+    run bash "$AI_RESEARCH" prompt "test" --backend claude --output "$out_file"
+  [ "$status" -eq 0 ]
+  [ -s "$out_file" ]
+  grep -q "cited findings" "$out_file"
+}

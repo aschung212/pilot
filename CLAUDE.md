@@ -41,7 +41,7 @@ All external tools are accessed through adapters in `adapters/`:
 - `tracker.sh` — issue tracking (GitHub Issues + Linear dual-backend)
 - `notify.sh` — Slack notifications (webhooks + Bot API)
 - `ai-code.sh` — code generation (Claude)
-- `ai-research.sh` — web research (Gemini REST API)
+- `ai-research.sh` — web research (two backends: Claude `WebSearch` or Gemini REST API; `--backend`)
 
 Adversarial code review is **not** an adapter — it runs inline via
 `~/.claude/scripts/review-router.sh` (headless `claude -p`) as a PostToolUse hook.
@@ -97,6 +97,8 @@ All logs, metrics, queues, and outputs live in `pilot/data/` (gitignored). Key f
 - `lift-metrics.csv` — builder iteration metrics
 - `lift-enhance-YYYY-MM-DD-runN.md` — per-iteration build logs
 - `lift-discover-YYYY-MM-DD.md` — discovery run logs
+- `lift-discover-YYYY-MM-DD-research.md` — Phase 1 web research, whichever backend produced it
+  (files before 2026-08-30 are named `-gemini-research.md`, from when Gemini was the only backend)
 - `lift-stale-pr-audit-YYYY-MM-DD.md` — stale-PR audit report (weekly, Sun 08:15)
 - `lift-claim-manual-YYYY-MM-DD.md` — hand-filed issues promoted to top priority (pre-step of triage and the builder)
 - `lift-doc-drift-YYYY-MM-DD.md` — doc-drift audit report (biweekly, Sun 09:00)

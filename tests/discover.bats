@@ -221,3 +221,54 @@ LOG
   [ "$status" -eq 0 ]
   [[ "$output" != *"--no-grounding"* ]]
 }
+
+# ── Research backend toggle (added 2026-08-30) ───────────────────────────────
+
+# Extract the REAL backend-order case block from the shipped script and eval it.
+# Deliberately not a copy: tune-budget.bats had five green tests over pasted logic
+# while the script itself had never once worked.
+_research_order_for() {
+  local backend="$1"
+  local block
+  block=$(sed -n '/^case "\$DISCOVER_RESEARCH_BACKEND" in/,/^esac/p' "$PILOT_DIR/scripts/discover.sh")
+  [ -n "$block" ] || return 1
+  # The unknown-backend branch tee's a warning to stdout on purpose, so run the
+  # block with stdout discarded and emit RESEARCH_ORDER on fd 3.
+  DISCOVER_RESEARCH_BACKEND="$backend" RUN_LOG="$TEST_TMPDIR/run.log" \
+    bash -c "{ $block
+} >/dev/null 2>&1; printf '%s' \"\$RESEARCH_ORDER\""
+}
+
+# bats test_tags=fast
+@test "discover: backend toggle picks the named backend first and the other as fallback" {
+  [ "$(_research_order_for claude)" = "claude gemini" ]
+  [ "$(_research_order_for gemini)" = "gemini claude" ]
+}
+
+# bats test_tags=fast
+@test "discover: the -only backend forms disable the fallback" {
+  [ "$(_research_order_for claude-only)" = "claude" ]
+  [ "$(_research_order_for gemini-only)" = "gemini" ]
+}
+
+# bats test_tags=fast
+@test "discover: an unknown backend value degrades to the default pair, not to nothing" {
+  # An empty RESEARCH_ORDER would skip Phase 1 entirely and silently.
+  [ "$(_research_order_for wat)" = "claude gemini" ]
+}
+
+# bats test_tags=fast
+@test "discover: Phase 1 passes --backend to the adapter and tries each in order" {
+  run grep -n 'for _backend in \$RESEARCH_ORDER' "$PILOT_DIR/scripts/discover.sh"
+  [ "$status" -eq 0 ]
+  run grep -n -- '--backend "\$_backend"' "$PILOT_DIR/scripts/discover.sh"
+  [ "$status" -eq 0 ]
+}
+
+# bats test_tags=fast
+@test "discover: total research failure still alerts and names every backend tried" {
+  run grep -c 'web research FAILED on every backend' "$PILOT_DIR/scripts/discover.sh"
+  [ "$status" -eq 0 ]
+  run grep -c 'Tried: \$RESEARCH_ORDER' "$PILOT_DIR/scripts/discover.sh"
+  [ "$status" -eq 0 ]
+}

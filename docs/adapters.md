@@ -9,7 +9,7 @@ Adapters are thin wrapper scripts that provide a stable interface between the pi
 | Issue Tracker | Linear CLI | `adapters/tracker.sh` |
 | Notifications | Slack (webhooks + Bot API) | `adapters/notify.sh` |
 | Code Generation | Claude CLI | `adapters/ai-code.sh` |
-| Research | Gemini REST API (Flash + Search grounding) | `adapters/ai-research.sh` |
+| Research | Claude (`WebSearch`/`WebFetch`) **or** Gemini REST API (Flash + Search grounding) | `adapters/ai-research.sh` |
 
 Code review is deliberately **not** an adapter. It runs inline as a PostToolUse
 hook via `~/.claude/scripts/review-router.sh` (headless `claude -p`), so there is
@@ -61,11 +61,27 @@ ai-code.sh run <prompt> [opts]
 
 ### ai-research.sh
 
+Two backends behind one interface. Callers pick per call; nothing else changes.
+
 ```bash
 ai-research.sh prompt <text> [opts]
-  --model <model>                            # override model
+  --model <model>                            # override the GEMINI model
   --output <file>                            # save to file
+  --no-grounding                             # no web access (both backends)
+  --backend gemini|claude                    # default: $AI_RESEARCH_BACKEND (gemini)
 ```
+
+| Backend | Engine | Cost | Latency | Cites sources |
+|---|---|---|---|---|
+| `gemini` (default) | Gemini API Flash + Google Search grounding | free tier | ~50s | **No** — 0 URLs in 13 of 14 runs since the REST migration; `groundingMetadata` comes back but is not surfaced yet |
+| `claude` | headless `claude -p`, `AI_RESEARCH_CLAUDE_MODEL` (Sonnet 5) | plan tokens | ~140s | **Yes** — 24 URLs / 14 domains on the same prompt, App Store data verifying against Apple's API |
+
+Contract notes:
+- Answer on stdout (or `--output`), diagnostics on stderr, **exit 0 = answer produced, non-zero = fail loud.** Identical on both backends, so callers need no backend-specific handling.
+- `--no-grounding` means "no web access" on both: Gemini drops the `google_search` tool, Claude disallows `WebSearch`/`WebFetch` and is pinned to one turn. Triage uses this.
+- The claude backend disallows `Task` deliberately — an unbounded subagent fan-out is what made Opus take 1187s in the 2026-08-30 bake-off.
+- The claude backend is wall-clock bounded by `AI_RESEARCH_CLAUDE_TIMEOUT` (420s) and reports a timeout **as** a timeout, not as a parse error.
+- Discovery layers its own primary/fallback ordering on top via `DISCOVER_RESEARCH_BACKEND`; the adapter itself does exactly one backend per call.
 
 ## Writing a Custom Adapter
 

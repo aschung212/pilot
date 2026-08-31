@@ -17,7 +17,7 @@ Every night, Pilot:
 
 You wake up to a PR with passing tests, a Slack thread summarizing what was done, and a clean issue board.
 
-The pipeline includes a **test suite** (330 bats tests, two-tier execution, pre-commit hook) to validate adapter contracts and pipeline logic before any code ships.
+The pipeline includes a **test suite** (344 bats tests, two-tier execution, pre-commit hook) to validate adapter contracts and pipeline logic before any code ships.
 
 ## How It Works
 
@@ -191,7 +191,7 @@ pilot/
     tracker.sh               # Issue tracker (Linear)
     notify.sh                # Notifications (Slack, --as bot identity)
     ai-code.sh               # Code generation (Claude)
-    ai-research.sh           # Research (Gemini API — Flash + Google Search grounding)
+    ai-research.sh           # Research (Claude WebSearch or Gemini API — --backend)
   lib/
     log.sh                   # Shared logging library
     builder-utils.sh         # Builder helper functions

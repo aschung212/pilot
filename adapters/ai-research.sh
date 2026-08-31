@@ -1,10 +1,24 @@
 #!/bin/bash
-# Adapter: AI Research (Gemini API — Flash with Google Search grounding)
-# Provides a unified interface for web research / general AI queries.
-# To swap to ChatGPT/Perplexity/etc, rewrite this file.
+# Adapter: AI Research — web research / general AI queries.
+# Two backends behind one interface:
+#   gemini (default) — Gemini API Flash + Google Search grounding. Free, fast (~50s),
+#                      but returns UNCITED prose: measured 2026-08-30, 0 URLs on a
+#                      prompt explicitly demanding them (0 URLs in 13 of 14 runs since
+#                      the REST migration). Grounding citations do come back in
+#                      `groundingMetadata` but this adapter does not surface them yet.
+#   claude          — headless `claude -p` with WebSearch/WebFetch. Costs plan tokens,
+#                      slower (~140s on Sonnet 5), but cites: 24 URLs / 14 domains on
+#                      the same prompt, 13/14 resolving, with App Store versions and
+#                      ratings that verify exactly against Apple's API. It also flags
+#                      what it could NOT source instead of inventing it.
+# To swap in ChatGPT/Perplexity/etc, add a third backend here — callers do not change.
 #
 # Usage:
 #   ai-research.sh prompt <text> [--model <model>] [--output <file>] [--no-grounding]
+#                                [--backend gemini|claude]
+#
+# --no-grounding means "no web access" on BOTH backends (pure reasoning over the
+# prompt, e.g. triage). Backend default comes from AI_RESEARCH_BACKEND.
 #
 # Prints the model's answer to stdout (or --output file). Diagnostics and error
 # reasons go to stderr. Exit 0 = answer produced; non-zero = FAIL LOUD (caller
@@ -33,6 +47,14 @@ fi
 
 MODEL="${AI_RESEARCH_MODEL:-gemini-2.5-flash}"
 TIMEOUT="${AI_RESEARCH_TIMEOUT:-120}"
+BACKEND="${AI_RESEARCH_BACKEND:-gemini}"
+# Claude-backend knobs. Sonnet 5, not Opus: on the 2026-08-30 bake-off Opus produced
+# marginally better facts but took 1187s and ~6x the tokens, largely by fanning out to
+# Task subagents — which is why Task is disallowed below. A nightly step that runs
+# ahead of triage and the builder cannot spend 20 minutes on Phase 1.
+CLAUDE_MODEL="${AI_RESEARCH_CLAUDE_MODEL:-claude-sonnet-5}"
+CLAUDE_TIMEOUT="${AI_RESEARCH_CLAUDE_TIMEOUT:-420}"
+CLAUDE_MAX_TURNS="${AI_RESEARCH_CLAUDE_MAX_TURNS:-30}"
 GROUNDING="on"
 OUTPUT_FILE=""
 PROMPT_TEXT=""
@@ -50,6 +72,7 @@ case "$cmd" in
         --output)       OUTPUT_FILE="$2"; shift 2 ;;
         --grounding)    GROUNDING="$2"; shift 2 ;;
         --no-grounding) GROUNDING="off"; shift ;;
+        --backend)      BACKEND="$2"; shift 2 ;;
         *) shift ;;
       esac
     done
@@ -58,6 +81,110 @@ case "$cmd" in
       echo "ai-research: empty prompt" >&2
       exit 2
     fi
+
+    case "$BACKEND" in
+      gemini|claude) ;;
+      *) echo "ai-research: unknown backend '$BACKEND' (expected 'gemini' or 'claude')" >&2; exit 2 ;;
+    esac
+
+    # ── Claude backend ───────────────────────────────────────────────────────
+    # Same contract as the Gemini path: answer on stdout (or --output), reason on
+    # stderr, exit 0 = answer produced, non-zero = FAIL LOUD.
+    if [ "$BACKEND" = "claude" ]; then
+      if ! command -v claude >/dev/null 2>&1; then
+        echo "ai-research: claude CLI not found on PATH — cannot use the claude backend." >&2
+        exit 3
+      fi
+
+      # Task is disallowed on purpose: an unbounded subagent fan-out is what made the
+      # Opus arm of the 2026-08-30 bake-off take 1187s. Bash/Edit/Write are disallowed
+      # because research reads the web, it does not touch the machine.
+      if [ "$GROUNDING" = "off" ]; then
+        C_ALLOW=""
+        C_DENY="WebSearch,WebFetch,Task,Bash,Edit,Write"
+        C_TURNS=1
+      else
+        C_ALLOW="WebSearch,WebFetch"
+        C_DENY="Task,Bash,Edit,Write"
+        C_TURNS="$CLAUDE_MAX_TURNS"
+      fi
+
+      C_JSON=$(mktemp); C_ERR=$(mktemp); C_FIRED=$(mktemp)
+      rm -f "$C_FIRED"
+      trap 'rm -f "$C_JSON" "$C_ERR" "$C_FIRED"' EXIT
+
+      # Wall-clock guard. There is no gtimeout on this host, so poll-and-kill the
+      # process tree the way lib/builder-utils.sh does — a hung claude call silently
+      # blocked the launchd builder for 5 days on 2026-07-09.
+      if [ -n "$C_ALLOW" ]; then
+        claude --allowedTools "$C_ALLOW" --disallowedTools "$C_DENY" --model "$CLAUDE_MODEL" \
+          --output-format json -p "$PROMPT_TEXT" --max-turns "$C_TURNS" > "$C_JSON" 2>"$C_ERR" &
+      else
+        claude --disallowedTools "$C_DENY" --model "$CLAUDE_MODEL" \
+          --output-format json -p "$PROMPT_TEXT" --max-turns "$C_TURNS" > "$C_JSON" 2>"$C_ERR" &
+      fi
+      C_PID=$!
+      (
+        waited=0
+        while [ "$waited" -lt "$CLAUDE_TIMEOUT" ]; do
+          kill -0 "$C_PID" 2>/dev/null || exit 0
+          sleep 1
+          waited=$((waited + 1))
+        done
+        # Sentinel so the caller can say "timed out" instead of "unparseable output" —
+        # a killed claude leaves a truncated JSON file, and reporting that as a parse
+        # error sends whoever reads the 3am Slack alert after the wrong bug.
+        : > "$C_FIRED"
+        pkill -P "$C_PID" 2>/dev/null
+        kill -9 "$C_PID" 2>/dev/null
+      ) >/dev/null 2>&1 &
+      C_WATCHDOG=$!
+      wait "$C_PID" 2>/dev/null; C_RC=$?
+      kill "$C_WATCHDOG" 2>/dev/null; wait "$C_WATCHDOG" 2>/dev/null
+
+      # Bun prints "warn: CPU lacks AVX support ..." on this host, so a captured
+      # stream is not valid JSON at line 1 — scan for the first line starting with
+      # '{' rather than json.load()-ing the whole file, and strip a ```json fence
+      # off the inner result. This broke every pre-pick on 2026-05-19.
+      C_RESULT=$(python3 -c '
+import json, re, sys
+try:
+    lines = open(sys.argv[1]).read().splitlines()
+    start = next(i for i, l in enumerate(lines) if l.lstrip().startswith("{"))
+    d = json.loads("\n".join(lines[start:]))
+except Exception as e:
+    print("__ERR__ unparseable claude output (%s)" % type(e).__name__); sys.exit(0)
+if d.get("is_error"):
+    print("__ERR__ claude reported is_error (subtype=%s)" % d.get("subtype", "?")); sys.exit(0)
+txt = (d.get("result") or "").strip()
+txt = re.sub(r"^```(?:json|markdown)?\s*\n", "", txt)
+txt = re.sub(r"\n```\s*$", "", txt)
+if not txt:
+    print("__ERR__ empty result from claude"); sys.exit(0)
+sys.stdout.write(txt)
+' "$C_JSON" 2>/dev/null)
+
+      if [ -f "$C_FIRED" ]; then
+        echo "ai-research: Claude request timed out after ${CLAUDE_TIMEOUT}s — killed the hung call (model=$CLAUDE_MODEL)" >&2
+        exit 1
+      fi
+
+      if [ "$C_RC" -ne 0 ] || [ -z "$C_RESULT" ] || [ "${C_RESULT#__ERR__}" != "$C_RESULT" ]; then
+        C_REASON="${C_RESULT#__ERR__ }"
+        { [ -z "$C_REASON" ] || [ "$C_REASON" = "$C_RESULT" ]; } && C_REASON="exit $C_RC — $(head -c 200 "$C_ERR" 2>/dev/null)"
+        echo "ai-research: Claude request failed — $C_REASON (model=$CLAUDE_MODEL)" >&2
+        exit 1
+      fi
+
+      if [ -n "$OUTPUT_FILE" ]; then
+        printf '%s\n' "$C_RESULT" > "$OUTPUT_FILE"
+      else
+        printf '%s\n' "$C_RESULT"
+      fi
+      exit 0
+    fi
+
+    # ── Gemini backend (default) ─────────────────────────────────────────────
     if [ -z "${GEMINI_API_KEY:-}" ]; then
       echo "ai-research: GEMINI_API_KEY not set — cannot reach the Gemini API." >&2
       echo "ai-research: (the free 'gemini' CLI OAuth tier was retired 2026-06-18; this adapter needs the API key from ~/.zshenv)" >&2

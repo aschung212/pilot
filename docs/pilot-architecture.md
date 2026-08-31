@@ -76,10 +76,15 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
 ### 1. Discovery Agent
 **Script:** `~/Documents/Scripts/lift-discover.sh`
 **Schedule:** Nightly at 11 PM (first stage of overnight pipeline)
-**Models:** Gemini 2.5 Flash (web research, via the Gemini REST API + Google Search grounding) + Claude Opus (analysis)
+**Models:** Claude Sonnet 5 (web research, `WebSearch`/`WebFetch`) with Gemini 2.5 Flash as fallback + Claude Opus (analysis). Backend chosen by `DISCOVER_RESEARCH_BACKEND`.
 
 **What it does:**
-- Phase 1 (Gemini): Searches the web for the current focus area. Runs through the `ai-research.sh` adapter, which calls the Gemini API with the `GEMINI_API_KEY` (Flash is free-tier; the retired OAuth CLI is no longer used). If research fails it **alerts loudly** and Claude self-researches via `WebSearch`/`WebFetch` instead of degrading silently.
+- Phase 1 (research): Searches the web for the current focus area through the `ai-research.sh` adapter, which now has **two backends behind one interface** — `claude` (headless `claude -p` with `WebSearch`/`WebFetch`) and `gemini` (Gemini API Flash + Google Search grounding, free tier via `GEMINI_API_KEY`).
+  - `DISCOVER_RESEARCH_BACKEND` (`claude` | `gemini` | `claude-only` | `gemini-only`) picks the primary; **the other backend is the automatic fallback**, so one vendor's quota wall or 503 no longer costs discovery the web. The `-only` forms disable the fallback for isolating a misbehaving backend.
+  - Default is `claude`, chosen on measured evidence (2026-08-30 bake-off, discovery's own prompt, `competitors` focus): Gemini 2.5 Flash grounded returned 17.4 KB with **0 URLs, 0 prices, 0 ratings, 0 version numbers** despite the prompt demanding all four — and that is the norm, 0 URLs in 13 of 14 runs since the REST migration. Claude Sonnet 5 returned 24 URLs across 14 domains (13/14 resolving) with App Store versions and ratings that verify **exactly** against Apple's iTunes Lookup API, and it flagged the Reddit permalinks it could not retrieve rather than inventing them.
+  - **Sonnet, not Opus.** Opus 5 at max effort was marginally more precise but took **1187s vs 137s** and ~6× the tokens, mostly by fanning out to `Task` subagents. Phase 1 runs ahead of triage and the builder in a nightly window, so `Task` is disallowed on the claude backend to keep latency and cost bounded.
+  - If **every** backend fails it **alerts loudly** naming each one tried, and Claude self-researches in Phase 2 via `WebSearch`/`WebFetch` instead of degrading silently.
+  - Output lands in `data/lift-discover-<date>-research.md` and is injected into the Phase 2 prompt inside the UNTRUSTED WEB CONTENT fence — untrusted regardless of backend, since both relay the open web.
   - Grounding is the only reason Gemini is in this pipeline, and **grounded calls draw on a separate, smaller free-tier bucket than ungrounded ones**. Keep `AI_RESEARCH_MODEL` on a model with free grounded quota (2.5-flash). Bumping the model to dodge an ungrounded rate limit silently costs discovery its web access — that is exactly what happened on 2026-08-30.
   - The fallback's web tools are load-bearing: until 2026-08-30 `DISCOVER_ALLOWED_TOOLS` had no `WebSearch`/`WebFetch`, so "Claude self-researches" was false — every Gemini failure silently degraded discovery to pure codebase introspection.
 - Phase 2 (Claude): Cross-references findings against the codebase, existing backlog, canceled issues, and product decisions. Creates specific, actionable GitHub issues.
@@ -430,7 +435,7 @@ Pipeline is fully decomposed — each service has its own launchd plist. No orch
 
 | Agent | Model | Rationale |
 |---|---|---|
-| Discovery (research) | Gemini 2.5 Flash (Gemini API + Google Search grounding) | Free grounded web search via `GEMINI_API_KEY`; saves Claude tokens. Falls back to Claude + `WebSearch` when the grounded bucket is dry. Caveat: the adapter returns prose only — Gemini's `groundingMetadata` citations are discarded, so its findings arrive uncited (measured 2026-08-30: 0 URLs vs 24 from Claude Sonnet 5 on the same prompt). |
+| Discovery (research) | **Claude Sonnet 5** + `WebSearch`/`WebFetch` (`AI_RESEARCH_CLAUDE_MODEL`), Gemini 2.5 Flash as fallback | Cites its sources: 24 URLs / 14 domains vs Gemini's 0 on the same prompt, with App Store data verifying exactly against Apple's API. Not Opus — 1187s vs 137s for a marginal precision gain. Gemini stays as the free fallback and keeps its whole daily bucket for triage. |
 | Discovery (analysis) | Claude Opus 5 (1M, max effort) | Best at codebase reasoning + issue creation |
 | Triage | Gemini 2.5 Flash via Gemini API (Claude Sonnet fallback) | Good at planning; free-tier Flash via `GEMINI_API_KEY`. **Not** Google AI Pro — that consumer subscription grants no API access. |
 | Builder | Claude Opus 5 (1M, max effort) | Best coding model, complex multi-file changes |
