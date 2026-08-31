@@ -10,6 +10,11 @@
 #   5. Rescoped issues are split into sub-issues, original is canceled
 #   6. Issues get labeled as triaged so they're not re-reviewed
 #
+# If the model returns no parseable verdict (API error, turn-limit cutoff), the
+# issue is DEFERRED: left completely untouched, so it carries no "Triaged by"
+# comment and the next run picks it up again. A model failure must never be
+# recorded as a FLAG — see the comment above the verdict parse for why.
+#
 # Usage:
 #   ./triage.sh              # triage all unreviewed backlog issues
 #   ./triage.sh --dry-run    # preview without updating tracker
@@ -222,7 +227,16 @@ ENHANCED=0
 SKIPPED=0
 FLAGGED=0
 RESCOPED=0
+FAILED=0
+FAILED_IDS=""
 RESULTS=""
+
+# A model reply counts as usable only if it carries a parseable verdict line.
+# Used in three places (post-Gemini, post-retry, post-Sonnet) — keep them in
+# sync by going through this one predicate.
+_has_verdict() {
+  echo "$1" | grep -qE 'VERDICT: (APPROVE|ENHANCE|SKIP|FLAG|RESCOPE)'
+}
 
 # Check backlog size — if backlog is large, bias toward ENHANCE over RESCOPE
 BACKLOG_COUNT=$(echo "$ISSUE_IDS" | wc -w | tr -d ' ')
@@ -345,8 +359,26 @@ SUB_ISSUE_2_DESCRIPTION: ...
   TRIAGE_MODEL="gemini-2.5-flash"
   TRIAGE_RESULT=$(bash "$AI_RESEARCH" prompt "$TRIAGE_PROMPT" --no-grounding 2>>"$TRIAGE_LOG" || true)
 
+  # Retry once before paying for the Sonnet fallback.
+  #
+  # Scope note: this covers genuinely transient failures only. On 2026-08-29 the
+  # adapter reported HTTP 503 "currently experiencing high demand" on 7 of 23
+  # issues, which reads as transient — but the cause, diagnosed 2026-08-30, was
+  # the free tier's PER-MODEL daily request cap being exhausted. A retry cannot
+  # clear an empty daily bucket, and it did not: every retry that day also
+  # failed. That class of outage is handled by keeping AI_RESEARCH_MODEL on a
+  # model with free quota (see project.env.example), and, when it happens
+  # anyway, by the deferral below — which is what makes a dry bucket cost a
+  # triage cycle instead of a false human gate.
+  # TRIAGE_RETRY_DELAY=0 in tests so the suite does not sleep per issue.
+  if ! _has_verdict "$TRIAGE_RESULT"; then
+    echo "    (no verdict from Gemini — retrying once)" | tee -a "$TRIAGE_LOG"
+    sleep "${TRIAGE_RETRY_DELAY:-5}"
+    TRIAGE_RESULT=$(bash "$AI_RESEARCH" prompt "$TRIAGE_PROMPT" --no-grounding 2>>"$TRIAGE_LOG" || true)
+  fi
+
   # Validate we got a real verdict, not an error
-  if ! echo "$TRIAGE_RESULT" | grep -qE 'VERDICT: (APPROVE|ENHANCE|SKIP|FLAG|RESCOPE)'; then
+  if ! _has_verdict "$TRIAGE_RESULT"; then
     echo "    (Gemini failed, falling back to Claude Sonnet)" | tee -a "$TRIAGE_LOG"
     # FAIL LOUD once per run — if the Gemini path is down (API key / tier issue),
     # surface it instead of silently burning Claude tokens on every issue all night.
@@ -358,17 +390,48 @@ Falling back to Claude Sonnet for triage this run (higher token cost). Check GEM
     TRIAGE_MODEL="claude-sonnet"
     # Triage only needs read access — no writes, no shell beyond git log
     TRIAGE_ALLOWED_TOOLS="Read,Glob,Grep,Bash(git log:*),Bash(git diff:*),Bash(ls:*),Bash(cat:*)"
-    # max-turns 6: the FLAG verdict requires emitting FLAG_QUESTION + 2–4
+    # max-turns 12: the FLAG verdict requires emitting FLAG_QUESTION + 2–4
     # OPTION_N blocks + RECOMMENDATION after any tool use. At max-turns 3,
     # Sonnet was spending all turns on Read/Glob/Grep and getting cut off
     # before the structured output landed — produced empty NEEDS INPUT
     # comments on LIFT-550/546/531 during the 2026-05-12 backfill rerun.
-    TRIAGE_RESULT=$(claude --allowedTools "$TRIAGE_ALLOWED_TOOLS" --model sonnet --effort "${AI_TRIAGE_EFFORT:-high}" -p "$TRIAGE_PROMPT" --max-turns "${TRIAGE_MAX_TURNS:-6}" 2>&1 || true)
+    # Raised 3→6 then, and 6→12 on 2026-08-29 after the same cutoff
+    # recurred on LIFT-1223/1179/1098/1096 ("Error: Reached max turns (6)").
+    # The architect-filed issues that trip this are the ones needing the most
+    # codebase reading before the structured block can be written.
+    TRIAGE_RESULT=$(claude --allowedTools "$TRIAGE_ALLOWED_TOOLS" --model sonnet --effort "${AI_TRIAGE_EFFORT:-high}" -p "$TRIAGE_PROMPT" --max-turns "${TRIAGE_MAX_TURNS:-12}" 2>&1 || true)
   fi
 
-  # Parse verdict
+  # Parse verdict.
+  #
+  # An unparseable reply is a TRIAGE FAILURE, not a FLAG. This line used to read
+  # `VERDICT=${VERDICT:-FLAG}`, which made a model error indistinguishable from a
+  # genuine product question: the issue got a content-free "NEEDS INPUT" comment
+  # ("Question: No question summary provided") and was parked on
+  # state:needs-input — a label BOTH `list triageable` and `list pickable`
+  # exclude. So a transient API blip silently removed the issue from the pipeline
+  # until Aaron noticed and flipped the label back by hand.
+  #
+  # Fired in production 2026-08-29: Gemini 503'd on 7 of 23 issues, Sonnet then
+  # hit `Error: Reached max turns (6)` on 4 of them, and LIFT-1223/1179/1098/1096
+  # were all gated on a question that was never asked.
+  #
+  # Now the issue is left COMPLETELY untouched — no comment, no state, no
+  # priority. With no "Triaged by" comment it stays in `list triageable` and is
+  # retried next run, the same fail-open shape as the open-PR deferral above.
+  # A failure costs one triage cycle; it can never manufacture a human gate.
   VERDICT=$(echo "$TRIAGE_RESULT" | grep -oE 'VERDICT: (APPROVE|ENHANCE|SKIP|FLAG|RESCOPE)' | head -1 | sed 's/VERDICT: //')
-  VERDICT=${VERDICT:-FLAG}
+
+  if [ -z "$VERDICT" ]; then
+    FAILED=$((FAILED + 1))
+    FAILED_IDS+="$issue_id "
+    _WHY=$(echo "$TRIAGE_RESULT" | grep -oE 'Error: Reached max turns \([0-9]+\)|API error [0-9]+' | head -1)
+    echo "  ⚠️  DEFERRED: $ISSUE_TITLE" | tee -a "$TRIAGE_LOG"
+    echo "      no verdict parsed from $TRIAGE_MODEL${_WHY:+ ($_WHY)} — issue left untouched, retried next run" | tee -a "$TRIAGE_LOG"
+    echo "$TRIAGE_RESULT" >> "$TRIAGE_LOG"
+    log_warn "triage: no verdict for $issue_id (model=$TRIAGE_MODEL)${_WHY:+ — $_WHY}"
+    continue
+  fi
 
   echo "  $VERDICT: $ISSUE_TITLE" | tee -a "$TRIAGE_LOG"
   echo "$TRIAGE_RESULT" >> "$TRIAGE_LOG"
@@ -570,24 +633,49 @@ done
 
 echo "" | tee -a "$TRIAGE_LOG"
 echo "━━━ Triage Complete ━━━" | tee -a "$TRIAGE_LOG"
-echo "Approved: $APPROVED | Enhanced: $ENHANCED | Rescoped: $RESCOPED | Skipped: $SKIPPED | Flagged: $FLAGGED" | tee -a "$TRIAGE_LOG"
+echo "Approved: $APPROVED | Enhanced: $ENHANCED | Rescoped: $RESCOPED | Skipped: $SKIPPED | Flagged: $FLAGGED | Deferred (no verdict): $FAILED" | tee -a "$TRIAGE_LOG"
+if [ "$FAILED" -gt 0 ]; then
+  echo "  ⚠️  $FAILED issue(s) got no parseable verdict and were left untouched: $(echo "$FAILED_IDS" | xargs)" | tee -a "$TRIAGE_LOG"
+  echo "      They keep no 'Triaged by' comment, so the next run retries them automatically." | tee -a "$TRIAGE_LOG"
+fi
 
 # Triage metrics CSV
 TRIAGE_METRICS_CSV="$OUTPUT_DIR/lift-triage-metrics.csv"
 if [ ! -f "$TRIAGE_METRICS_CSV" ]; then
-  echo "date,total,approved,enhanced,rescoped,skipped,flagged,model" > "$TRIAGE_METRICS_CSV"
+  echo "date,total,approved,enhanced,rescoped,skipped,flagged,model,failed" > "$TRIAGE_METRICS_CSV"
+fi
+# Schema migration. Columns have been added to the row format twice without the
+# header ever being rewritten — the header is only emitted when the file does
+# not exist, so it froze at the original 7 columns. `rescoped` was inserted in
+# 97c06d5 and `failed` added 2026-08-29, leaving a 7-column header sitting over
+# 8-column rows: every row ragged, and csv.DictReader silently bucketing the
+# overflow under the None key while `row.get("model")` returned the *flagged*
+# count. Normalise header and rows to the current schema. Pre-RESCOPE rows take
+# rescoped=0 (the verdict did not exist yet); every pre-fix row takes failed=0
+# (an unparseable verdict was miscounted as FLAG back then, and is counted in
+# the flagged column). Idempotent — a matching header is left alone.
+_CSV_SCHEMA="date,total,approved,enhanced,rescoped,skipped,flagged,model,failed"
+if [ "$(head -1 "$TRIAGE_METRICS_CSV" 2>/dev/null)" != "$_CSV_SCHEMA" ]; then
+  awk -F, -v schema="$_CSV_SCHEMA" '
+    NR==1        { print schema; next }
+    NF==0        { next }
+    NF==7        { print $1","$2","$3","$4",0,"$5","$6","$7",0"; next }   # pre-rescoped, pre-failed
+    NF==8        { print $0 ",0"; next }                                  # pre-failed
+                 { print }
+  ' "$TRIAGE_METRICS_CSV" > "$TRIAGE_METRICS_CSV.tmp" \
+    && mv "$TRIAGE_METRICS_CSV.tmp" "$TRIAGE_METRICS_CSV"
 fi
 if [ "$DRY_RUN" != "--dry-run" ]; then
-  echo "$DATE,$UNTRIAGED_COUNT,$APPROVED,$ENHANCED,$RESCOPED,$SKIPPED,$FLAGGED,$TRIAGE_MODEL" >> "$TRIAGE_METRICS_CSV"
+  echo "$DATE,$UNTRIAGED_COUNT,$APPROVED,$ENHANCED,$RESCOPED,$SKIPPED,$FLAGGED,$TRIAGE_MODEL,$FAILED" >> "$TRIAGE_METRICS_CSV"
 fi
-log_info "Triage complete: $APPROVED approved, $ENHANCED enhanced, $RESCOPED rescoped, $SKIPPED skipped, $FLAGGED flagged"
+log_info "Triage complete: $APPROVED approved, $ENHANCED enhanced, $RESCOPED rescoped, $SKIPPED skipped, $FLAGGED flagged, $FAILED deferred (no verdict)"
 
 # Slack notification
 if [ "$DRY_RUN" != "--dry-run" ]; then
   bash "$NOTIFY" --as triage thread-reply automation "$THREAD_TS" "*Triage complete*${RETRIAGE:+ (re-triage sweep)} — $UNTRIAGED_COUNT issues reviewed (model: $TRIAGE_MODEL)
-✅ $APPROVED approved | ✨ $ENHANCED enhanced | 🔀 $RESCOPED rescoped | ⏭️ $SKIPPED skipped | 🚩 $FLAGGED flagged
+✅ $APPROVED approved | ✨ $ENHANCED enhanced | 🔀 $RESCOPED rescoped | ⏭️ $SKIPPED skipped | 🚩 $FLAGGED flagged${FAILED:+ | ⚠️ $FAILED deferred}
 
-$(echo -e "$RESULTS")
+$(echo -e "$RESULTS")${FAILED:+$([ "$FAILED" -gt 0 ] && printf '\n⚠️ *%s issue(s) got no parseable verdict* and were left untouched (retried next run): %s\n' "$FAILED" "$(echo "$FAILED_IDS" | xargs)")}
 <$(bash "$TRACKER" board-url)|Issue Board>"
 fi
 

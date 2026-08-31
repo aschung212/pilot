@@ -115,6 +115,10 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
 
 **Re-triage sweep:** `triage.sh --re-triage` re-reviews ALL triageable issues (including already-triaged ones) under the current policy — a one-shot re-baseline for policy changes like the GA shift. Comments are marked "Re-triaged by …", which the nightly idempotency grep already accepts, so swept issues aren't re-reviewed every night. Parked issues (needs-input / blocked / started) are untouched. Combinable with `--dry-run`.
 
+**Unparseable-verdict deferral (since 2026-08-29):** if neither model returns a parseable `VERDICT:` line, the issue is **deferred** — left completely untouched, with no comment, no state label, and no priority change. Carrying no "Triaged by" comment, it stays in `list triageable` and is retried on the next run.
+
+This replaces a `VERDICT=${VERDICT:-FLAG}` default that made a model error indistinguishable from a genuine product question. A failed call produced a content-free "NEEDS INPUT" comment and parked the issue on `state:needs-input` — a label that **both** `list triageable` and `list pickable` exclude — so a transient API blip removed the issue from the pipeline entirely until a human noticed and flipped the label back. On 2026-08-29 that fired four times in one run. Two supporting changes reduce how often the path is reached at all: the research call is **retried once** (`TRIAGE_RETRY_DELAY`, default 5s) before the Sonnet fallback, and the Sonnet fallback's turn cap went **6 → 12** (`TRIAGE_MAX_TURNS`). The retry covers genuinely transient failures only — the 2026-08-29 outage reported HTTP 503 "high demand" but was actually the free tier's per-model daily cap running dry, which no retry can clear. That is handled by the `AI_RESEARCH_MODEL` quota note; the deferral is what keeps a dry bucket from costing Aaron a decision. Deferrals are printed to the triage log, counted in the `failed` column of `lift-triage-metrics.csv`, and posted to the run's Slack thread.
+
 **Acceptance criteria (since 2026-08-28):** APPROVE/ENHANCE verdicts also emit `ACCEPTANCE_CRITERIA` — 2–4 testable, user-observable criteria (pipe-separated in the model output), rendered into the triage comment as a definition-of-done checklist. The builder treats them as binding: each criterion is verified before push and confirmed explicitly in the PR's Verification section. This gives every issue an explicit Definition of Ready/Done instead of an implied one.
 
 **Why it matters:** The builder (Opus) reads these comments before implementing. Better plans = stronger implementations. Aaron spends less time triaging raw issues.
@@ -389,16 +393,16 @@ Reporter only — never mutates an issue, PR, or branch.
 
 ## Testing Infrastructure
 
-The pipeline has a bats-core test suite with **368 tests across 26 test files** in `~/development/pilot/tests/`. Tests use two-tier execution to balance speed with thoroughness:
+The pipeline has a bats-core test suite with **372 tests across 26 test files** in `~/development/pilot/tests/`. Tests use two-tier execution to balance speed with thoroughness:
 
-**Fast tier (320 tests) — pre-commit hook:**
+**Fast tier (323 tests) — pre-commit hook:**
 - Runs before every commit via `.githooks/pre-commit`
 - Covers: unit tests, adapter contract tests, argument parsing, error handling, log formatting
 - Builder tests source real functions from `lib/builder-utils.sh` (not copies of logic)
 - Parallel execution via GNU parallel (`bats -j 8`)
 - Blocks commit if any test fails
 
-**Full tier (368 tests) — GitHub Actions CI:**
+**Full tier (372 tests) — GitHub Actions CI:**
 - Runs on every push via `.github/workflows/test.yml`
 - Includes everything in the fast tier plus integration-level tests (CSV analysis, full script invocations)
 - Test paths resolve dynamically (no hardcoded local paths) for CI runner compatibility
@@ -512,7 +516,7 @@ Feedback loop → canceled issues + product decisions steer discovery;
 | `~/development/pilot/scripts/stale-pr-audit.sh` | Weekly audit: open PRs whose work has already shipped (no-op merges, duplicate/colliding migrations) |
 | `~/development/pilot/scripts/pr-close-reconcile.sh` | Closes/re-triages issues whose PR was closed unmerged — the state:started leak that hid 69% of the backlog from Triage |
 | `~/development/pilot/scripts/doc-drift-audit.sh` | Biweekly audit: docs vs. the repo's actual state (checks in `lib/doc-drift-check.py`) |
-| `~/development/pilot/tests/` | bats-core test suite (368 tests, 26 files, two-tier execution) |
+| `~/development/pilot/tests/` | bats-core test suite (372 tests, 26 files, two-tier execution) |
 | `~/development/pilot/.github/workflows/test.yml` | GitHub Actions CI — full test suite on push |
 | `~/development/pilot/.githooks/pre-commit` | Pre-commit hook — fast test tier on every commit |
 | `~/development/pilot/project.env` | Lift-specific configuration (git-ignored) |
@@ -550,6 +554,29 @@ Pilot merged PRs into a `master` whose CI had been red for at least 41 consecuti
 - **`BUILDER_MAX_TURNS` 100 → 150**, and failed runs now report `stop_reason`/turns/cost/top denials instead of a bare "Run N failed", and park uncommitted work on a `recovered/…` branch.
 
 **What triggered this:** LIFT-1271 was force-built on 2026-08-30, fully implemented, then died at turn 101 on denied verification commands — branch deleted, 513 verified insertions stranded uncommitted, $6.17 spent for nothing. Recovered by hand and shipped as Lift PR #1273.
+### 2026-08-29 — Triage turned model failures into human gates
+
+A triage run reviewed 23 issues and flagged 5. Four of those five were not decisions — they were errors wearing a decision's clothes.
+
+**The chain.** `gemini-2.5-flash` returned `HTTP 503 "currently experiencing high demand"` on 7 of the 23 issues. Each fell back to Claude Sonnet, which hit `Error: Reached max turns (6)` on four of them before it could emit the structured block. Neither reply contained a `VERDICT:` line, and verdict parsing ended with `VERDICT=${VERDICT:-FLAG}`.
+
+**Why that default was the bug.** FLAG is not a neutral fallback — it is the one verdict with a side effect aimed at a human. Each of the four issues got a comment reading *"Question: No question summary provided"* and was moved to `state:needs-input`, which `tracker.sh` excludes from **both** `triageable` and `pickable`. So a transient API blip removed LIFT-1223, LIFT-1179, LIFT-1098 and LIFT-1096 from the builder's pool **and** from future triage, indefinitely, while presenting as a considered request for Aaron's input. The failure was invisible in every summary: the run reported "5 flagged" and exited 0.
+
+This is the second time the Sonnet turn cap has produced empty NEEDS INPUT comments — the first was LIFT-550/546/531 on 2026-05-12, fixed by raising max-turns 3 → 6. That fix treated the symptom; the `:-FLAG` default was the cause and survived.
+
+**Fixed in `scripts/triage.sh`:**
+- An unparseable verdict now **defers** the issue: untouched, no comment, no label. With no "Triaged by" comment it stays in `triageable` and is retried next run — the same fail-open shape as the open-PR deferral. A failure costs one cycle and can never manufacture a human gate.
+- The Gemini call is **retried once** before the Sonnet fallback (`TRIAGE_RETRY_DELAY`, default 5s). The 503s arrive in bursts, not steadily.
+- Sonnet fallback turn cap **6 → 12** (`TRIAGE_MAX_TURNS`). The architect-filed issues that trip it are the ones needing the most codebase reading before the structured block can be written.
+- Deferrals are surfaced everywhere the run reports: triage log, `log_warn`, Slack thread, and a new `failed` column in `lift-triage-metrics.csv` (with a one-time header migration that pads pre-existing rows, so `csv.DictReader` never sees a short row).
+
+**Repaired:** the four issues were returned to `state:unstarted`, their content-free comments replaced with a correction stating no question was ever asked, and re-triaged under the fixed script. All four came back as real verdicts — 3 ENHANCE, 1 SKIP, **zero flags**.
+
+**Older victims.** A sweep of every open `state:needs-input` issue for the same signature found **8 more**, parked between 2026-06-02 and 2026-07-15: LIFT-942, 847, 842, 833, 797, 766, 765, 696. The defect had been quietly removing issues from the pipeline for nearly three months. All eight were corrected and set to `state:triage` — triageable but **not** pickable, so none reaches the builder without a real verdict first (the same choice `pr-close-reconcile` makes, and safer than `state:unstarted` for issues whose GA-policy standing is unknown).
+
+**Tests:** the old `"FLAG is default when no verdict parsed"` test asserted the removed behavior and re-implemented the two lines it tested instead of running the script — the anti-pattern CLAUDE.md calls out. Replaced with an end-to-end test that drives the real `triage.sh` with a 503-ing Gemini and a turn-capped Sonnet and asserts the issue is left untouched, plus two guards on the retry ordering and on `VERDICT:-FLAG` never returning. Suite: 368 → **372**, all green.
+
+**Known gap, not fixed here:** the same run applied the GA test-coverage rule inconsistently — LIFT-1010/654/652/651 were SKIPped as standalone test work while LIFT-1009/1008, the same shape, were APPROVEd by reframing coverage as "reliability". That is a prompt-level ambiguity, not a code defect, and is left for a separate change.
 
 ### 2026-08-28 — Backlog audit (149 issues closed) + PR-close reconcile
 

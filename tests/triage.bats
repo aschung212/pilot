@@ -122,11 +122,147 @@ SUB_ISSUE_5_TITLE: Five"
 }
 
 # bats test_tags=fast
-@test "triage: FLAG is default when no verdict parsed" {
-  result="Some garbage output with no verdict line"
-  verdict=$(echo "$result" | grep -oE 'VERDICT: (APPROVE|ENHANCE|SKIP|FLAG|RESCOPE)' | head -1 | sed 's/VERDICT: //')
-  verdict=${verdict:-FLAG}
-  [ "$verdict" = "FLAG" ]
+# ── Unparseable verdict => defer, never FLAG ─────────────────────────────────
+# Regression guard for 2026-08-29. triage.sh used to end verdict parsing with
+# `VERDICT=${VERDICT:-FLAG}`, so a model error and a genuine product question
+# were indistinguishable: Gemini 503'd on 7 of 23 issues, Sonnet then hit
+# "Error: Reached max turns (6)" on 4 of them, and LIFT-1223/1179/1098/1096 were
+# each given a content-free NEEDS INPUT comment and parked on state:needs-input —
+# a label that BOTH `list triageable` and `list pickable` exclude. A transient
+# API blip therefore removed four issues from the pipeline until a human
+# noticed. The issue must now be left completely untouched instead.
+#
+# This drives the real script rather than re-implementing its parsing inline
+# (see CLAUDE.md, "Tests that re-implement the logic they test").
+@test "triage: an unparseable model reply defers the issue instead of flagging it" {
+  export _PILOT_TEST_MODE=1
+  export ISSUE_PREFIX="TEST"
+  export GITHUB_ISSUES_REPO="test/repo"
+  export GEMINI_API_KEY="test-key"
+  export TRIAGE_RETRY_DELAY=0
+  # Disable both pre-steps: this test asserts that the issue *under triage* is
+  # left untouched, and a pre-step's own `gh issue edit` lands in the same mock
+  # call log, which would mask (or fake) that assertion.
+  export PR_RECONCILE_ENABLED=0
+  export MANUAL_CLAIM_ENABLED=0
+
+  mkdir -p "$TEST_TMPDIR/bin" "$TEST_TMPDIR/mock_calls"
+  cat > "$TEST_TMPDIR/bin/gh" <<SCRIPT
+#!/bin/bash
+echo "\$@" >> "$TEST_TMPDIR/mock_calls/gh"
+case "\$*" in
+  *"-q length"*)  echo 1 ;;
+  *"issue list"*) echo "TEST-42 A broken thing" ;;
+  *"pr list"*)    ;;
+  *"issue view"*) echo "# TEST-42: A broken thing" ;;
+  *)              ;;
+esac
+SCRIPT
+  chmod +x "$TEST_TMPDIR/bin/gh"
+  export PATH="$TEST_TMPDIR/bin:$PATH"
+
+  # Gemini 503s on the first call AND the retry; Sonnet then hits its turn cap.
+  export MOCK_CURL_OUTPUT='{"error":{"code":503,"message":"high demand"}}'
+  export MOCK_CURL_HTTP_CODE=503
+  export MOCK_CLAUDE_OUTPUT='Error: Reached max turns (12)'
+
+  run bash "$TRIAGE"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"DEFERRED"* ]]
+  [[ "$output" == *"Deferred (no verdict): 1"* ]]
+  [[ "$output" == *"TEST-42"* ]]
+
+  # The whole point: the issue is left untouched. No comment, no state label,
+  # no priority — nothing that would gate it behind a human or hide it from
+  # the next run's `list triageable`.
+  ! grep -q "issue comment" "$TEST_TMPDIR/mock_calls/gh"
+  ! grep -q "issue edit" "$TEST_TMPDIR/mock_calls/gh"
+}
+
+# bats test_tags=fast
+@test "triage: a transient Gemini failure is retried before the Sonnet fallback" {
+  run grep -B6 -A4 'no verdict from Gemini — retrying once' "$PILOT_DIR/scripts/triage.sh"
+  [ "$status" -eq 0 ]
+  # The retry must re-call the adapter, and must sit before the Sonnet fallback.
+  [[ "$output" == *'AI_RESEARCH" prompt'* ]]
+  run grep -n 'retrying once\|falling back to Claude Sonnet' "$PILOT_DIR/scripts/triage.sh"
+  [ "$status" -eq 0 ]
+  [[ "$(echo "$output" | head -1)" == *"retrying once"* ]]
+}
+
+# ── metrics CSV schema ───────────────────────────────────────────────────────
+# The header is only written when the file does not exist, so it froze at the
+# original 7 columns while the row format grew twice (`rescoped` in 97c06d5,
+# `failed` on 2026-08-29). The live file had a 7-column header over 8-column
+# rows: csv.DictReader buckets the overflow under the None key and
+# `row["model"]` returns the flagged count. The migration must normalise both.
+@test "triage: metrics CSV migration normalises the header and every legacy row" {
+  csv="$TEST_TMPDIR/lift-triage-metrics.csv"
+  # Exactly the shape found in production on 2026-08-29.
+  cat > "$csv" <<'CSV'
+date,total,approved,enhanced,skipped,flagged,model
+2026-04-02,27,7,1,0,2,gemini-2.5-flash
+2026-04-05,45,6,0,0,0,4,gemini-2.5-flash
+2026-08-29,23,11,1,0,6,5,claude-sonnet
+CSV
+
+  # Run the migration exactly as triage.sh does.
+  schema=$(grep -m1 '^_CSV_SCHEMA=' "$PILOT_DIR/scripts/triage.sh" | sed 's/^_CSV_SCHEMA="//; s/"$//')
+  [ "$schema" = "date,total,approved,enhanced,rescoped,skipped,flagged,model,failed" ]
+  awk -F, -v schema="$schema" '
+    NR==1        { print schema; next }
+    NF==0        { next }
+    NF==7        { print $1","$2","$3","$4",0,"$5","$6","$7",0"; next }
+    NF==8        { print $0 ",0"; next }
+                 { print }
+  ' "$csv" > "$csv.tmp" && mv "$csv.tmp" "$csv"
+
+  # Every line must now carry exactly 9 fields — header included.
+  run awk -F, '{print NF}' "$csv"
+  [ "$status" -eq 0 ]
+  for n in $output; do [ "$n" -eq 9 ]; done
+
+  # The pre-RESCOPE row gets rescoped=0 inserted in the right place: its model
+  # must still read as a model, not as a stray count.
+  run awk -F, 'NR==2 {print $5"|"$8"|"$9}' "$csv"
+  [ "$output" = "0|gemini-2.5-flash|0" ]
+  # The 8-column row keeps its own rescoped value and gains failed=0.
+  run awk -F, 'NR==3 {print $5"|"$8"|"$9}' "$csv"
+  [ "$output" = "0|gemini-2.5-flash|0" ]
+
+  # Idempotent: a second pass changes nothing.
+  cp "$csv" "$csv.before"
+  awk -F, -v schema="$schema" '
+    NR==1        { print schema; next }
+    NF==0        { next }
+    NF==7        { print $1","$2","$3","$4",0,"$5","$6","$7",0"; next }
+    NF==8        { print $0 ",0"; next }
+                 { print }
+  ' "$csv" > "$csv.tmp" && mv "$csv.tmp" "$csv"
+  run diff "$csv.before" "$csv"
+  [ "$status" -eq 0 ]
+}
+
+# bats test_tags=fast
+@test "triage: metrics row and header have the same column count" {
+  # The two must be written from the same schema or the file goes ragged again.
+  header=$(grep -m1 '^_CSV_SCHEMA=' "$PILOT_DIR/scripts/triage.sh" | sed 's/^_CSV_SCHEMA="//; s/"$//')
+  row=$(grep -m1 'echo "\$DATE,\$UNTRIAGED_COUNT' "$PILOT_DIR/scripts/triage.sh")
+  h=$(echo "$header" | awk -F, '{print NF}')
+  r=$(echo "$row" | sed 's/.*echo "//; s/".*//' | awk -F, '{print NF}')
+  [ "$h" -eq "$r" ]
+}
+
+# bats test_tags=fast
+@test "triage: verdict parsing has no FLAG fallback default" {
+  # `VERDICT=${VERDICT:-FLAG}` is the exact line that manufactured four false
+  # human gates on 2026-08-29. It must not come back.
+  #
+  # Anchored to a statement at line start so the prose in triage.sh that
+  # documents the old line does not match. grep exit 1 == no match; -c is
+  # avoided because it emits trailing whitespace that breaks `[ ]` compares.
+  run grep -nE '^[[:space:]]*VERDICT=\$\{VERDICT:-FLAG\}' "$PILOT_DIR/scripts/triage.sh"
+  [ "$status" -eq 1 ]
 }
 
 # bats test_tags=fast
