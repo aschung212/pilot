@@ -112,7 +112,7 @@ Verify with `launchctl list | grep doc-drift`. It fires weekly but no-ops on odd
 - Post-merge CI failure → Slack notification
 - Slack threading: one parent message per night, all updates threaded (updated for multi-PR output)
 - Slack webhooks: all notifications are token-free (no Claude instances spawned)
-- Test suite (bats-core, 368 tests across 26 files): fast tier (320 tests) runs on every commit via pre-commit hook, full tier (368 tests) runs on push via GitHub Actions CI
+- Test suite (bats-core, 372 tests across 26 files): fast tier (323 tests) runs on every commit via pre-commit hook, full tier (372 tests) runs on push via GitHub Actions CI
 - Auto-discovery smoke tests: fail when new scripts lack test coverage — enforces that every new script gets tests
 - Linear digest: posts board snapshot to #daily-review at 6:15 AM daily (launchd)
 
@@ -171,7 +171,7 @@ If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/T
 | `~/development/lift/CLAUDE.md` | Lift project standards (design, code, workflow) |
 | `~/.claude/commands/ai-review.md` | Daily review slash command |
 | `~/.claude/CLAUDE.md` | Global Claude instructions |
-| `~/development/pilot/tests/` | bats-core test suite — 26 test files, 368 tests (fast tier, 320, runs in the pre-commit hook) |
+| `~/development/pilot/tests/` | bats-core test suite — 26 test files, 372 tests (fast tier, 323, runs in the pre-commit hook) |
 | `~/development/pilot/.github/workflows/test.yml` | GitHub Actions CI — runs full test suite on push |
 | `~/development/pilot/.githooks/pre-commit` | Git pre-commit hook — runs fast test tier before every commit |
 | `~/Documents/Scripts/lift-triage.sh` | Gemini issue triage — reviews, enhances, and plans before builder runs |
@@ -269,6 +269,36 @@ Forcing LIFT-1271 through the builder exposed problems that were costing every r
 
 - **Check for `recovered/…` branches after a failed run.** A failed iteration now parks its work there and posts to #lift-automation. Nothing is pushed — it's yours to keep or delete.
 - **LIFT-1271 shipped as [Lift PR #1273](https://github.com/aschung212/Lift/pull/1273)** — recovered by hand from the failed run and verified (typecheck, lint, 3710 tests, build). Review it like any other Pilot PR; the provenance is in the PR body.
+### 2026-08-29 — Four issues were parked on a question that was never asked
+
+**What happened.** A Triage run reviewed 23 issues and reported "5 flagged". Four of those five were not decisions — they were model failures recorded as decisions.
+
+`gemini-2.5-flash` returned `HTTP 503 "currently experiencing high demand"` on 7 of the 23 issues. Each fell back to Claude Sonnet, which hit `Error: Reached max turns (6)` on four of them before it could write its structured output. Neither reply contained a `VERDICT:` line — and verdict parsing ended with `VERDICT=${VERDICT:-FLAG}`.
+
+**Why that default was the bug.** FLAG is not a neutral fallback. It is the one verdict whose side effect is aimed at you: it posts a question and applies `state:needs-input`, a label `tracker.sh` excludes from **both** `triageable` and `pickable`. So LIFT-1223, LIFT-1179, LIFT-1098 and LIFT-1096 each received a comment reading *"Question: No question summary provided"* and were removed from the builder's pool **and** from future triage — indefinitely, until you noticed and flipped the label back by hand. Nothing in the run's output said anything had gone wrong: it reported 5 flagged and exited 0.
+
+This is the second time the Sonnet turn cap has produced empty NEEDS INPUT comments; the first was LIFT-550/546/531 on 2026-05-12, "fixed" by raising max-turns 3 → 6. That addressed the symptom. The `:-FLAG` default was the cause, and it survived.
+
+**Fixed in `scripts/triage.sh`:**
+- An unparseable verdict now **defers** the issue — untouched, no comment, no label, no priority. With no "Triaged by" comment it stays in `triageable` and is retried the next run, the same fail-open shape as the existing open-PR deferral. A model failure costs one triage cycle and can never manufacture a human gate.
+- The Gemini call is **retried once** before falling back to Sonnet (`TRIAGE_RETRY_DELAY`, default 5s) — the 503s come in bursts, not steadily.
+- Sonnet fallback turn cap raised **6 → 12** (`TRIAGE_MAX_TURNS`).
+- Deferrals are reported everywhere the run reports: triage log, `log_warn`, the Slack thread, and a new `failed` column in `lift-triage-metrics.csv`.
+
+**Repaired.** The four issues are back on `state:unstarted`, their content-free comments replaced with a correction that states plainly no question was ever asked of you, and re-triaged under the fixed script. All four returned real verdicts — 3 ENHANCE, 1 SKIP, **zero flags**. Not one of them had ever needed your input.
+
+**And it had been happening since at least June.** Sweeping every open `state:needs-input` issue for the same signature turned up **8 more**, parked between 2026-06-02 and 2026-07-15: LIFT-942, 847, 842, 833, 797, 766, 765, 696. Some sat behind a non-existent question for twelve weeks. All eight were corrected and moved to `state:triage` — triageable but **not** pickable, so each gets a real verdict before the builder can spend a run on it.
+
+**Tests.** The old `"FLAG is default when no verdict parsed"` test asserted the behavior just removed — and re-implemented the two lines it was testing rather than running the script, the exact anti-pattern CLAUDE.md warns about. Replaced with an end-to-end test that drives the real `triage.sh` against a 503-ing Gemini and a turn-capped Sonnet, plus guards on retry ordering and on `VERDICT:-FLAG` never coming back. Suite 368 → **372, all green**.
+
+### ⚠️ New for Aaron
+
+1. **"Flagged" in a Triage summary now means a real question.** Before this change it could also mean the model errored. If you ever skipped past a NEEDS INPUT comment because it looked empty, it *was* empty — 12 issues in total (4 from 2026-08-29, 8 more going back to 2026-06-02), all now corrected and re-queued. Every one of them, on re-triage, turned out never to have needed you.
+2. **A new "Deferred (no verdict)" line appears in Triage summaries and Slack.** Occasional deferrals are normal and self-healing — the issue is retried next run, untouched. A count that stays high run over run means the Gemini path is degraded; check `GEMINI_API_KEY` and the `failed` column in `data/lift-triage-metrics.csv`.
+3. **Two issues need your call, both surfaced by the un-parking.**
+   - **LIFT-847 vs LIFT-1225 are the same bug** — `deleteAccount` treating a resolved Supabase `{ error }` as success. LIFT-1225 was approved this morning; LIFT-847 was approved on re-triage after being un-parked. Both were briefly pickable, which is precisely the duplicate-build trap (issue-identity dedupe cannot see it). LIFT-847 is held on `state:triage` — not pickable — with a comment explaining the overlap. LIFT-1225 has the sharper writeup; LIFT-847's other half is AI-Coach wiring for #842, which was SKIPped as post-GA.
+   - **LIFT-766 will not triage.** It exceeds even the raised 12-turn cap. It is deferred, not gated — untouched, retried every run, and it should resolve on its own once Gemini stops 503ing (the whole session ran on the Sonnet fallback). If it is still deferring in a few days, that is the signal to look at it directly.
+4. **The GA test-coverage rule is being applied inconsistently, and this change does not fix it.** In the same run, LIFT-1010/654/652/651 were SKIPped as standalone test work while LIFT-1009/1008 — the same shape — were APPROVEd by reframing coverage as "reliability" and "prevents data loss". Both readings are defensible under the current prompt wording, which is the problem. Tightening it is a prompt change and needs your call on which way it should land.
 
 ### 2026-08-30 — Pilot: nothing ever closed an issue when its PR merged
 
