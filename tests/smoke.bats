@@ -204,3 +204,50 @@ sys.exit(1 if bad else 0)
 PYEOF
   [ "$status" -eq 0 ] || { echo "$output" >&2; false; }
 }
+
+# ── Pre-commit gate wiring ───────────────────────────────────────────────────
+# The gate both docs describe ("fast tier runs on every commit, blocks on
+# failure") had never once run: init.sh configured core.hooksPath on
+# $REPO_PATH (the TARGET project) instead of on Pilot, so Pilot's own setting
+# sat at an empty .git/hooks from inception until 2026-08-31. Nothing failed
+# loudly — a hook that is not wired up is indistinguishable from a hook that
+# passes. These lock the wiring down.
+
+# bats test_tags=fast
+@test "smoke: init.sh points core.hooksPath at Pilot, not the target repo" {
+  line=$(grep -n 'config core.hooksPath' "$PILOT_DIR/init.sh" | grep -v '^\s*#')
+  [ -n "$line" ]
+  # Must configure Pilot's own repo...
+  case "$line" in
+    *'$PILOT_DIR'*) ;;
+    *) echo "init.sh configures core.hooksPath on something other than \$PILOT_DIR: $line" >&2; false ;;
+  esac
+  # ...and must not touch the target repo, which uses husky and has no
+  # .githooks/ — pointing it here would silently disable ITS hooks.
+  case "$line" in
+    *'$REPO_PATH'*) echo "init.sh still targets \$REPO_PATH: $line" >&2; false ;;
+    *) ;;
+  esac
+}
+
+# bats test_tags=fast
+@test "smoke: the pre-commit hook is executable" {
+  # A non-executable hook is skipped by git silently — the same failure shape
+  # as not being wired up at all.
+  [ -x "$PILOT_DIR/.githooks/pre-commit" ]
+}
+
+# bats test_tags=fast
+@test "smoke: the pre-commit hook scrubs GIT_* before running the suite" {
+  hook="$PILOT_DIR/.githooks/pre-commit"
+  # Git exports GIT_DIR/GIT_INDEX_FILE into hooks, and the suite shells out to
+  # `git init`/`git commit` inside temp fixture repos. Inherited, those vars
+  # redirect the fixtures' commits onto the repo being committed to — observed
+  # 2026-08-31 creating a `feat` branch and two commits on the live branch.
+  scrub=$(grep -n '^unset .*GIT_' "$hook" | head -1 | cut -d: -f1)
+  [ -n "$scrub" ]
+  runner=$(grep -n 'run-tests.sh' "$hook" | head -1 | cut -d: -f1)
+  [ -n "$runner" ]
+  # The scrub is worthless if it happens after the suite starts.
+  [ "$scrub" -lt "$runner" ]
+}

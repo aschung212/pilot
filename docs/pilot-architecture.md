@@ -393,22 +393,46 @@ Reporter only — never mutates an issue, PR, or branch.
 
 ## Testing Infrastructure
 
-The pipeline has a bats-core test suite with **373 tests across 26 test files** in `~/development/pilot/tests/`. Tests use two-tier execution to balance speed with thoroughness:
+The pipeline has a bats-core test suite with **376 tests across 26 test files** in `~/development/pilot/tests/`. Tests use two-tier execution to balance speed with thoroughness:
 
-**Fast tier (324 tests) — pre-commit hook (currently NOT wired up):**
-- Intended to run before every commit via `.githooks/pre-commit`. As of
-  2026-08-31 it does not: Pilot's `core.hooksPath` points at
-  `/Users/aaron/development/pilot/.git/hooks`, which is **empty**, so no git
-  hook runs in this repo at all. `init.sh` only ever configures hooks on
-  `$REPO_PATH` (the *Lift* repo, which uses `.husky` and has no `.githooks/`),
-  never on Pilot itself. CI on push is therefore the only tier actually
-  enforcing anything today.
+**Fast tier (327 tests) — pre-commit hook:**
+- Runs before every commit via `.githooks/pre-commit`
 - Covers: unit tests, adapter contract tests, argument parsing, error handling, log formatting
 - Builder tests source real functions from `lib/builder-utils.sh` (not copies of logic)
 - Parallel execution via GNU parallel (`bats -j 8`)
-- Would block the commit if any test fails, once wired up
+- Blocks commit if any test fails (~30s on an idle machine)
 
-**Full tier (373 tests) — GitHub Actions CI:**
+**The gate is live as of 2026-08-31 — it had never run before that.** `core.hooksPath`
+pointed at `/Users/aaron/development/pilot/.git/hooks`, which is empty, because `init.sh`
+configured hooks on `$REPO_PATH` (the *target* project) rather than on Pilot. Nothing
+reported this: an unwired hook and a passing hook look identical from the outside. Two
+things had to be true before it could be turned on, and both are worth knowing about:
+
+- **The hook scrubs `GIT_*` before running the suite.** Git exports `GIT_DIR` and
+  `GIT_INDEX_FILE` into every hook, and children inherit them. The suite builds throwaway
+  git repos in temp dirs (`security-scan.bats:_diff_with`, `stale-pr-audit.bats`) and shells
+  out to `git init` / `git commit` / `git checkout -b` inside them — with `GIT_DIR` inherited,
+  every one of those calls retargets **this** repo. The first real run committed the fixtures
+  onto the branch being committed to (two commits plus a stray `feat` branch, sweeping the
+  staged files in) and left a dozen-odd tests failing with *"fatal: this operation must be
+  run in a work tree"*. A gate that mutates the repo it guards is worse than no gate;
+  `unset` of the whole
+  `GIT_*` namespace, after resolving the repo root, makes the suite hermetic again.
+- **`core.hooksPath` is relative (`.githooks`), not absolute.** Git resolves a relative
+  hooksPath against the top of the working tree, so each worktree runs its own checkout's
+  hook and tests the code actually being committed.
+
+**Claude Code session worktrees are exempt, and not by choice.** The worktree tooling writes
+`.git/worktrees/<name>/config.worktree` pinning `core.hooksPath` back to the empty
+`.git/hooks`, and per-worktree config outranks the repo-level setting. Plain
+`git worktree add` does not do this. So commits made from a Claude session worktree are
+**not** gated unless that worktree's override is cleared. Note that clearing it with
+`git config --worktree --unset` is not safe here: the repo has `extensions.worktreeConfig`
+enabled, and that command triggers git's worktree-config migration, which flips
+`core.bare` to `true` in the shared config and breaks *every* worktree until
+`core.bare = false` is restored. Prefer `git config --worktree core.hooksPath .githooks`.
+
+**Full tier (376 tests) — GitHub Actions CI:**
 - Runs on every push via `.github/workflows/test.yml`
 - Includes everything in the fast tier plus integration-level tests (CSV analysis, full script invocations)
 - Test paths resolve dynamically (no hardcoded local paths) for CI runner compatibility
@@ -467,9 +491,8 @@ to write a bats assertion, and nothing was telling anyone otherwise.
 So `tests/smoke.bats` enforces the rule mechanically — it scans every `.bats`
 file (skipping heredoc bodies) and fails on any bare `[[ ]]` statement, naming
 the file and line, and accepting either spelling above. It is tagged `fast`, so
-it gates both tiers: CI blocks a regression on push today, and the pre-commit
-hook will too once that hook is actually installed (see below — it currently is
-not).
+it gates both tiers: CI blocks a regression on push, and so does the pre-commit
+hook, which has actually run since 2026-08-31 (see below).
 
 **Key testing patterns:**
 - **Auto-discovery smoke tests:** Automatically detect new scripts in `scripts/` and `adapters/` that lack corresponding test files. These tests fail when coverage is missing, ensuring the test suite grows with the codebase.
@@ -580,9 +603,9 @@ Feedback loop → canceled issues + product decisions steer discovery;
 | `~/development/pilot/scripts/stale-pr-audit.sh` | Weekly audit: open PRs whose work has already shipped (no-op merges, duplicate/colliding migrations) |
 | `~/development/pilot/scripts/pr-close-reconcile.sh` | Closes/re-triages issues whose PR was closed unmerged — the state:started leak that hid 69% of the backlog from Triage |
 | `~/development/pilot/scripts/doc-drift-audit.sh` | Biweekly audit: docs vs. the repo's actual state (checks in `lib/doc-drift-check.py`) |
-| `~/development/pilot/tests/` | bats-core test suite (373 tests, 26 files, two-tier execution) |
+| `~/development/pilot/tests/` | bats-core test suite (376 tests, 26 files, two-tier execution) |
 | `~/development/pilot/.github/workflows/test.yml` | GitHub Actions CI — full test suite on push |
-| `~/development/pilot/.githooks/pre-commit` | Pre-commit hook — fast test tier on every commit |
+| `~/development/pilot/.githooks/pre-commit` | Pre-commit hook — fast test tier on every commit. Live since 2026-08-31; scrubs `GIT_*` so the suite cannot mutate this repo |
 | `~/development/pilot/project.env` | Lift-specific configuration (git-ignored) |
 | `~/development/pilot/init.sh` | Interactive setup wizard |
 | `pilot/data/` | All logs, metrics, usage tracking, learnings |

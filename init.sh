@@ -446,8 +446,21 @@ ENV_EOF
 ok "project.env written"
 
 # ── Git hooks ────────────────────────────────────────────────
-if [ -d "$REPO_PATH/.git" ]; then
-  git -C "$REPO_PATH" config core.hooksPath .githooks && ok "Git hooks configured"
+# $PILOT_DIR, not $REPO_PATH. `.githooks/pre-commit` runs PILOT's fast test
+# tier and is a tracked directory of THIS repo; the target project has no
+# `.githooks/` at all. Pointing this at $REPO_PATH (as it did until
+# 2026-08-31) was wrong in both directions: Pilot's own gate was never wired
+# up — core.hooksPath sat at an empty `.git/hooks` from inception, so the
+# "fast tier blocks the commit" gate both docs describe had never once run —
+# and had the target repo been re-inited, it would have moved Lift off its
+# husky hooks (core.hooksPath=.husky/_) to a directory that does not exist,
+# silently disabling Lift's own lint-staged and pre-push gates.
+#
+# Relative, not absolute: git resolves a relative hooksPath against the top of
+# the working tree, so every worktree runs its own checkout's hook and tests
+# the code actually being committed.
+if git -C "$PILOT_DIR" rev-parse --git-dir >/dev/null 2>&1 && [ -d "$PILOT_DIR/.githooks" ]; then
+  git -C "$PILOT_DIR" config core.hooksPath .githooks && ok "Git hooks configured (Pilot fast-test pre-commit gate)"
 fi
 
 # ── Budget config ────────────────────────────────────────────

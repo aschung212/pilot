@@ -2,9 +2,29 @@
 # Pre-commit hook: runs fast-tier tests before allowing a commit.
 # Full suite runs in CI on push. Skippable with: git commit --no-verify
 
+# Resolve the repo root BEFORE scrubbing the environment below — this is the
+# one command here that legitimately wants git's own GIT_DIR. In a worktree it
+# resolves to that worktree, so the suite always tests the code being committed.
+ROOT="$(git rev-parse --show-toplevel)" || exit 1
+
+# Git exports GIT_DIR, GIT_INDEX_FILE, GIT_PREFIX and friends into every hook,
+# and a child process inherits them. The suite builds throwaway git repos in
+# temp dirs (tests/security-scan.bats:_diff_with, stale-pr-audit) and shells
+# out to `git init` / `git commit` / `git checkout -b` inside them — with
+# GIT_DIR set, every one of those calls ignores its own cwd and operates on
+# THIS repo instead.
+#
+# That is not hypothetical. The first time this hook ran for real (2026-08-31)
+# it committed the fixtures onto the branch being committed to: two commits
+# ("baseline", "change") plus a stray `feat` branch, sweeping the staged files
+# in with them, and 14 tests failed with "fatal: this operation must be run in
+# a work tree". Recovered with a reset, but a gate that mutates the repo it is
+# guarding is worse than no gate. Scrub the namespace so the suite is hermetic.
+unset $(env | sed -n 's/^\(GIT_[A-Za-z0-9_]*\)=.*/\1/p')
+
 echo "🧪 Running fast tests..."
 
-_PILOT_TEST_MODE=1 bash "$(git rev-parse --show-toplevel)/tests/run-tests.sh" --fast 2>&1
+_PILOT_TEST_MODE=1 bash "$ROOT/tests/run-tests.sh" --fast 2>&1
 
 if [ $? -ne 0 ]; then
   echo ""
