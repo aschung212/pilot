@@ -264,15 +264,81 @@ EOF
 }
 
 # bats test_tags=fast
-@test "builder: run_with_timeout kills the whole descendant tree on timeout" {
-  marker="$TEST_TMPDIR/grandchild-alive"
-  # Grandchild would touch the marker at 2s; the tree is killed at the 1s
-  # timeout, so if tree-kill works the marker is never created. `run` keeps the
-  # 124 return from aborting the test.
-  run run_with_timeout 1 bash -c "( sleep 2 && touch '$marker' ) & wait"
-  [ "$status" -eq 124 ]
-  sleep 3
-  [ ! -e "$marker" ]
+@test "builder: kill_process_tree signals every descendant, not just the root" {
+  pidfile="$TEST_TMPDIR/tree.pids"
+  # Builds root(sh) -> mid(sh) -> sleep and asserts ALL THREE die. Recursion
+  # has to run twice to reach the sleep, which is the whole property.
+  #
+  # This replaces a test that drove the same property through
+  # `run run_with_timeout 1 ...` and asserted a `touch` scheduled at 2s never
+  # landed after a kill at 1s. That form was wrong twice over. It was
+  # load-sensitive — the entire proof was one second of scheduling slack, and
+  # on a loaded machine the kill slips past 2s (measured failing 2 of 3 runs at
+  # load ~102 on 2026-08-31). And it could not fail even when the property was
+  # broken: with the recursion deleted from kill_process_tree so that only the
+  # root was ever signalled, bats' own `run` plumbing tore the descendants down
+  # anyway, and the test still reported ok. Verified by logging every signal
+  # kill_process_tree actually issued.
+  #
+  # So: call kill_process_tree directly, with no `run` in the path. That the
+  # watchdog reaches it on expiry is covered by the 124 tests above.
+  cat > "$TEST_TMPDIR/mid.sh" << EOF
+#!/bin/sh
+echo \$\$ >> "$pidfile"
+sleep 30 &
+echo \$! >> "$pidfile"
+wait
+EOF
+  cat > "$TEST_TMPDIR/root.sh" << EOF
+#!/bin/sh
+echo \$\$ >> "$pidfile"
+"$TEST_TMPDIR/mid.sh" &
+wait
+EOF
+  chmod +x "$TEST_TMPDIR/mid.sh" "$TEST_TMPDIR/root.sh"
+
+  # A pid is gone when ps knows nothing about it, or still lists it as a
+  # zombie nobody has reaped yet.
+  _gone() {
+    local st
+    st="$(ps -o stat= -p "$1" 2>/dev/null | tr -d ' ')"
+    [ -z "$st" ] || [ "${st#Z}" != "$st" ]
+  }
+
+  "$TEST_TMPDIR/root.sh" &
+  root=$!
+
+  # Wait for the whole chain to report in. Bounded poll, never a fixed sleep.
+  for _ in $(seq 1 50); do
+    [ "$(cat "$pidfile" 2>/dev/null | wc -l | tr -d ' ')" -ge 3 ] && break
+    sleep 0.1
+  done
+  pids="$(cat "$pidfile" 2>/dev/null | tr -d ' ')"
+  [ "$(echo "$pids" | wc -l | tr -d ' ')" -eq 3 ]
+  # root.sh's own $$ must be the pid we are about to kill, or the tree we
+  # built is not the tree we are testing.
+  [ "$(echo "$pids" | head -1)" = "$root" ]
+
+  kill_process_tree "$root" TERM
+
+  for pid in $pids; do
+    for _ in $(seq 1 50); do
+      _gone "$pid" && break
+      sleep 0.1
+    done
+  done
+
+  survivors=""
+  for pid in $pids; do
+    if ! _gone "$pid"; then
+      survivors="$survivors $pid"
+      kill -KILL "$pid" 2>/dev/null || true   # never leak a 30s sleep into the suite
+    fi
+  done
+  if [ -n "$survivors" ]; then
+    echo "kill_process_tree left these alive:$survivors" >&2
+    return 1
+  fi
 }
 
 # ── _marker_lines (ISSUE_DONE / ISSUE_PROGRESS separator normalization) ──────

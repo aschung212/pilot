@@ -112,7 +112,7 @@ Verify with `launchctl list | grep doc-drift`. It fires weekly but no-ops on odd
 - Post-merge CI failure → Slack notification
 - Slack threading: one parent message per night, all updates threaded (updated for multi-PR output)
 - Slack webhooks: all notifications are token-free (no Claude instances spawned)
-- Test suite (bats-core, 373 tests across 26 files): full tier (373 tests) runs on push via GitHub Actions CI. The fast tier (324 tests) is *meant* to run on every commit via `.githooks/pre-commit`, but that hook is not currently installed — see the 2026-08-31 assertion changelog entry
+- Test suite (bats-core, 376 tests across 26 files): fast tier (327 tests) runs on every commit via pre-commit hook, full tier (376 tests) runs on push via GitHub Actions CI. The pre-commit gate went live 2026-08-31 — before that it had never run (see changelog); commits from a Claude session worktree are still exempt unless that worktree's `core.hooksPath` override is cleared
 - Auto-discovery smoke tests: fail when new scripts lack test coverage — enforces that every new script gets tests
 - Linear digest: posts board snapshot to #daily-review at 6:15 AM daily (launchd)
 
@@ -171,9 +171,9 @@ If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/T
 | `~/development/lift/CLAUDE.md` | Lift project standards (design, code, workflow) |
 | `~/.claude/commands/ai-review.md` | Daily review slash command |
 | `~/.claude/CLAUDE.md` | Global Claude instructions |
-| `~/development/pilot/tests/` | bats-core test suite — 26 test files, 373 tests (fast tier, 324; the pre-commit hook is not currently wired up) |
+| `~/development/pilot/tests/` | bats-core test suite — 26 test files, 376 tests (fast tier, 327, runs in the pre-commit hook) |
 | `~/development/pilot/.github/workflows/test.yml` | GitHub Actions CI — runs full test suite on push |
-| `~/development/pilot/.githooks/pre-commit` | Git pre-commit hook — runs fast test tier before every commit |
+| `~/development/pilot/.githooks/pre-commit` | Git pre-commit hook — runs fast test tier before every commit (live since 2026-08-31) |
 | `~/Documents/Scripts/lift-triage.sh` | Gemini issue triage — reviews, enhances, and plans before builder runs |
 | `~/Documents/Scripts/lift-budget.conf` | Token budget config — auto-tuned **weekly** (Sun 21:00) by `tune-budget.sh`. Inert from inception until 2026-08-28; see the changelog. Preview changes with `tune-budget.sh --dry-run`. |
 | `~/Documents/Scripts/lift-tune-budget.sh` | Auto-tuner — analyzes usage + runtime history and adjusts budget config |
@@ -1369,3 +1369,62 @@ Repaired `lift-metrics.csv` in place (one-shot script reconstructed 46 split row
 - **Verified end-to-end, not just unit-tested.** Both fallback directions were driven through the *real* Phase 1 loop extracted from the shipped script: Gemini forced to fail → Claude carried it with a cited URL; Claude forced to time out → Gemini carried it, reporting `0 cited URLs`, which is the thesis in one log line. Measured live during this work: grounded Gemini free tier ran **5 ok / 1 fail (503)** over six consecutive calls, and hit a 429 once the daily grounded bucket ran out — which is what the fallback exists for.
 - **New responsibility for Aaron.** None day-to-day. To flip back: set `DISCOVER_RESEARCH_BACKEND="gemini"` in `project.env` (Gemini primary, Claude fallback) — no revert needed. Use `gemini-only` / `claude-only` to pin one backend when isolating a fault. Note the discovery run log now reports which backend produced the research **and how many URLs it cited** — a run reporting `0 cited URLs` is the signal that the Gemini fallback carried it.
 - **Tests.** 344 passed (was 330; +9 adapter backend tests, +5 discovery toggle tests). The toggle tests execute the case block extracted from the shipped `discover.sh` rather than a copy of it, per the `tune-budget.bats` lesson. `bash -n` clean on all modified scripts.
+
+### 2026-08-31 — The pre-commit gate both docs describe had never once run
+
+- **What was wrong.** Pilot's `core.hooksPath` pointed at
+  `/Users/aaron/development/pilot/.git/hooks`, which is empty — no git hook fired in this
+  repo at all. `.githooks/pre-commit` existed and was correct; nothing was pointed at it.
+  The cause was one line in `init.sh`: it ran `git -C "$REPO_PATH" config core.hooksPath
+  .githooks`, and `$REPO_PATH` is the **target** project (Lift), not Pilot. So Pilot's gate
+  was never wired, and had that line ever taken effect on Lift it would have moved Lift off
+  its husky hooks (`core.hooksPath=.husky/_`) to a `.githooks/` directory Lift does not
+  have — silently disabling Lift's own lint-staged and pre-push gates. Fixed to target
+  `$PILOT_DIR`; the Lift-targeting form is gone, not duplicated.
+- **Why nothing caught it.** An unwired hook and a passing hook are indistinguishable from
+  the outside: both produce a clean `git commit`. Same shape as the `tune-budget.sh`
+  heredoc and the `not_planned` close — a mechanism reported success it never checked.
+  There were no tests over `init.sh` at all.
+- **Turning it on was not a one-line config flip.** Git exports `GIT_DIR` and
+  `GIT_INDEX_FILE` into every hook and children inherit them. The suite builds throwaway
+  git repos in temp dirs and shells out to `git init` / `git commit` / `git checkout -b`
+  inside them (`security-scan.bats:_diff_with`, `stale-pr-audit.bats`); with `GIT_DIR`
+  inherited, every one of those calls retargeted **this** repo. The first real run
+  committed the fixtures onto the branch being committed to — two commits (`baseline`,
+  `change`) plus a stray `feat` branch, sweeping the staged files in with them — and 14
+  tests failed with *"fatal: this operation must be run in a work tree"*. Recovered with a
+  reset; no work lost. The hook now resolves the repo root first and then `unset`s the
+  whole `GIT_*` namespace, so the suite is hermetic.
+- **Verified in both directions.** A deliberately failing fast test blocks the commit
+  (exit 1, `❌ Tests failed — commit aborted`, HEAD unmoved, exactly one failure, no stray
+  branches or files); with it reverted, the commit lands. Each of the three new wiring
+  tests was confirmed to fail when the thing it guards is broken.
+- **The flaky test that would have made this annoying is gone — and it was worse than
+  flaky.** `builder: run_with_timeout kills the whole descendant tree on timeout` killed a
+  tree at a 1s timeout and asserted a `touch` scheduled at 2s never landed, so the entire
+  proof was one second of scheduling slack (measured failing 2 of 3 runs at load ~102). It
+  also **could not fail**: with the recursion deleted from `kill_process_tree` so only the
+  root was ever signalled, bats' own `run` plumbing tore the descendants down anyway and
+  the test still reported ok — verified by logging every signal the function actually
+  issued. Replaced with a direct test of `kill_process_tree` that builds a three-deep
+  process chain and asserts all of it dies; it passes 8/8 at load ~223 and fails cleanly
+  (`kill_process_tree left these alive: …`) when the recursion is removed.
+- **Counts are now 376 total / 327 fast** (+3 wiring tests in `smoke.bats`; the tree-kill
+  test was replaced one-for-one).
+
+#### ⚠️ New for Aaron
+
+- **Your commits in this repo now run ~30 seconds of tests.** `git commit --no-verify`
+  skips it when you need to.
+- **Commits from a Claude Code session worktree are still NOT gated.** The worktree tooling
+  writes `.git/worktrees/<name>/config.worktree` pinning `core.hooksPath` back to the empty
+  `.git/hooks`, and per-worktree config outranks the repo-level setting. Plain
+  `git worktree add` does not do this, and the tooling rewrites the file when a session
+  attaches, so clearing it is not durable. Only the main checkout is reliably gated today.
+- **Do not clear that override with `git config --worktree --unset core.hooksPath`.** This
+  repo has `extensions.worktreeConfig` enabled, and that command triggers git's
+  worktree-config migration, which flips `core.bare` to `true` in the shared config with
+  no `.git/config.worktree` to hold the real value — every worktree then fails with
+  *"fatal: this operation must be run in a work tree"* until `git config core.bare false`
+  is restored. That happened during this work and was repaired. Use
+  `git config --worktree core.hooksPath .githooks` instead.
