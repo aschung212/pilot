@@ -6,7 +6,7 @@ is wrong. Reads REPO_ROOT (and optionally PRODUCT_DECISIONS_FILE /
 PRODUCT_FEATURES_FILE) from the environment; prints a report and a trailing
 TOTALCOUNT=<n> line for the shell wrapper.
 """
-import os, re, sys, glob, subprocess, plistlib
+import os, re, sys, glob, plistlib
 
 ROOT = os.environ.get("REPO_ROOT") or os.getcwd()
 P = lambda *a: os.path.join(ROOT, *a)
@@ -109,39 +109,83 @@ for f in sorted(glob.glob(P("launchd", "*.plist"))):
             add("Schedule mismatch", f"{label} fires {when}, but no matching time appears in the architecture doc")
 
 # ── 5. Test counts ──────────────────────────────────────────────────────────
-try:
-    n_files = len(glob.glob(P("tests", "*.bats")))
-    env = dict(os.environ, _PILOT_TEST_MODE="1")
-    full = subprocess.run(["bash", P("tests", "run-tests.sh"), "--tap"],
-                          capture_output=True, text=True, cwd=ROOT, timeout=900, env=env).stdout
-    fast = subprocess.run(["bash", P("tests", "run-tests.sh"), "--fast"],
-                          capture_output=True, text=True, cwd=ROOT, timeout=900, env=env).stdout
-    n_full = len(re.findall(r'(?m)^ok ', full))
-    n_fast = len(re.findall(r'(?m)^ok ', fast))
-    n_failed = len(re.findall(r'(?m)^not ok ', full))
-    if n_failed:
-        # A red suite makes every count meaningless, so report that instead of
-        # a page of derived noise.
-        add("Test counts",
-            f"the full suite has {n_failed} FAILING test(s) — fix those first; "
-            f"documented counts are not checked against a red baseline")
-    elif n_full:
-        # The docs legitimately quote either tier, so a number is only drift if
-        # it matches neither. Deduped: one finding per (doc, claimed number),
-        # not one per occurrence.
-        valid = {n_full, n_fast}
-        for doc, text in DOCS.items():
-            wrong_tests, wrong_files = set(), set()
-            for claimed, unit in re.findall(r'\*?\*?(\d{2,4})\*?\*? (tests|test files)', text):
-                c = int(claimed)
-                if unit == "tests" and c not in valid: wrong_tests.add(c)
-                if unit == "test files" and c != n_files: wrong_files.add(c)
-            for c in sorted(wrong_tests):
-                add("Test counts", f"{doc} claims {c} tests; the suite has {n_full} (fast tier {n_fast})")
-            for c in sorted(wrong_files):
-                add("Test counts", f"{doc} claims {c} test files; there are {n_files}")
-except Exception as e:
-    add("Test counts", f"could not count the suite ({e})")
+# Counted from the test FILES, never by running them. Every number the docs
+# quote — total tests, test files, fast-tier tests — is a property of the
+# source, so running the suite to learn them bought nothing but wall clock.
+# Worse: this check used to shell out to run-tests.sh with a 900s timeout, and
+# once the suite outgrew that budget it stopped verifying anything at all and
+# reported only its own breakage ("could not count the suite (… timed out …)",
+# 2026-08-31). Reading the files is a few milliseconds and cannot time out.
+#
+# The parsing mirrors bats-core's own preprocessor (libexec/bats-core/
+# bats-preprocess): file_tags and test_tags UNION, test_tags reset after each
+# @test while file_tags persist.
+#
+# Known divergence, deliberately left alone: an @test line inside a heredoc
+# body counts here but not in bats (bats rewrites it into the body, where it
+# never executes and so never registers). Emulating that needs real shell
+# lexing — a first attempt tripped over `cat <<PRBODY` inside a single-quoted
+# bash -c string in builder.bats, whose terminator line is `PRBODY'`, and
+# silently swallowed the rest of the file. Over-counting is a loud, visible
+# finding; a heredoc tracker that loses its terminator is a silently wrong
+# number, which is the failure this whole rewrite exists to kill. The
+# `agrees with bats` test in tests/doc-drift-audit.bats runs `bats --count`
+# over the real suite and goes red if the two ever part ways.
+BATS_TEST     = re.compile(r'^[ \t]*@test[ \t]+.*[^ \t][ \t]+\{')
+BATS_TEST_ALT = re.compile(r'^[ \t]*[^ \t()]+[ \t]*\(?\)?[ \t]+\{[ \t]+#[ \t]*@test[ \t]*$')
+BATS_COMMENT  = re.compile(r'^[ \t]*#[ \t]*bats[ \t]+(.*)$')
+BATS_TAGS     = re.compile(r'^(file_tags|test_tags)=(.*)$')
+
+def count_bats(tests_dir, tier_tag):
+    """(files, total tests, tests carrying tier_tag). Reads; never executes."""
+    files = sorted(glob.glob(os.path.join(tests_dir, "*.bats")))
+    total = tier = 0
+    for f in files:
+        file_tags, test_tags = set(), set()
+        for line in read(f).splitlines():
+            if BATS_TEST.match(line) or BATS_TEST_ALT.match(line):
+                total += 1
+                if tier_tag in (file_tags | test_tags):
+                    tier += 1
+                test_tags = set()   # bats resets per test; file tags carry on
+                continue
+            c = BATS_COMMENT.match(line)
+            t = BATS_TAGS.match(c.group(1)) if c else None
+            if not t:
+                continue
+            tags = {x.strip() for x in t.group(2).split(",") if x.strip()}
+            if t.group(1) == "file_tags":
+                file_tags = tags
+            else:
+                test_tags = tags
+    return len(files), total, tier
+
+# Which tag the pre-commit tier selects is run-tests.sh's decision, so read it
+# from there. Hardcoding "fast" would leave this counting a tier that no longer
+# exists the day someone renames it, and saying nothing.
+runner = read(P("tests", "run-tests.sh"))
+tier_m = re.search(r'--fast\)\s*FILTER="--filter-tags[ \t]+([-_:A-Za-z0-9]+)"', runner)
+if runner and not tier_m:
+    add("Test counts",
+        "tests/run-tests.sh no longer maps --fast to a --filter-tags tag; "
+        "falling back to 'fast', so the fast-tier count may be wrong")
+n_files, n_full, n_fast = count_bats(P("tests"), tier_m.group(1) if tier_m else "fast")
+
+if n_files:
+    # The docs legitimately quote either tier, so a number is only drift if it
+    # matches neither. Deduped: one finding per (doc, claimed number), not one
+    # per occurrence.
+    valid = {n_full, n_fast}
+    for doc, text in DOCS.items():
+        wrong_tests, wrong_files = set(), set()
+        for claimed, unit in re.findall(r'\*?\*?(\d{2,4})\*?\*? (tests|test files)', text):
+            c = int(claimed)
+            if unit == "tests" and c not in valid: wrong_tests.add(c)
+            if unit == "test files" and c != n_files: wrong_files.add(c)
+        for c in sorted(wrong_tests):
+            add("Test counts", f"{doc} claims {c} tests; the suite has {n_full} (fast tier {n_fast})")
+        for c in sorted(wrong_files):
+            add("Test counts", f"{doc} claims {c} test files; there are {n_files}")
 
 # ── 6. Adapters ─────────────────────────────────────────────────────────────
 for a in adapters:

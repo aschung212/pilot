@@ -112,7 +112,7 @@ Verify with `launchctl list | grep doc-drift`. It fires weekly but no-ops on odd
 - Post-merge CI failure → Slack notification
 - Slack threading: one parent message per night, all updates threaded (updated for multi-PR output)
 - Slack webhooks: all notifications are token-free (no Claude instances spawned)
-- Test suite (bats-core, 360 tests across 26 files): fast tier (313 tests) runs on every commit via pre-commit hook, full tier (360 tests) runs on push via GitHub Actions CI
+- Test suite (bats-core, 368 tests across 26 files): fast tier (320 tests) runs on every commit via pre-commit hook, full tier (368 tests) runs on push via GitHub Actions CI
 - Auto-discovery smoke tests: fail when new scripts lack test coverage — enforces that every new script gets tests
 - Linear digest: posts board snapshot to #daily-review at 6:15 AM daily (launchd)
 
@@ -171,7 +171,7 @@ If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/T
 | `~/development/lift/CLAUDE.md` | Lift project standards (design, code, workflow) |
 | `~/.claude/commands/ai-review.md` | Daily review slash command |
 | `~/.claude/CLAUDE.md` | Global Claude instructions |
-| `~/development/pilot/tests/` | bats-core test suite — 26 test files, 360 tests (fast tier, 313, runs in the pre-commit hook) |
+| `~/development/pilot/tests/` | bats-core test suite — 26 test files, 368 tests (fast tier, 320, runs in the pre-commit hook) |
 | `~/development/pilot/.github/workflows/test.yml` | GitHub Actions CI — runs full test suite on push |
 | `~/development/pilot/.githooks/pre-commit` | Git pre-commit hook — runs fast test tier before every commit |
 | `~/Documents/Scripts/lift-triage.sh` | Gemini issue triage — reviews, enhances, and plans before builder runs |
@@ -201,6 +201,27 @@ If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/T
 ---
 
 ## Changelog
+
+### 2026-08-31 — The doc-drift audit's test-count check counts statically
+
+The check shelled out to `run-tests.sh --tap` under a 900-second timeout to learn how many tests exist. The suite outgrew the budget, so today's audit reported only its own breakage — *"could not count the suite (… timed out after 900 seconds)"* — and verified nothing. It had stopped being a check.
+
+**Fix.** `lib/doc-drift-check.py` now counts `@test` lines and bats tag comments in `tests/*.bats` directly. The run drops from 900+ seconds to about a quarter of a second, and it cannot time out as the suite grows. Raising the timeout would only have deferred the same failure while making the biweekly audit take 15+ minutes.
+
+Two details that were easy to get wrong:
+
+- **The fast tier is a tag filter, not a subtraction.** `run-tests.sh --fast` maps to `--filter-tags fast`, so the 40 untagged tests run in *neither* tier and fast ≠ total − slow. An earlier doc claimed 297 on exactly that reasoning.
+- **Which tag the tier filters on is read out of `run-tests.sh`,** not hardcoded, so renaming the tier can't leave the check quietly counting a tier that no longer exists. If that mapping ever stops parsing, the audit says so instead of guessing.
+
+One behaviour went away with the suite run: the check used to also report *"the full suite has N FAILING test(s)"*. That was a side effect of running the tests rather than a doc-drift signal, and the pre-commit hook and CI both already own it.
+
+**Also fixed, in the same family.** `doc-drift-audit.sh` captured the checker's exit code into `$RC` and never read it. A crash left the findings empty, `TOTAL` defaulted to 0, and the audit printed **"✅ Docs match the repo."** — reporting a success it never checked. It now fails loudly and exits 1.
+
+**Tests.** +8 (7 fast, 1 slow), pinned against `tests/fixtures/bats-count/` — a real fixture directory rather than heredocs, because bats rewrites any line matching its `@test` pattern *even inside a heredoc body*, so a fixture suite generated inline lands on disk mangled. One slow-tier test runs `bats --count` over Pilot's own suite and compares it to the parser, which is what would catch a divergence the fixture doesn't model. All four mutations I tried (dropping the per-test tag reset, ignoring `file_tags`, hardcoding the tier tag, deriving fast as total − slow) turn the suite red.
+
+**Action needed for Aaron:** None. Suite 368 green, 26 files, fast tier 320.
+
+**One thing worth knowing.** While writing these tests I found that **bats does not fail a test on a bare `[[ … ]]` that isn't the last line** — a conditional expression is exempt from the errexit that catches `false`. Every non-final `[[ ]]` assertion in the suite is therefore advisory, and I hit a real case of it: a test asserting the wrong count passed anyway. The new tests route assertions through `_has`/`_lacks` (simple commands, which errexit does honor). The rest of the suite is unaudited for this and it is not a small job — flagged separately rather than folded in here.
 
 ### 2026-08-30 — Pilot now notices when Lift's master CI is red
 
