@@ -87,16 +87,21 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
   - Output lands in `data/lift-discover-<date>-research.md` and is injected into the Phase 2 prompt inside the UNTRUSTED WEB CONTENT fence — untrusted regardless of backend, since both relay the open web.
   - Grounding is the only reason Gemini is in this pipeline, and **grounded calls draw on a separate, smaller free-tier bucket than ungrounded ones**. Keep `AI_RESEARCH_MODEL` on a model with free grounded quota (2.5-flash). Bumping the model to dodge an ungrounded rate limit silently costs discovery its web access — that is exactly what happened on 2026-08-30.
   - The fallback's web tools are load-bearing: until 2026-08-30 `DISCOVER_ALLOWED_TOOLS` had no `WebSearch`/`WebFetch`, so "Claude self-researches" was false — every Gemini failure silently degraded discovery to pure codebase introspection.
+- Phase 1 (Gemini): Searches the web for the current focus area. Runs through the `ai-research.sh` adapter, which calls the Gemini API with the `GEMINI_API_KEY` (Flash is free-tier; the retired OAuth CLI is no longer used). If research fails it **alerts loudly** and Claude self-researches instead of degrading silently. The adapter appends a **Sources** list of the domains the model actually read (see the adapter contract below), so Phase 2 gets citations it can check rather than unattributed claims.
 - Phase 2 (Claude): Cross-references findings against the codebase, existing backlog, canceled issues, and product decisions. Creates specific, actionable GitHub issues.
 
 **Focus area rotation (GA-readiness mode, since 2026-08-21):** Lift is feature-complete and in beta; discovery now hunts only stabilization work. Six focus areas in a weighted 20-slot cycle (~6.5 weeks at 3 runs/week): `bug-hunt` ×5 (codebase bug hunting: races, unhandled rejections, data loss, edge cases), `performance` ×4, `ux-polish` ×4 (refinement of existing flows — states, consistency, friction), `accessibility` ×3, `pwa-reliability` ×2 (offline sync correctness, SW update flow), `security-deps` ×2. The discovery prompt forbids net-new feature and test-only issues, requires every finding to cite a code location, and caps output at 2–6 discoveries (zero is valid — no quota padding). Retired feature-research areas (competitors, ui-trends, testing, seo-aso, data-viz, onboarding, dx-cicd, monetization, marketing, growth, pwa-patterns) keep their prompts for manual runs (`discover.sh <focus>`) but never enter the rotation. A `QUEUE_VERSION` stamp (`data/lift-discovery-queue.version`) discards any queue written by an older rotation, so stale focus areas can't run after a rotation change ships.
 
 **Self-improvement:** Reads [product decisions](pilot-responsibilities.md#product-decisions) and canceled issues to avoid recreating rejected features.
 
+> **`ai-research.sh` contract.** `prompt <text> [--model M] [--output F] [--no-grounding]` → the model's answer on stdout (or `F`); diagnostics on stderr; exit 0 = answer produced, non-zero = FAIL LOUD. Grounding is **on** by default.
+>
+> When grounding is on, the adapter appends a **Sources** section listing the pages the model actually read, parsed from `candidates[0].groundingMetadata.groundingChunks[].web` — deduped by domain, numbered, `title — uri`. This matters because **the Gemini API never cites inside the answer text**: the answer and its evidence come back in separate parts of the response. The adapter parsed only the text part until 2026-08-30 and dropped the metadata on the floor, which is why research arrived uncited in 13 of the 14 runs after the REST migration even though the discovery prompt explicitly demands URLs. The `web.title` is a real domain (`strong.app`, `barbend.com`) and is the durable half of a citation; the `web.uri` is an opaque `vertexaisearch.cloud.google.com/grounding-api-redirect/…` link that **expires**, so treat the domain as the reference and the URL as a convenience. Callers passing `--no-grounding` (triage) get the bare answer — no Sources section, nothing new to parse. Citation extraction is best-effort by construction: an unexpected metadata shape is skipped rather than allowed to cost an otherwise-good answer.
+
 ### 2. Triage Agent
 **Script:** `~/Documents/Scripts/lift-triage.sh`
 **Schedule:** Nightly after discovery (second stage)
-**Model:** Gemini 2.5 Flash (via the Gemini REST API, no grounding — reasons over the prompt) with Claude Sonnet fallback
+**Model:** Gemini 2.5 Flash (via the Gemini REST API, no grounding — reasons over the prompt) with Claude Sonnet fallback. Pinned by `AI_TRIAGE_MODEL`, **not** inherited from `AI_RESEARCH_MODEL` — triage and discovery tune their models independently.
 
 **What it does:**
 - Reviews every untriaged backlog issue
@@ -396,6 +401,9 @@ Reporter only — never mutates an issue, PR, or branch.
 The pipeline has a bats-core test suite with **376 tests across 26 test files** in `~/development/pilot/tests/`. Tests use two-tier execution to balance speed with thoroughness:
 
 **Fast tier (327 tests) — pre-commit hook:**
+The pipeline has a bats-core test suite with **336 tests across 25 test files** in `~/development/pilot/tests/`. Tests use two-tier execution to balance speed with thoroughness:
+
+**Fast tier (305 tests) — pre-commit hook:**
 - Runs before every commit via `.githooks/pre-commit`
 - Covers: unit tests, adapter contract tests, argument parsing, error handling, log formatting
 - Builder tests source real functions from `lib/builder-utils.sh` (not copies of logic)
@@ -433,6 +441,7 @@ enabled, and that command triggers git's worktree-config migration, which flips
 `core.bare = false` is restored. Prefer `git config --worktree core.hooksPath .githooks`.
 
 **Full tier (376 tests) — GitHub Actions CI:**
+**Full tier (336 tests) — GitHub Actions CI:**
 - Runs on every push via `.github/workflows/test.yml`
 - Includes everything in the fast tier plus integration-level tests (CSV analysis, full script invocations)
 - Test paths resolve dynamically (no hardcoded local paths) for CI runner compatibility
@@ -530,7 +539,7 @@ Pipeline is fully decomposed — each service has its own launchd plist. No orch
 |---|---|---|
 | Discovery (research) | **Claude Sonnet 5** + `WebSearch`/`WebFetch` (`AI_RESEARCH_CLAUDE_MODEL`), Gemini 2.5 Flash as fallback | Cites its sources: 24 URLs / 14 domains vs Gemini's 0 on the same prompt, with App Store data verifying exactly against Apple's API. Not Opus — 1187s vs 137s for a marginal precision gain. Gemini stays as the free fallback and keeps its whole daily bucket for triage. |
 | Discovery (analysis) | Claude Opus 5 (1M, max effort) | Best at codebase reasoning + issue creation |
-| Triage | Gemini 2.5 Flash via Gemini API (Claude Sonnet fallback) | Good at planning; free-tier Flash via `GEMINI_API_KEY`. **Not** Google AI Pro — that consumer subscription grants no API access. |
+| Triage | Gemini 2.5 Flash via Gemini API — `AI_TRIAGE_MODEL` (Claude Sonnet fallback) | Good at planning; free-tier Flash via `GEMINI_API_KEY`. **Not** Google AI Pro — that consumer subscription grants no API access. Pinned separately from discovery's `AI_RESEARCH_MODEL` so retuning research cannot silently move triage. |
 | Builder | Claude Opus 5 (1M, max effort) | Best coding model, complex multi-file changes |
 | Architect | Claude Fable 5 (1M default, max effort) — `AI_ARCHITECT_MODEL`, falls back to `AI_CODE_MODEL` | Deepest whole-codebase reasoning in the pipeline; weekly cadence bounds the 2× price |
 | Review (commit) | Claude Sonnet (`PILOT_REVIEW_MODEL` overridable) | Inline via post-commit hook — adversarial review of full branch diff, independent from the Opus builder. Single model, single pass. Re-platformed off the retired Gemini CLI on 2026-07-16; uses the builder's Claude auth (no extra billing). |
@@ -604,6 +613,7 @@ Feedback loop → canceled issues + product decisions steer discovery;
 | `~/development/pilot/scripts/pr-close-reconcile.sh` | Closes/re-triages issues whose PR was closed unmerged — the state:started leak that hid 69% of the backlog from Triage |
 | `~/development/pilot/scripts/doc-drift-audit.sh` | Biweekly audit: docs vs. the repo's actual state (checks in `lib/doc-drift-check.py`) |
 | `~/development/pilot/tests/` | bats-core test suite (376 tests, 26 files, two-tier execution) |
+| `~/development/pilot/tests/` | bats-core test suite (336 tests, 25 files, two-tier execution) |
 | `~/development/pilot/.github/workflows/test.yml` | GitHub Actions CI — full test suite on push |
 | `~/development/pilot/.githooks/pre-commit` | Pre-commit hook — fast test tier on every commit. Live since 2026-08-31; scrubs `GIT_*` so the suite cannot mutate this repo |
 | `~/development/pilot/project.env` | Lift-specific configuration (git-ignored) |
@@ -629,6 +639,17 @@ Pilot merged PRs into a `master` whose CI had been red for at least 41 consecuti
 - **Log output redirected to stderr.** `lib/log.sh` writes to stdout, which in `--slack` mode is the payload the digest embeds — an unredirected log call would land inside the Slack message. Caught by a test, and pinned by one.
 
 16 new bats tests driving the real script through a `gh` shim.
+### 2026-08-30 — Two reporting defects: triage's model label was fiction, and grounded research threw its citations away
+
+Both found while fixing discovery's Gemini failure; independent, self-contained, and each a case of the pipeline discarding information it had already paid for.
+
+**1. Triage reported a model it never ran** (`scripts/triage.sh`). The script set `TRIAGE_MODEL="gemini-2.5-flash"` as a reporting label and then called the adapter **without `--model`** — so the call fell through to `AI_RESEARCH_MODEL`, which discovery owns, while every triage log line, every issue comment, and the `model` column of `lift-triage-metrics.csv` claimed 2.5-flash regardless. The label was wrong for the entire window `project.env` read `gemini-3.6-flash` (2026-08-29 → 2026-08-30). Triage now pins its own model via the new **`AI_TRIAGE_MODEL`** (default `gemini-2.5-flash`) and passes it on the call, so the label is true *and* triage no longer moves when discovery's model is retuned. The Claude Sonnet fallback is unchanged and still relabels correctly when it fires.
+
+**2. Grounded research arrived uncited** (`adapters/ai-research.sh`). The adapter parsed only `candidates[0].content.parts` and dropped `groundingMetadata` on the floor. The Gemini API never cites inside the answer text — the sources come back separately, in `groundingMetadata.groundingChunks[].web` — so discarding that metadata is why research returned **0 URLs in 13 of the 14 runs** after the REST migration despite the discovery prompt explicitly demanding them. A live grounded call returns 16 chunks with real domains (`strong.app`, `apple.com`, `barbend.com`, `sensortower.com`, `hevyapp.com`). The adapter now appends a numbered, domain-deduped **Sources** section (`title — uri`). The `web.title` is a real domain and is the durable reference; the `web.uri` is an opaque `vertexaisearch.cloud.google.com/grounding-api-redirect/…` link that **expires**, so it is emitted as the secondary half. `--no-grounding` callers (triage) get the bare answer, unchanged. Extraction is best-effort: an unexpected metadata shape is skipped rather than allowed to cost an otherwise-good answer — citations are a bonus, never a reason to lose a result the API already returned.
+
+**Config:** new `AI_TRIAGE_MODEL` in `project.env.example` and `init.sh` (prompted alongside the research model, and shown in the setup summary). `AI_RESEARCH_MODEL`'s comment now reads "discovery only" — it no longer silently drives triage.
+
+**Tests:** +8 (336 total, fast tier 305). The triage pair drives the **real** `triage.sh` in a copied tree with stubbed adapters and asserts on the argv the adapter actually receives, plus the two surfaces the label reaches — the issue comment and the metrics CSV. The adapter tests cover Sources extraction, domain dedupe, non-`web` chunks, titleless chunks, and the two negative guards that matter: `--no-grounding` emits no Sources, and malformed `groundingMetadata` still returns the answer. Every positive test was confirmed to fail against the unfixed code before the fix was restored.
 
 ### 2026-08-30 — Hand-filed issues jump the queue; three builder defects fixed
 

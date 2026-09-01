@@ -24,7 +24,9 @@
 # reasons go to stderr. Exit 0 = answer produced; non-zero = FAIL LOUD (caller
 # should alert). Grounding (Google Search) is ON by default so research returns
 # real URLs/versions instead of hallucinations; pass --no-grounding for pure
-# reasoning tasks (e.g. triage) that don't need the web.
+# reasoning tasks (e.g. triage) that don't need the web. When grounding is on,
+# a "Sources" section listing the domains the model actually read is appended
+# to the answer (the answer text itself is never cited by the API).
 #
 # Auth: uses the Gemini API key (GEMINI_API_KEY, exported from ~/.zshenv), NOT
 # the `gemini` CLI. Google retired the free "Gemini Code Assist for individuals"
@@ -221,8 +223,9 @@ sys.stdout.write(json.dumps(body))
       exit 1
     fi
 
-    # Parse the response: extract candidate text, surface API errors.
-    RESULT=$(HTTP_CODE="$HTTP_CODE" python3 -c '
+    # Parse the response: extract candidate text, append grounding citations,
+    # surface API errors.
+    RESULT=$(HTTP_CODE="$HTTP_CODE" GROUNDING="$GROUNDING" python3 -c '
 import json, os, sys
 code = os.environ.get("HTTP_CODE", "")
 try:
@@ -242,6 +245,40 @@ if not txt:
     try: fr = d["candidates"][0].get("finishReason", "")
     except Exception: pass
     print("__ERR__ empty result (HTTP %s%s)" % (code, ", finishReason=%s" % fr if fr else "")); sys.exit(0)
+
+# Grounding citations. A grounded call returns the pages it actually read in
+# candidates[0].groundingMetadata.groundingChunks[].web{title,uri}; the answer
+# text itself carries no URLs. Discarding the metadata is why research arrived
+# uncited (0 URLs in 13 of 14 runs after the REST migration) even though the
+# discovery prompt demands them. The web.title is a real domain and is the
+# durable half of a citation; web.uri is an opaque
+# vertexaisearch.cloud.google.com redirect that expires, so it is secondary.
+# Best-effort by design: any malformed metadata is skipped rather than allowed
+# to cost us an otherwise-good answer.
+if os.environ.get("GROUNDING", "on") != "off":
+    try:
+        meta = d["candidates"][0].get("groundingMetadata") or {}
+        chunks = meta.get("groundingChunks") or []
+        seen = set()
+        sources = []
+        for c in chunks:
+            web = (c or {}).get("web") or {}
+            title = (web.get("title") or "").strip()
+            uri = (web.get("uri") or "").strip()
+            if not title and not uri:
+                continue
+            key = title.lower() or uri
+            if key in seen:
+                continue
+            seen.add(key)
+            sources.append("%s%s" % (title or "(untitled source)", " — %s" % uri if uri else ""))
+        if sources:
+            txt += "\n\n---\nSources (%d, via Google Search grounding). " % len(sources)
+            txt += "The domain is the durable reference; the vertexaisearch.cloud.google.com links are grounding redirects that expire:\n"
+            txt += "\n".join("%d. %s" % (i, s) for i, s in enumerate(sources, 1))
+    except Exception:
+        pass
+
 sys.stdout.write(txt)
 ' "$RESP_FILE" 2>/dev/null)
 

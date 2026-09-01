@@ -537,3 +537,80 @@ COMPLEXITY: small"
   [ "$status" -eq 0 ]
   [[ "$output" == *':-1'* ]] || return 1
 }
+
+# ── Model label truthfulness ─────────────────────────────────────────────────
+# $TRIAGE_MODEL is a reporting label: it lands in every issue comment and in
+# the metrics CSV. It must name the model that actually ran. It did not — the
+# adapter call omitted --model, so triage silently rode $AI_RESEARCH_MODEL
+# (which discovery tunes) while every comment claimed gemini-2.5-flash.
+#
+# Drives the REAL triage.sh in a copied tree whose adapters are stubs, so the
+# assertion is on the argv triage actually hands the adapter.
+_triage_tree() {
+  # triage.bats overrides test_helper's setup(), so export what triage.sh reads.
+  export ISSUE_PREFIX="TEST"
+  export GITHUB_ISSUES_REPO="test/repo"
+  export GITHUB_REPO="test/repo"
+  FAKE="$TEST_TMPDIR/fake"
+  mkdir -p "$FAKE/adapters"
+  cp -R "$PILOT_DIR/scripts" "$FAKE/scripts"
+  cp -R "$PILOT_DIR/lib" "$FAKE/lib"
+
+  # Stubs record their argv ($TEST_TMPDIR is exported by bats).
+  cat > "$FAKE/adapters/tracker.sh" << 'EOF'
+#!/bin/bash
+echo "$@" >> "$TEST_TMPDIR/tracker_argv"
+case "${1:-}" in
+  list) [ "${2:-}" = "triageable" ] && echo "TEST-1: A sample issue" ;;
+  view) echo "# TEST-1: A sample issue"; echo "Body text." ;;
+  issue-url) echo "https://github.com/test/repo/issues/1" ;;
+  board-url) echo "https://github.com/test/repo/issues" ;;
+esac
+exit 0
+EOF
+
+  cat > "$FAKE/adapters/ai-research.sh" << 'EOF'
+#!/bin/bash
+echo "$@" >> "$TEST_TMPDIR/ai_research_argv"
+printf 'VERDICT: SKIP\nCONFIDENCE: 8\nREASON: stub\n'
+EOF
+
+  printf '#!/bin/bash\nexit 0\n' > "$FAKE/adapters/notify.sh"
+  chmod +x "$FAKE/adapters/"*.sh
+}
+
+# bats test_tags=fast
+@test "triage: pins its own model and passes it to the research adapter" {
+  _triage_tree
+  # Discovery's model is deliberately different — triage must ignore it.
+  export AI_RESEARCH_MODEL="gemini-3.6-flash"
+  run bash "$FAKE/scripts/triage.sh" --dry-run
+  [ "$status" -eq 0 ]
+  [ -f "$TEST_TMPDIR/ai_research_argv" ]
+  grep -q -- "--model gemini-2.5-flash" "$TEST_TMPDIR/ai_research_argv"
+  ! grep -q -- "gemini-3.6-flash" "$TEST_TMPDIR/ai_research_argv"
+  # Grounding stays off — triage reasons over the prompt, not the web.
+  grep -q -- "--no-grounding" "$TEST_TMPDIR/ai_research_argv"
+}
+
+# bats test_tags=fast
+@test "triage: the reported label names the model that actually ran" {
+  # A live run (not --dry-run) — the label only reaches its two reporting
+  # surfaces, the issue comment and the metrics CSV, outside dry-run. Both must
+  # agree with the argv the adapter was called with.
+  _triage_tree
+  export AI_TRIAGE_MODEL="gemini-3.6-flash"
+  export AI_RESEARCH_MODEL="gemini-2.5-flash"
+  run bash "$FAKE/scripts/triage.sh"
+  [ "$status" -eq 0 ]
+  grep -q -- "--model gemini-3.6-flash" "$TEST_TMPDIR/ai_research_argv"
+  # The issue comment credits the model that ran…
+  grep -q "gemini-3.6-flash" "$TEST_TMPDIR/tracker_argv"
+  ! grep -q "gemini-2.5-flash" "$TEST_TMPDIR/tracker_argv"
+  # …and so does the model column of the metrics CSV. Locate that column by
+  # NAME: this assertion was anchored to end-of-line until 2026-09-01 and broke
+  # the moment `failed` was appended after `model` in the schema.
+  awk -F, 'NR==1 { for (i=1; i<=NF; i++) if ($i=="model") c=i; next }
+           c && $c=="gemini-3.6-flash" { found=1 }
+           END { exit !found }' "$OUTPUT_DIR/lift-triage-metrics.csv"
+}

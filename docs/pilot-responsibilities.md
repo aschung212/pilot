@@ -113,6 +113,7 @@ Verify with `launchctl list | grep doc-drift`. It fires weekly but no-ops on odd
 - Slack threading: one parent message per night, all updates threaded (updated for multi-PR output)
 - Slack webhooks: all notifications are token-free (no Claude instances spawned)
 - Test suite (bats-core, 376 tests across 26 files): fast tier (327 tests) runs on every commit via pre-commit hook, full tier (376 tests) runs on push via GitHub Actions CI. The pre-commit gate went live 2026-08-31 — before that it had never run (see changelog); commits from a Claude session worktree are still exempt unless that worktree's `core.hooksPath` override is cleared
+- Test suite (bats-core, 336 tests across 25 files): fast tier (305 tests) runs on every commit via pre-commit hook, full tier (336 tests) runs on push via GitHub Actions CI
 - Auto-discovery smoke tests: fail when new scripts lack test coverage — enforces that every new script gets tests
 - Issue digest: manual only (`scripts/digest.sh`) — the 6:15 AM launchd job was disabled 2026-06-18
 
@@ -172,6 +173,7 @@ If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/T
 | `~/.claude/commands/ai-review.md` | Daily review slash command |
 | `~/.claude/CLAUDE.md` | Global Claude instructions |
 | `~/development/pilot/tests/` | bats-core test suite — 26 test files, 376 tests (fast tier, 327, runs in the pre-commit hook) |
+| `~/development/pilot/tests/` | bats-core test suite — 25 test files, 336 tests (fast tier, 305, runs in the pre-commit hook) |
 | `~/development/pilot/.github/workflows/test.yml` | GitHub Actions CI — runs full test suite on push |
 | `~/development/pilot/.githooks/pre-commit` | Git pre-commit hook — runs fast test tier before every commit (live since 2026-08-31) |
 | `~/Documents/Scripts/lift-triage.sh` | Gemini issue triage — reviews, enhances, and plans before builder runs |
@@ -368,6 +370,22 @@ It went in the digest rather than the weekly health report deliberately: a weekl
 - ~~**`Integration Tests` is still red** (`supabase-integration`, since 2026-08-18). Worth a look; it's unrelated to the migration problem that was fixed tonight.~~ **Fixed 2026-08-31** (Lift #1283 / PR #1284) — green for the first time in its history.
 - **Green is silent.** No news in the digest means every workflow passed. If the check itself can't read the branch, it says UNKNOWN rather than staying quiet.
 - Turn it off with `TARGET_CI_WATCH_ENABLED=0` if it ever becomes noise.
+### 2026-08-30 — Triage was reporting a model it never ran; Gemini research was throwing its sources away
+
+> **Landed 2026-09-01**, not 2026-08-30 — it sat unmerged on `claude/quirky-montalcini-74f1bd`. Two of its own tests had gone stale against `main` in the meantime and were repaired on the way in, both instances of the failure mode this entry is about. Its 16 bare `[[ ]]` assertions could never have failed (the guard added by #39 caught them; they now carry `|| return 1`), and its metrics-CSV assertion was anchored to end-of-line — correct when `model` was the last column, broken the moment `failed` was appended after it on 2026-08-29, one day before this was written. That assertion now locates the column by name so the next appended column cannot silently disarm it.
+
+
+Two small defects found while fixing discovery's Gemini failure. Neither changed what the pipeline *did* — both changed what it *told you*, which is worse in its own way, because you had no way to notice from the outside.
+
+**Triage's model label was fiction.** `triage.sh` set a label reading `gemini-2.5-flash`, then called the research adapter without actually asking for that model — so the call quietly used whatever `AI_RESEARCH_MODEL` said (a knob discovery owns), while every triage log line, every issue comment, and the metrics CSV reported 2.5-flash regardless. For the window `project.env` read `gemini-3.6-flash` (2026-08-29 → 08-30), the label was simply wrong. Triage now pins its own model through a new `AI_TRIAGE_MODEL` and passes it on the call, so the label is true — and retuning discovery's model can no longer move triage without you asking for it.
+
+**Grounded research came back uncited.** The Gemini API returns its answer and its sources in two different places, and the adapter only ever read the first one. Everything Gemini actually read — real domains like `strong.app`, `barbend.com`, `sensortower.com` — was parsed and discarded. That is why research produced **0 URLs in 13 of the last 14 runs** even though the discovery prompt demands them in as many words. The adapter now appends a deduped **Sources** list to grounded answers, so discovery's Claude phase gets citations it can check instead of claims it has to trust. Triage is unaffected — it asks for no web grounding and gets exactly what it did before.
+
+#### ⚠️ New for Aaron
+
+- **Triage's model is now its own knob: `AI_TRIAGE_MODEL`** (in `project.env`, default `gemini-2.5-flash`). Changing `AI_RESEARCH_MODEL` now moves discovery only. If you want triage on a different model, set it explicitly — that is the whole point of the split.
+- **Old triage records in that window are not trustworthy about the model.** Issue comments and `lift-triage-metrics.csv` rows from 2026-08-29 → 08-30 name a model that may not be the one that ran. In practice the blast radius is small: every 08-29 row recorded `claude-sonnet`, because the Gemini path was down and the fallback labelled itself correctly. Rows from 08-30 onward are accurate.
+- **Discovery digests will start carrying sources.** Expect a "Sources" block at the end of research output. The domains are the durable part; the `vertexaisearch.cloud.google.com` links are Google redirects that **expire**, so don't bookmark them — use the domain.
 
 ### 2026-08-30 — Issues you file by hand now jump the queue
 

@@ -356,8 +356,16 @@ SUB_ISSUE_2_DESCRIPTION: ...
   # Run Gemini Flash via the ai-research adapter (Gemini API key; no web
   # grounding needed — triage reasons over the prompt context, not the web).
   # Fall back to Claude Sonnet if Gemini is unavailable or returns no verdict.
-  TRIAGE_MODEL="gemini-2.5-flash"
-  TRIAGE_RESULT=$(bash "$AI_RESEARCH" prompt "$TRIAGE_PROMPT" --no-grounding 2>>"$TRIAGE_LOG" || true)
+  #
+  # PIN THE MODEL. $TRIAGE_MODEL is a reporting label — it lands in every
+  # issue comment and in the metrics CSV — so the call must actually use it.
+  # Without --model the adapter silently defaults to $AI_RESEARCH_MODEL, which
+  # discovery tunes for its own reasons; triage then reports a model it never
+  # ran. That is exactly what happened 2026-08-29 → 2026-08-30, when
+  # project.env said gemini-3.6-flash and every triage comment claimed
+  # gemini-2.5-flash. AI_TRIAGE_MODEL keeps triage independent of discovery.
+  TRIAGE_MODEL="${AI_TRIAGE_MODEL:-gemini-2.5-flash}"
+  TRIAGE_RESULT=$(bash "$AI_RESEARCH" prompt "$TRIAGE_PROMPT" --model "$TRIAGE_MODEL" --no-grounding 2>>"$TRIAGE_LOG" || true)
 
   # Retry once before paying for the Sonnet fallback.
   #

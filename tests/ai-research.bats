@@ -167,3 +167,74 @@ AI_RESEARCH="$PILOT_DIR/adapters/ai-research.sh"
   [ -s "$out_file" ]
   grep -q "cited findings" "$out_file"
 }
+
+# ── Grounding citations ──────────────────────────────────────────────────────
+# The API never cites inside the answer text; the sources it actually read live
+# in candidates[0].groundingMetadata.groundingChunks[].web. Discarding them is
+# why research arrived uncited after the REST migration.
+
+GROUNDED_BODY='{"candidates":[{"content":{"parts":[{"text":"finding one"}]},"groundingMetadata":{"groundingChunks":[{"web":{"title":"strong.app","uri":"https://vertexaisearch.cloud.google.com/grounding-api-redirect/AbC1"}},{"web":{"title":"barbend.com","uri":"https://vertexaisearch.cloud.google.com/grounding-api-redirect/AbC2"}}],"webSearchQueries":["fitness apps 2026"]}}]}'
+
+# bats test_tags=fast
+@test "ai-research: grounded call appends a Sources section with domain and uri" {
+  export MOCK_CURL_OUTPUT="$GROUNDED_BODY"
+  run bash "$AI_RESEARCH" prompt "test"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"finding one"* ]] || return 1
+  [[ "$output" == *"Sources (2"* ]] || return 1
+  [[ "$output" == *"1. strong.app — https://vertexaisearch.cloud.google.com/grounding-api-redirect/AbC1"* ]] || return 1
+  [[ "$output" == *"2. barbend.com — https://vertexaisearch.cloud.google.com/grounding-api-redirect/AbC2"* ]] || return 1
+}
+
+# bats test_tags=fast
+@test "ai-research: Sources dedupes repeated domains" {
+  # A real grounded call returns ~16 chunks, most of them repeats of a few
+  # domains. Cite each domain once.
+  export MOCK_CURL_OUTPUT='{"candidates":[{"content":{"parts":[{"text":"txt"}]},"groundingMetadata":{"groundingChunks":[{"web":{"title":"apple.com","uri":"https://x/1"}},{"web":{"title":"apple.com","uri":"https://x/2"}},{"web":{"title":"Apple.com","uri":"https://x/3"}},{"web":{"title":"hevyapp.com","uri":"https://x/4"}}]}}]}'
+  run bash "$AI_RESEARCH" prompt "test"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Sources (2"* ]] || return 1
+  [ "$(echo "$output" | grep -ci 'apple\.com' | tr -d ' \n')" -eq 1 ]
+  [[ "$output" == *"hevyapp.com"* ]] || return 1
+}
+
+# bats test_tags=fast
+@test "ai-research: --no-grounding output carries no Sources section" {
+  # Triage parses this output for VERDICT; it asked for no web, so cite nothing.
+  export MOCK_CURL_OUTPUT="$GROUNDED_BODY"
+  run bash "$AI_RESEARCH" prompt "test" --no-grounding
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"finding one"* ]] || return 1
+  [[ "$output" != *"Sources ("* ]] || return 1
+}
+
+# bats test_tags=fast
+@test "ai-research: response without groundingMetadata still returns the answer" {
+  export MOCK_CURL_OUTPUT='{"candidates":[{"content":{"parts":[{"text":"finding one"}]}}]}'
+  run bash "$AI_RESEARCH" prompt "test"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"finding one"* ]] || return 1
+  [[ "$output" != *"Sources ("* ]] || return 1
+}
+
+# bats test_tags=fast
+@test "ai-research: malformed groundingMetadata does not cost us the answer" {
+  # Citations are a bonus. A shape we did not expect must degrade to the plain
+  # answer, never to an empty result (which the caller treats as FAIL LOUD).
+  export MOCK_CURL_OUTPUT='{"candidates":[{"content":{"parts":[{"text":"finding one"}]},"groundingMetadata":{"groundingChunks":"not-a-list"}}]}'
+  run bash "$AI_RESEARCH" prompt "test"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"finding one"* ]] || return 1
+  [[ "$output" != *"Sources ("* ]] || return 1
+}
+
+# bats test_tags=fast
+@test "ai-research: non-web grounding chunks are skipped, titleless ones kept" {
+  export MOCK_CURL_OUTPUT='{"candidates":[{"content":{"parts":[{"text":"txt"}]},"groundingMetadata":{"groundingChunks":[{"retrievedContext":{"title":"internal"}},{"web":{"uri":"https://x/9"}},{"web":{"title":"strong.app","uri":"https://x/1"}}]}}]}'
+  run bash "$AI_RESEARCH" prompt "test"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Sources (2"* ]] || return 1
+  [[ "$output" != *"internal"* ]] || return 1
+  [[ "$output" == *"(untitled source) — https://x/9"* ]] || return 1
+  [[ "$output" == *"strong.app"* ]] || return 1
+}

@@ -239,6 +239,11 @@ if [ -n "${GEMINI_API_KEY:-}" ]; then
   ask "Gemini model (triage + research fallback) [gemini-2.5-flash]: "
   read -r AI_RESEARCH_MODEL
   AI_RESEARCH_MODEL="${AI_RESEARCH_MODEL:-gemini-2.5-flash}"
+  # Pinned separately from research: triage stamps this name into every issue
+  # comment and into the metrics CSV, so retuning discovery must not move it.
+  ask "Triage model [gemini-2.5-flash]: "
+  read -r AI_TRIAGE_MODEL
+  AI_TRIAGE_MODEL="${AI_TRIAGE_MODEL:-gemini-2.5-flash}"
   echo ""
   echo "  Discovery's web research picks a backend. Measured 2026-08-30 on the same"
   echo "  prompt: Gemini 2.5 Flash returned 0 cited URLs; Claude Sonnet 5 returned 24"
@@ -251,6 +256,7 @@ else
   warn "GEMINI_API_KEY not set (add it to ~/.zshenv). Discovery research uses Claude with no fallback; triage uses its Claude fallback."
   AI_RESEARCH_MODEL=""
   DISCOVER_RESEARCH_BACKEND="claude-only"
+  AI_TRIAGE_MODEL=""
 fi
 
 echo ""
@@ -396,6 +402,7 @@ AI_ARCHITECT_MODEL="$AI_ARCHITECT_MODEL"
 AI_RESEARCH_MODEL="$AI_RESEARCH_MODEL"
 AI_RESEARCH_CLAUDE_MODEL="claude-sonnet-5"
 DISCOVER_RESEARCH_BACKEND="$DISCOVER_RESEARCH_BACKEND"
+AI_TRIAGE_MODEL="$AI_TRIAGE_MODEL"
 
 # ── Agent Tuning ─────────────────────────────────────────────
 # Advanced knobs — sensible defaults below; edit to tune cost/performance/behavior.
@@ -601,6 +608,8 @@ echo "  Tracker:    $TRACKER_ADAPTER"
 echo "  Builder:    ${AI_CODE_MODEL} (effort: ${AI_CODE_EFFORT}) ($(echo "$BUILDER_DAYS" | tr ',' '/' | sed 's/1/Mon/;s/2/Tue/;s/3/Wed/;s/4/Thu/;s/5/Fri/'))"
 echo "  Architect:  ${AI_ARCHITECT_MODEL} (weekly)"
 echo "  Discovery:  research via ${DISCOVER_RESEARCH_BACKEND} (gemini model: ${AI_RESEARCH_MODEL:-none}) ($(echo "$DISCOVER_DAYS" | tr ',' '/' | sed 's/0/Sun/;s/2/Tue/;s/4/Thu/'))"
+echo "  Discovery:  ${AI_RESEARCH_MODEL:-disabled} ($(echo "$DISCOVER_DAYS" | tr ',' '/' | sed 's/0/Sun/;s/2/Tue/;s/4/Thu/'))"
+echo "  Triage:     ${AI_TRIAGE_MODEL:-Claude Sonnet fallback}"
 echo ""
 echo "  Next steps:"
 echo "  1. Add SLACK_BOT_TOKEN and SLACK_WEBHOOK_URL to ~/.zshenv"

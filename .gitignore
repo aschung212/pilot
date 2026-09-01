@@ -1,5 +1,7 @@
 # Project-specific config (contains paths, team names, webhooks)
 project.env
+project.env.bak-*
+project.env.bak.*
 
 # Runtime state (logs, metrics, queue, outputs)
 data/
