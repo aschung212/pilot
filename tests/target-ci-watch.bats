@@ -77,23 +77,23 @@ mkruns() {
 @test "log output goes to stderr, never into the slack payload" {
   mkruns "CI|failure|2026-08-30T05:00:00Z"
   stdout=$(bash "$WATCH" --slack 2>/dev/null)
-  [[ "$stdout" != *"| WARN |"* ]]
-  [[ "$stdout" != *"| INFO |"* ]]
+  [[ "$stdout" != *"| WARN |"* ]] || return 1
+  [[ "$stdout" != *"| INFO |"* ]] || return 1
   stderr=$(bash "$WATCH" --slack 2>&1 >/dev/null)
-  [[ "$stderr" == *"target-ci-watch"* ]]
+  [[ "$stderr" == *"target-ci-watch"* ]] || return 1
 }
 
 @test "human mode says so when everything is green" {
   mkruns "CI|success|2026-08-30T05:00:00Z"
   run bash "$WATCH"
-  [[ "$output" == *"all workflows green"* ]]
+  [[ "$output" == *"all workflows green"* ]] || return 1
 }
 
 @test "reports a red workflow with its streak" {
   mkruns "CI|failure|2026-08-30T05:00:00Z" "CI|failure|2026-08-29T05:00:00Z" "CI|success|2026-08-28T05:00:00Z"
   run bash "$WATCH" --slack
-  [[ "$output" == *"CI"* ]]
-  [[ "$output" == *"2 consecutive"* ]]
+  [[ "$output" == *"CI"* ]] || return 1
+  [[ "$output" == *"2 consecutive"* ]] || return 1
 }
 
 # The whole point: a green run of ANOTHER workflow must not reset the streak.
@@ -106,8 +106,8 @@ mkruns() {
     "npm audit|success|2026-08-29T05:30:00Z" \
     "CI|failure|2026-08-29T05:00:00Z"
   run bash "$WATCH" --slack
-  [[ "$output" == *"3 consecutive"* ]]
-  [[ "$output" == *"1 workflow(s)"* ]]
+  [[ "$output" == *"3 consecutive"* ]] || return 1
+  [[ "$output" == *"1 workflow(s)"* ]] || return 1
 }
 
 @test "reports EVERY red workflow, not just the worst" {
@@ -118,44 +118,44 @@ mkruns() {
     "Integration Tests|failure|2026-08-29T04:00:00Z" \
     "Integration Tests|failure|2026-08-28T04:00:00Z"
   run bash "$WATCH" --slack
-  [[ "$output" == *"2 workflow(s)"* ]]
-  [[ "$output" == *"CI"* ]]
-  [[ "$output" == *"Integration Tests"* ]]
+  [[ "$output" == *"2 workflow(s)"* ]] || return 1
+  [[ "$output" == *"CI"* ]] || return 1
+  [[ "$output" == *"Integration Tests"* ]] || return 1
 }
 
 @test "escalates to BROKEN at 10 consecutive failures" {
   args=(); for i in $(seq 1 10); do args+=("CI|failure|2026-08-$(printf '%02d' $((10 + i)))T05:00:00Z"); done
   mkruns "${args[@]}"
   run bash "$WATCH" --slack
-  [[ "$output" == *"BROKEN"* ]]
-  [[ "$output" == *"🚨"* ]]
+  [[ "$output" == *"BROKEN"* ]] || return 1
+  [[ "$output" == *"🚨"* ]] || return 1
 }
 
 @test "a single failure is reported without the BROKEN escalation" {
   mkruns "CI|failure|2026-08-30T05:00:00Z" "CI|success|2026-08-29T05:00:00Z"
   run bash "$WATCH" --slack
-  [[ "$output" != *"BROKEN"* ]]
-  [[ "$output" == *"1 consecutive"* ]]
+  [[ "$output" != *"BROKEN"* ]] || return 1
+  [[ "$output" == *"1 consecutive"* ]] || return 1
 }
 
 # Never let the scan window imply a bound on the outage.
 @test "says the streak is a lower bound when no green exists in the window" {
   mkruns "CI|failure|2026-08-30T05:00:00Z" "CI|failure|2026-08-29T05:00:00Z" "CI|failure|2026-08-28T05:00:00Z"
   run bash "$WATCH" --slack
-  [[ "$output" == *"at least this long"* ]]
+  [[ "$output" == *"at least this long"* ]] || return 1
 }
 
 @test "reports days since last green when there is one" {
   mkruns "CI|failure|2026-08-30T05:00:00Z" "CI|success|2020-01-01T05:00:00Z"
   run bash "$WATCH" --slack
-  [[ "$output" == *"last green"* ]]
-  [[ "$output" != *"at least this long"* ]]
+  [[ "$output" == *"last green"* ]] || return 1
+  [[ "$output" != *"at least this long"* ]] || return 1
 }
 
 @test "names the failing jobs" {
   mkruns "CI|failure|2026-08-30T05:00:00Z"
   run bash "$WATCH" --slack
-  [[ "$output" == *"migrate-db"* ]]
+  [[ "$output" == *"migrate-db"* ]] || return 1
 }
 
 # Silence is not success: an unreadable branch must not look green.
@@ -163,8 +163,8 @@ mkruns() {
   echo '[]' > "$RUNS_FIXTURE"
   run bash "$WATCH" --slack
   [ "$status" -eq 0 ]
-  [[ "$output" == *"UNKNOWN"* ]]
-  [[ "$output" != *"all workflows green"* ]]
+  [[ "$output" == *"UNKNOWN"* ]] || return 1
+  [[ "$output" != *"all workflows green"* ]] || return 1
 }
 
 @test "still-running rows are ignored when judging state" {
@@ -186,7 +186,7 @@ JSON
   mkruns "CI|success|2026-08-30T05:00:00Z"
   run bash "$WATCH" --bogus
   [ "$status" -eq 1 ]
-  [[ "$output" == *"Unknown argument"* ]]
+  [[ "$output" == *"Unknown argument"* ]] || return 1
 }
 
 @test "--limit must be numeric" {

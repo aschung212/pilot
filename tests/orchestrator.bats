@@ -13,5 +13,5 @@ load test_helper
   CSV="$TEST_TMPDIR/runtime.csv"
   echo "date,pipeline_start,pipeline_end,total_sec,discover_sec,triage_sec,builder_sec" > "$CSV"
   HEADER=$(head -1 "$CSV")
-  [[ "$HEADER" == *"date,pipeline_start"* ]]
+  [[ "$HEADER" == *"date,pipeline_start"* ]] || return 1
 }

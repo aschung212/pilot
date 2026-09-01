@@ -133,9 +133,9 @@ LOG
 
   # Parse priorities
   PRIORITIES=$(grep -oE 'ISSUE_DISCOVER:[1-4]:' "$RUN_LOG" | grep -oE '[1-4]' | sort | tr '\n' '/')
-  [[ "$PRIORITIES" == *"1"* ]]
-  [[ "$PRIORITIES" == *"2"* ]]
-  [[ "$PRIORITIES" == *"3"* ]]
+  [[ "$PRIORITIES" == *"1"* ]] || return 1
+  [[ "$PRIORITIES" == *"2"* ]] || return 1
+  [[ "$PRIORITIES" == *"3"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -203,8 +203,8 @@ LOG
   # introspection. Assert against the SHIPPED script, not a copy of the string.
   run grep -E '^DISCOVER_ALLOWED_TOOLS=' "$PILOT_DIR/scripts/discover.sh"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"WebSearch"* ]]
-  [[ "$output" == *"WebFetch"* ]]
+  [[ "$output" == *"WebSearch"* ]] || return 1
+  [[ "$output" == *"WebFetch"* ]] || return 1
 
   # The promise and the capability must stay in sync: if the fallback message
   # still claims self-research, the tools above are what make it true.
@@ -219,7 +219,7 @@ LOG
   # the one caller that legitimately passes --no-grounding.
   run grep -n 'AI_RESEARCH" prompt "\$RESEARCH_PROMPT"' "$PILOT_DIR/scripts/discover.sh"
   [ "$status" -eq 0 ]
-  [[ "$output" != *"--no-grounding"* ]]
+  [[ "$output" != *"--no-grounding"* ]] || return 1
 }
 
 # ── Research backend toggle (added 2026-08-30) ───────────────────────────────

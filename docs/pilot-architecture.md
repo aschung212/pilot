@@ -393,19 +393,83 @@ Reporter only — never mutates an issue, PR, or branch.
 
 ## Testing Infrastructure
 
-The pipeline has a bats-core test suite with **372 tests across 26 test files** in `~/development/pilot/tests/`. Tests use two-tier execution to balance speed with thoroughness:
+The pipeline has a bats-core test suite with **373 tests across 26 test files** in `~/development/pilot/tests/`. Tests use two-tier execution to balance speed with thoroughness:
 
-**Fast tier (323 tests) — pre-commit hook:**
-- Runs before every commit via `.githooks/pre-commit`
+**Fast tier (324 tests) — pre-commit hook (currently NOT wired up):**
+- Intended to run before every commit via `.githooks/pre-commit`. As of
+  2026-08-31 it does not: Pilot's `core.hooksPath` points at
+  `/Users/aaron/development/pilot/.git/hooks`, which is **empty**, so no git
+  hook runs in this repo at all. `init.sh` only ever configures hooks on
+  `$REPO_PATH` (the *Lift* repo, which uses `.husky` and has no `.githooks/`),
+  never on Pilot itself. CI on push is therefore the only tier actually
+  enforcing anything today.
 - Covers: unit tests, adapter contract tests, argument parsing, error handling, log formatting
 - Builder tests source real functions from `lib/builder-utils.sh` (not copies of logic)
 - Parallel execution via GNU parallel (`bats -j 8`)
-- Blocks commit if any test fails
+- Would block the commit if any test fails, once wired up
 
-**Full tier (372 tests) — GitHub Actions CI:**
+**Full tier (373 tests) — GitHub Actions CI:**
 - Runs on every push via `.github/workflows/test.yml`
 - Includes everything in the fast tier plus integration-level tests (CSV analysis, full script invocations)
 - Test paths resolve dynamically (no hardcoded local paths) for CI runner compatibility
+
+**Assertion hygiene — `[[ ]]` does not fail a test on bash 3.2:**
+
+bats runs under whatever `#!/usr/bin/env bash` resolves to. On Aaron's machine
+that is **bash 3.2.57** — Apple's system bash, the only one installed — where a
+failing `[[ ... ]]` does **not** trip errexit (verified against bats 1.13.0;
+plain `bash -c 'set -e; ...'` behaves the same way, so it is the shell, not
+bats, and no bats upgrade fixes it). A bare `[[ ]]` that is not a test's last
+command is therefore *advisory*: the test sails straight past it and can only
+ever fail on its final assertion. `false`, and single-bracket `[ ]`, are caught
+normally — only `[[ ]]` slips through.
+
+```bash
+@test "passes despite the failing assertion" {
+  [[ "a" == "b" ]]   # fails, does NOT abort
+  [[ "a" == "a" ]]   # only this one can fail the test
+}
+```
+
+Measured on 2026-08-31: **95 of 209** bare `[[ ]]` assertions, spread across
+**64 of the suite's tests, in 19 of the 26 files**, were in non-final position
+and could never have failed. It was not hypothetical — a
+`tests/doc-drift-audit.bats` test asserting the suite reported
+`"7 (fast tier 4)"` passed green while the code actually printed
+`"0 (fast tier 0)"`, which is what surfaced the whole class.
+
+**The rule: a `[[ ]]` assertion must never stand as a bare statement.** Two
+spellings satisfy it, and both are in the suite:
+
+- `[[ ... ]] || return 1` — the general form, used for the converted
+  assertions. It preserves the expression exactly, which matters because they
+  are not all substring checks: they include `=~`, `-eq`, `!=` and prefix globs
+  like `== "0,"*`, and rewriting those as `grep -qF` would have quietly changed
+  what they assert.
+- `_has` / `_lacks` helpers — introduced with the static test-count checks in
+  `tests/doc-drift-audit.bats`. A function call is a simple command, so errexit
+  honours it. Preferred where the assertion really is a fixed-string check on
+  `$output`, since it reads better.
+
+The suffix was applied to every bare `[[ ]]`, not only the non-final ones,
+because a final assertion silently becomes advisory the moment anyone appends a
+line after it. `[ ]` is left alone. `|| return 1` is also version-independent:
+it fails the test on any bash, so this does not quietly depend on which shell
+the runner picks up.
+
+**This regresses on its own if nothing enforces it.** Between the measurement
+and the fix landing, one intervening PR (#38, the triage verdict-parsing fix)
+added five fresh bare `[[ ]]` assertions to `tests/triage.bats`, four of them
+non-final — the count went 209 → 214 and the advisory count 95 → 99 in a single
+unrelated change. Nobody did anything wrong; a bare `[[ ]]` is the obvious way
+to write a bats assertion, and nothing was telling anyone otherwise.
+
+So `tests/smoke.bats` enforces the rule mechanically — it scans every `.bats`
+file (skipping heredoc bodies) and fails on any bare `[[ ]]` statement, naming
+the file and line, and accepting either spelling above. It is tagged `fast`, so
+it gates both tiers: CI blocks a regression on push today, and the pre-commit
+hook will too once that hook is actually installed (see below — it currently is
+not).
 
 **Key testing patterns:**
 - **Auto-discovery smoke tests:** Automatically detect new scripts in `scripts/` and `adapters/` that lack corresponding test files. These tests fail when coverage is missing, ensuring the test suite grows with the codebase.
@@ -516,7 +580,7 @@ Feedback loop → canceled issues + product decisions steer discovery;
 | `~/development/pilot/scripts/stale-pr-audit.sh` | Weekly audit: open PRs whose work has already shipped (no-op merges, duplicate/colliding migrations) |
 | `~/development/pilot/scripts/pr-close-reconcile.sh` | Closes/re-triages issues whose PR was closed unmerged — the state:started leak that hid 69% of the backlog from Triage |
 | `~/development/pilot/scripts/doc-drift-audit.sh` | Biweekly audit: docs vs. the repo's actual state (checks in `lib/doc-drift-check.py`) |
-| `~/development/pilot/tests/` | bats-core test suite (372 tests, 26 files, two-tier execution) |
+| `~/development/pilot/tests/` | bats-core test suite (373 tests, 26 files, two-tier execution) |
 | `~/development/pilot/.github/workflows/test.yml` | GitHub Actions CI — full test suite on push |
 | `~/development/pilot/.githooks/pre-commit` | Pre-commit hook — fast test tier on every commit |
 | `~/development/pilot/project.env` | Lift-specific configuration (git-ignored) |

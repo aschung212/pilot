@@ -9,7 +9,7 @@ AI_RESEARCH="$PILOT_DIR/adapters/ai-research.sh"
 @test "ai-research: unknown command exits with error" {
   run bash "$AI_RESEARCH" nonexistent
   [ "$status" -eq 1 ]
-  [[ "$output" == *"Unknown ai-research command"* ]]
+  [[ "$output" == *"Unknown ai-research command"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -48,14 +48,14 @@ AI_RESEARCH="$PILOT_DIR/adapters/ai-research.sh"
   export GEMINI_API_KEY=""
   run bash "$AI_RESEARCH" prompt "test"
   [ "$status" -eq 3 ]
-  [[ "$output" == *"GEMINI_API_KEY not set"* ]]
+  [[ "$output" == *"GEMINI_API_KEY not set"* ]] || return 1
 }
 
 # bats test_tags=fast
 @test "ai-research: empty prompt fails loud (exit 2)" {
   run bash "$AI_RESEARCH" prompt ""
   [ "$status" -eq 2 ]
-  [[ "$output" == *"empty prompt"* ]]
+  [[ "$output" == *"empty prompt"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -64,7 +64,7 @@ AI_RESEARCH="$PILOT_DIR/adapters/ai-research.sh"
   export MOCK_CURL_HTTP_CODE="429"
   run bash "$AI_RESEARCH" prompt "test"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"failed"* ]]
+  [[ "$output" == *"failed"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -79,7 +79,7 @@ AI_RESEARCH="$PILOT_DIR/adapters/ai-research.sh"
   export MOCK_CURL_OUTPUT='{"candidates":[{"content":{"parts":[{"text":"finding one"}]}}]}'
   run bash "$AI_RESEARCH" prompt "test"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"finding one"* ]]
+  [[ "$output" == *"finding one"* ]] || return 1
 }
 
 # ── Backend routing (added 2026-08-30) ───────────────────────────────────────
@@ -96,7 +96,7 @@ AI_RESEARCH="$PILOT_DIR/adapters/ai-research.sh"
 @test "ai-research: unknown backend fails loud instead of falling through to gemini" {
   run bash "$AI_RESEARCH" prompt "test" --backend bogus
   [ "$status" -eq 2 ]
-  [[ "$output" == *"unknown backend"* ]]
+  [[ "$output" == *"unknown backend"* ]] || return 1
   [ ! -f "$TEST_TMPDIR/mock_calls/curl" ]
 }
 
@@ -126,7 +126,7 @@ AI_RESEARCH="$PILOT_DIR/adapters/ai-research.sh"
     run bash "$AI_RESEARCH" prompt "test" --backend claude --no-grounding
   [ "$status" -eq 0 ]
   run grep -o -- "--allowedTools [^ ]*" "$TEST_TMPDIR/mock_calls/claude"
-  [[ "$output" != *"WebSearch"* ]]
+  [[ "$output" != *"WebSearch"* ]] || return 1
   grep -q -- "--disallowedTools WebSearch,WebFetch" "$TEST_TMPDIR/mock_calls/claude"
 }
 
@@ -144,7 +144,7 @@ AI_RESEARCH="$PILOT_DIR/adapters/ai-research.sh"
   MOCK_CLAUDE_OUTPUT='{"result": "", "is_error": true, "subtype": "error_max_turns"}' \
     run bash "$AI_RESEARCH" prompt "test" --backend claude
   [ "$status" -eq 1 ]
-  [[ "$output" == *"Claude request failed"* ]]
+  [[ "$output" == *"Claude request failed"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -155,7 +155,7 @@ AI_RESEARCH="$PILOT_DIR/adapters/ai-research.sh"
 {"result": "real findings", "is_error": false}' \
     run bash "$AI_RESEARCH" prompt "test" --backend claude
   [ "$status" -eq 0 ]
-  [[ "$output" == *"real findings"* ]]
+  [[ "$output" == *"real findings"* ]] || return 1
 }
 
 # bats test_tags=fast

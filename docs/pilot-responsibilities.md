@@ -112,7 +112,7 @@ Verify with `launchctl list | grep doc-drift`. It fires weekly but no-ops on odd
 - Post-merge CI failure → Slack notification
 - Slack threading: one parent message per night, all updates threaded (updated for multi-PR output)
 - Slack webhooks: all notifications are token-free (no Claude instances spawned)
-- Test suite (bats-core, 372 tests across 26 files): fast tier (323 tests) runs on every commit via pre-commit hook, full tier (372 tests) runs on push via GitHub Actions CI
+- Test suite (bats-core, 373 tests across 26 files): full tier (373 tests) runs on push via GitHub Actions CI. The fast tier (324 tests) is *meant* to run on every commit via `.githooks/pre-commit`, but that hook is not currently installed — see the 2026-08-31 assertion changelog entry
 - Auto-discovery smoke tests: fail when new scripts lack test coverage — enforces that every new script gets tests
 - Linear digest: posts board snapshot to #daily-review at 6:15 AM daily (launchd)
 
@@ -171,7 +171,7 @@ If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/T
 | `~/development/lift/CLAUDE.md` | Lift project standards (design, code, workflow) |
 | `~/.claude/commands/ai-review.md` | Daily review slash command |
 | `~/.claude/CLAUDE.md` | Global Claude instructions |
-| `~/development/pilot/tests/` | bats-core test suite — 26 test files, 372 tests (fast tier, 323, runs in the pre-commit hook) |
+| `~/development/pilot/tests/` | bats-core test suite — 26 test files, 373 tests (fast tier, 324; the pre-commit hook is not currently wired up) |
 | `~/development/pilot/.github/workflows/test.yml` | GitHub Actions CI — runs full test suite on push |
 | `~/development/pilot/.githooks/pre-commit` | Git pre-commit hook — runs fast test tier before every commit |
 | `~/Documents/Scripts/lift-triage.sh` | Gemini issue triage — reviews, enhances, and plans before builder runs |
@@ -201,6 +201,121 @@ If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/T
 ---
 
 ## Changelog
+
+### 2026-08-31 — 95 test assertions across the suite could never have failed
+
+This is the follow-up PR #37 flagged and deliberately left out of scope. While
+writing that audit's test-count check, a test went green asserting the suite
+reported `"7 (fast tier 4)"` while the code actually printed `"0 (fast tier 0)"`.
+The assertion was simply never evaluated as a failure. #37 routed *its own* new
+assertions through `_has`/`_lacks`; this is the audit of the other 25 files.
+
+**The cause is bash, not bats.** bats runs under `#!/usr/bin/env bash`, which on
+your machine is **bash 3.2.57** — Apple's system bash, the only one installed.
+There, a failing `[[ ... ]]` does **not** trip errexit:
+
+```bash
+@test "passes despite the failing assertion" {
+  [[ "a" == "b" ]]   # fails, does NOT abort
+  [[ "a" == "a" ]]   # only this one can fail the test
+}
+```
+
+`false` and single-bracket `[ ]` are caught normally — only `[[ ]]` slips
+through, and it is the shell that does it (plain `bash -c 'set -e; …'` behaves
+identically), so it is not a bats bug and no bats upgrade fixes it.
+
+The consequence: **a bare `[[ ]]` that is not a test's last command is
+advisory** — the test sails past it and can only ever fail on its final
+assertion.
+
+**Measured across `tests/*.bats`:** 209 bare `[[ ]]` assertions, of which
+**95 — in 64 tests across 19 of the 26 files — were in non-final position** and
+could never have failed. The worst offenders were `target-ci-watch` (10),
+`claim-manual-issues`, `health-report` and `pr-close-reconcile` (9 each).
+
+**It regrew while this PR was in review.** #38 (the triage verdict-parsing fix)
+added five fresh bare `[[ ]]` to `tests/triage.bats`, four of them non-final —
+209 → 214 bare, 95 → 99 advisory, in one unrelated change. That is not a
+criticism of that PR: a bare `[[ ]]` is the obvious way to write a bats
+assertion and nothing was saying otherwise. It is the argument for the guard
+below, and the final numbers here are 214 converted, not 209.
+
+**The fix.** Every `[[ ]]` used as a statement now carries `|| return 1`, which
+makes it a plain command errexit does catch. Applied to all 209, not just the 95
+that were non-final, because a final assertion silently becomes advisory the
+moment anyone appends a line after it. `[ ]` is left alone. The change is
+provably behaviour-preserving: all 209 edited lines are the original line plus
+that suffix, nothing else moved.
+
+`|| return 1` was chosen over converting everything to #37's `_has`/`_lacks`
+pair because the assertions are not all substring checks on `$output` — they
+include `=~`, `-eq`, `!=`, prefix globs (`== "0,"*`) and other variables, and
+routing those through `grep -qF` would have quietly changed what several of them
+assert. Both spellings are valid and both remain in the suite: the helpers where
+the check really is a fixed string, the suffix everywhere else. The guard accepts
+either.
+
+**What the conversion exposed: nothing false — and that is a real result, not a
+non-answer.** The whole point of converting was to find assertions that had been
+quietly untrue. The full suite was run afterwards (361 tests, every file): all
+95 formerly-advisory assertions now genuinely gate their tests, and **all 95
+pass**. They were asserting true things all along; they simply could not have
+failed.
+
+That conclusion is only worth anything if the fix actually bites, so it was
+checked directly against a real test rather than assumed. Falsifying one
+converted assertion (`target-ci-watch.bats:95`, a non-final one) makes its test
+fail; removing just the `|| return 1` from that same falsified line makes it
+pass again:
+
+```
+[[ "$output" == *"ZZZ_NOT_PRESENT"* ]] || return 1   ->  not ok
+[[ "$output" == *"ZZZ_NOT_PRESENT"* ]]               ->  ok      <- the bug
+```
+
+**Final suite state: 373 tests, all green on CI** (`1..373`, zero failures).
+
+Locally, one test did fail: `builder: run_with_timeout kills the whole
+descendant tree on timeout`. It is unrelated to this work — the conversion never touched that
+test (its text is byte-identical to before) and its failing assertion is a
+single-bracket `[ ]`, which errexit has always caught. It is a timing race: it
+kills a process tree at a 1s timeout and asserts a grandchild scheduled at 2s
+never runs. On a loaded machine the kill slips past 2s. Measured at load ~102:
+2 of 3 isolated runs failed; on an idle machine it passes. Filed separately.
+
+Two other tests went red mid-run (`cleanup`, `security-scan`) and were **not**
+real: three Claude sessions were running the suite concurrently and filled the
+process table (`kern.maxprocperuid` = 2666, ~2275 in use), so bats died with
+`fork: Resource temporarily unavailable`. Both pass on re-run — `security-scan`
+9/9, `cleanup` 13/13. Worth knowing that this is what suite-wide breakage from
+machine contention looks like, since it mimics a real regression.
+
+**It cannot come back.** `tests/smoke.bats` gained a guard that scans every
+`.bats` file (heredoc-aware) and fails on any bare `[[ ]]` statement, so the
+pre-commit fast tier blocks a regression. It was verified to actually go red
+when a bare `[[ ]]` is reintroduced — per this repo's own lesson about
+detectors that only ever report success.
+
+#### ⚠️ New for Aaron
+
+- **Never leave a `[[ ... ]]` standing as a bare statement in a bats test.**
+  Write `[[ ... ]] || return 1`, or use #37's `_has`/`_lacks` helpers where the
+  check is a fixed string. `[ ... ]` needs no suffix — errexit catches it. The
+  guard names the file and line when you forget, and CI enforces it on push.
+- **Separately: your pre-commit hook has never been running.** Pilot's
+  `core.hooksPath` is set to `.git/hooks`, which is empty, so `.githooks/pre-commit`
+  never fires — the "fast tier blocks the commit" gate both docs describe has
+  been inactive, and `init.sh` configures hooks on `$REPO_PATH` (Lift) rather
+  than on Pilot. CI on push still runs the full tier, so nothing was unguarded,
+  but nothing was caught locally either. Fix with:
+  `git -C ~/development/pilot config core.hooksPath .githooks` — though the
+  flaky builder test above will intermittently block commits until it is fixed,
+  so do that one first.
+- **This does not apply to the pipeline scripts**, only to `tests/*.bats`.
+  Scripts use `set -uo pipefail` and check statuses explicitly.
+- **Counts are now 373 total / 324 fast** — #38's 372/323 plus this PR's one
+  guard test.
 
 ### 2026-08-31 — The doc-drift audit's test-count check counts statically
 

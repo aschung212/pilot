@@ -86,7 +86,7 @@ mkfixture() {
   mkfixture "1271|aschung212||progressive overload"
   run bash "$CLAIM" --apply
   [ "$status" -eq 0 ]
-  [[ "$output" == *"promoted LIFT-1271"* ]]
+  [[ "$output" == *"promoted LIFT-1271"* ]] || return 1
   grep -q "EDIT 1271" "$ACTION_LOG"
 }
 
@@ -94,7 +94,7 @@ mkfixture() {
   mkfixture "1272|aschung212|Feature|bulking vs cutting"
   run bash "$CLAIM" --apply
   [ "$status" -eq 0 ]
-  [[ "$output" == *"promoted LIFT-1272"* ]]
+  [[ "$output" == *"promoted LIFT-1272"* ]] || return 1
 }
 
 @test "adds origin:aaron, priority:1-urgent and state:unstarted" {
@@ -111,7 +111,7 @@ mkfixture() {
   mkfixture "9003|randomuser||crash on startup"
   run bash "$CLAIM" --apply
   [ "$status" -eq 0 ]
-  [[ "$output" == *"No unclaimed hand-filed issues"* ]]
+  [[ "$output" == *"No unclaimed hand-filed issues"* ]] || return 1
   [ ! -s "$ACTION_LOG" ]
 }
 
@@ -120,14 +120,14 @@ mkfixture() {
 @test "ignores a Pilot-created issue (has a state:* label)" {
   mkfixture "9004|aschung212|state:unstarted,priority:3-medium|[Architect] something"
   run bash "$CLAIM" --apply
-  [[ "$output" == *"No unclaimed hand-filed issues"* ]]
+  [[ "$output" == *"No unclaimed hand-filed issues"* ]] || return 1
   [ ! -s "$ACTION_LOG" ]
 }
 
 @test "is idempotent — skips an issue already carrying origin:aaron" {
   mkfixture "9005|aschung212|origin:aaron,priority:1-urgent|already promoted"
   run bash "$CLAIM" --apply
-  [[ "$output" == *"No unclaimed hand-filed issues"* ]]
+  [[ "$output" == *"No unclaimed hand-filed issues"* ]] || return 1
   [ ! -s "$ACTION_LOG" ]
 }
 
@@ -139,7 +139,7 @@ mkfixture() {
     "9004|aschung212|state:triage,priority:2-high|pilot issue" \
     "9005|aschung212|origin:aaron|already claimed"
   run bash "$CLAIM" --apply
-  [[ "$output" == *"Found 2 hand-filed issue(s)"* ]]
+  [[ "$output" == *"Found 2 hand-filed issue(s)"* ]] || return 1
   grep -q "EDIT 1271" "$ACTION_LOG"
   grep -q "EDIT 1272" "$ACTION_LOG"
   ! grep -q "EDIT 9003" "$ACTION_LOG"
@@ -152,8 +152,8 @@ mkfixture() {
   mkfixture "1271|aschung212||progressive overload"
   run bash "$CLAIM"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"DRY RUN"* ]]
-  [[ "$output" == *"would promote LIFT-1271"* ]]
+  [[ "$output" == *"DRY RUN"* ]] || return 1
+  [[ "$output" == *"would promote LIFT-1271"* ]] || return 1
   [ ! -s "$ACTION_LOG" ]
 }
 
@@ -161,27 +161,27 @@ mkfixture() {
   mkfixture "1271|aschung212||progressive overload"
   MANUAL_CLAIM_ENABLED=0 run bash "$CLAIM" --apply
   [ "$status" -eq 0 ]
-  [[ "$output" == *"disabled"* ]]
+  [[ "$output" == *"disabled"* ]] || return 1
   [ ! -s "$ACTION_LOG" ]
 }
 
 @test "--author overrides the configured author" {
   mkfixture "9003|someoneelse||their issue"
   run bash "$CLAIM" --apply --author someoneelse
-  [[ "$output" == *"promoted LIFT-9003"* ]]
+  [[ "$output" == *"promoted LIFT-9003"* ]] || return 1
 }
 
 @test "rejects an unknown argument instead of silently ignoring it" {
   mkfixture "1271|aschung212||progressive overload"
   run bash "$CLAIM" --bogus
   [ "$status" -eq 1 ]
-  [[ "$output" == *"Unknown argument"* ]]
+  [[ "$output" == *"Unknown argument"* ]] || return 1
 }
 
 @test "author defaults to the GITHUB_ISSUES_REPO owner when unset" {
   mkfixture "1271|aschung212||progressive overload"
   unset MANUAL_ISSUE_AUTHOR
   run bash "$CLAIM" --apply
-  [[ "$output" == *"author: aschung212"* ]]
-  [[ "$output" == *"promoted LIFT-1271"* ]]
+  [[ "$output" == *"author: aschung212"* ]] || return 1
+  [[ "$output" == *"promoted LIFT-1271"* ]] || return 1
 }
