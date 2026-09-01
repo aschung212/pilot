@@ -19,7 +19,7 @@ updated: 2026-05-08
 
 | What | How | Where to check |
 |---|---|---|
-| **Check Slack** | Open #lift-automation — nightly summary categorizes PRs as "Ready to merge" (green, verdict: MERGE) or "Needs review" (yellow, verdict: REVIEW). Also check #daily-review for Linear digest. | #lift-automation, #daily-review |
+| **Check Slack** | Open #lift-automation — nightly summary categorizes PRs as "Ready to merge" (green, verdict: MERGE) or "Needs review" (yellow, verdict: REVIEW). The issue digest is **manual-only** — run `scripts/digest.sh` for a board snapshot. | #lift-automation, #daily-review |
 | **Merge green PRs** | PRs with MERGE verdict — CI passed, 3-layer review clean. Merge directly. | github.com/aschung212/Lift/pulls |
 | **Review yellow PRs** | PRs with REVIEW verdict — read review comments in PR description, decide merge/comment | github.com/aschung212/Lift/pulls |
 | **Ignore failed PRs** | PRs labeled `ci:failed` auto-retry next night — no action needed | — |
@@ -28,7 +28,7 @@ updated: 2026-05-08
 | **Test locally if needed** | `cd ~/development/lift && npm run dev` | localhost |
 | **Merge or request changes** | GitHub PR UI — merge individually, each PR is self-contained | Vercel auto-deploys on merge to master |
 | **Leave a closing comment when rejecting a PR** | If you close a PR without merging, add a one-line comment saying why. cleanup.sh harvests it into `data/lift-build-learnings.md` and the builder reads it every iteration — no comment means the builder cannot learn from the rejection. | GitHub PR UI |
-| **Act on digest blockers** | The 6:15 AM digest now lists "⏳ Waiting on you" (needs-input issues — answer, then flip `state:needs-input` → `state:unstarted`), "⚖️ Needs your call" (issues whose PR was closed unmerged — recycle to unstarted or close as not planned), and "⚙️ Pilot pipeline" (open issues in the Pilot repo itself — these are pipeline defects, **no agent works them**, they're yours to fix or delegate in a Claude session). Each section renders only when nonzero. | #daily-review digest |
+| **Act on digest blockers** | Run `scripts/digest.sh` by hand — it lists "⏳ Waiting on you" (needs-input issues — answer, then flip `state:needs-input` → `state:unstarted`), "⚖️ Needs your call" (issues whose PR was closed unmerged — recycle to unstarted or close as not planned), and "⚙️ Pilot pipeline" (open issues in the Pilot repo itself — these are pipeline defects, **no agent works them**, they're yours to fix or delegate in a Claude session). Each section renders only when nonzero. | #daily-review digest |
 | **Triage discovery issues** | Review new Linear issues from discovery agent, set priorities, add comments, cancel junk | linear.app/masterchung -> Lift project |
 | **Run `/ai-review`** | Claude Code CLI | Posts summary + LC update to #daily-review |
 
@@ -51,7 +51,7 @@ updated: 2026-05-08
 
 | What | How |
 |---|---|
-| **Review Linear digest** | Auto-posted to #daily-review at 6:15 AM via launchd. Check it during morning Slack review. |
+| **Run the issue digest (manual)** | There is no scheduled digest: the only digest job, `com.aaron.linear-digest.plist`, was disabled 2026-06-18 and no plist in `launchd/` replaced it. Run `scripts/digest.sh` for a board snapshot. **`target-ci-watch.sh` runs only from inside `digest.sh`, so the red-master-CI watcher does not run either unless you run the digest.** |
 | **Read the Health Report's Services section** | Auto-posted Sunday 08:00. It now reconciles every committed plist against `launchctl`: not loaded, non-zero last exit, or a log staler than the service's own cadence. Nothing watched launchd exit codes before 2026-08-28, which is how two agents stayed broken for months. Anything listed there is a service that is failing or not running at all. |
 | **Act on the doc-drift audit** | Auto-posted to #lift-automation Sunday 09:00, **every other week** (even ISO weeks). Flags docs that disagree with the repo: undocumented scripts/adapters/env vars, dead references, plists missing from the schedule tables, stale test counts, broken vault paths. Each finding needs your call on which side is wrong — sometimes the doc is right and the code is the bug. Run any time: `./scripts/doc-drift-audit.sh`. |
 | **Act on the stale-PR audit** | Auto-posted to #lift-automation Sunday 08:15. It flags open PRs whose work already shipped — no-op merges, migrations duplicating a master column, two open PRs adding the same column. A clean week still posts one line, so silence means the job broke. Anything flagged is a PR to close or land **before** Sunday 22:00 discovery. |
@@ -83,7 +83,7 @@ cp ~/development/pilot/launchd/com.aaron.pilot-doc-drift.plist ~/Library/LaunchA
 Verify with `launchctl list | grep doc-drift`. It fires weekly but no-ops on odd ISO weeks, so the first real run is **Sunday 2026-09-06** (ISO week 36).
 
 - [x] Run `/github subscribe aschung212/Lift` in #lift-automation in Slack ✅ 2026-03-31
-- [x] Schedule `linear-digest.sh` via cron or launchd for mornings ✅ 2026-03-31 (launchd, 6:15 AM daily)
+- [x] Schedule `linear-digest.sh` via cron or launchd for mornings ✅ 2026-03-31 — *job disabled 2026-06-18; the digest is manual-only now*
 - [ ] Create the `GA` milestone in aschung212/Lift and add the GA-blocking issues to it — the weekly health report tracks it as the release burndown (added 2026-08-28)
 
 ---
@@ -114,7 +114,7 @@ Verify with `launchctl list | grep doc-drift`. It fires weekly but no-ops on odd
 - Slack webhooks: all notifications are token-free (no Claude instances spawned)
 - Test suite (bats-core, 376 tests across 26 files): fast tier (327 tests) runs on every commit via pre-commit hook, full tier (376 tests) runs on push via GitHub Actions CI. The pre-commit gate went live 2026-08-31 — before that it had never run (see changelog); commits from a Claude session worktree are still exempt unless that worktree's `core.hooksPath` override is cleared
 - Auto-discovery smoke tests: fail when new scripts lack test coverage — enforces that every new script gets tests
-- Linear digest: posts board snapshot to #daily-review at 6:15 AM daily (launchd)
+- Issue digest: manual only (`scripts/digest.sh`) — the 6:15 AM launchd job was disabled 2026-06-18
 
 ## What's NOT Automated
 
@@ -186,7 +186,7 @@ If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/T
 | Channel | What posts there |
 |---|---|
 | #lift-automation | Overnight build iterations, discovery digests, GitHub activity (pending setup) |
-| #daily-review | AI review summary, LeetCode updates, Linear digest |
+| #daily-review | AI review summary, LeetCode updates, issue digest (when run by hand) |
 | #pilot | Pilot changelog — what changed, new responsibilities |
 
 ## Environment Variables (`~/.zshenv`)
@@ -201,6 +201,20 @@ If that prints `AUTH_OK`, the next scheduled run (discover/triage/builder, Tue/T
 ---
 
 ## Changelog
+
+### 2026-09-01 — There is no morning digest, so `target-ci-watch.sh` has never run
+
+Landing two doc corrections that had been sitting unmerged on `claude/lucid-hodgkin-79e837` and `claude/unruffled-gates-542a77` since 2026-08-27. Both said the same thing: the docs claim a 6:15 AM digest that does not exist.
+
+**Verified against the machine, not the docs.** `com.aaron.linear-digest.plist` was disabled on 2026-06-18 and still sits in `~/Library/LaunchAgents/` as `…plist.disabled.20260618`. No plist in `launchd/` replaced it, and `launchctl list` shows zero digest jobs. The Scheduled Tasks table nevertheless carried a `6:15 AM | Issue Digest | Daily | com.aaron.linear-digest` row, and the responsibilities doc told you to review it every morning.
+
+**The consequence is bigger than a stale table.** `target-ci-watch.sh` — written 2026-08-30 specifically so a red `master` CI could not go unnoticed again — is invoked from exactly one place: inside `digest.sh`. `digest.sh` is in no plist. So the watcher rides on a job that had already been disabled for **ten weeks** when it was written, and its changelog promise ("a red workflow will now appear at the top of your morning digest") has never once been true. The same goes for the digest's "⏳ Waiting on you", "⚖️ Needs your call" and "⚙️ Pilot pipeline" sections, all three of which the responsibilities doc lists as daily duties.
+
+**The doc-drift audit could not have caught it.** Check 3 walks `launchd/*.plist` and looks for a matching table row — plists → table. A table row naming a plist that does not exist is the opposite direction and is unchecked, which is exactly the shape this row had.
+
+**What changed here is documentation only.** The digest is now described as manual (`scripts/digest.sh`), the dead plist reference is gone from both docs, and the `target-ci-watch` dependency is stated where the digest is described. **Nothing was rescheduled** — deciding whether the digest should run again, and at what time, is a pipeline change and yours to make.
+
+**Action needed for Aaron:** Decide whether to re-enable a scheduled digest. Until you do, red master CI is only visible if you run `scripts/digest.sh` by hand.
 
 ### 2026-08-31 — 95 test assertions across the suite could never have failed
 

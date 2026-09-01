@@ -48,7 +48,7 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
 │                                  └──────────┘               │
 └─────────────────────────────────────────────────────────────┘
                           │
-                    6:15 AM ─ Linear digest posted
+                    (no scheduled digest — manual `scripts/digest.sh`)
                           │
                     6:30 AM ─ Aaron's day starts
                           ▼
@@ -508,7 +508,7 @@ Pipeline is fully decomposed — each service has its own launchd plist. No orch
 
 | Time | Service | Schedule | Plist |
 |---|---|---|---|
-| 6:15 AM | Issue Digest | Daily | `com.aaron.linear-digest` |
+| — | Issue Digest | **Manual only** (`scripts/digest.sh`) | *none — `com.aaron.linear-digest` was disabled 2026-06-18 and never replaced* |
 | 8:00 AM Sun | Health Report | Weekly | `com.aaron.pilot-health` |
 | 8:15 AM Sun | Stale-PR Audit | Weekly | `com.aaron.pilot-stale-pr-audit` |
 | 9:00 AM Sun | Doc-Drift Audit | Biweekly (even ISO weeks) | `com.aaron.pilot-doc-drift` |
@@ -543,7 +543,7 @@ Pipeline is fully decomposed — each service has its own launchd plist. No orch
 | Channel | What posts there |
 |---|---|
 | #lift-automation | Build iterations, discovery digests, triage summaries, PR reviews, auto-tuner decisions |
-| #daily-review | Issue digest (6:15 AM), AI review summaries, LeetCode updates |
+| #daily-review | Issue digest (manual runs only), AI review summaries, LeetCode updates |
 | #pilot | Workflow changes — posted automatically when scripts or responsibilities change |
 
 **Slack bot identities:** Each agent posts with a distinct username and emoji avatar for visual distinction. The `notify.sh` adapter supports `--as <identity>` flag to set username/icon_emoji per agent. Falls back to Bot API when webhook fails.
