@@ -9,7 +9,7 @@ NOTIFY="$PILOT_DIR/adapters/notify.sh"
 @test "notify: unknown command exits with error" {
   run bash "$NOTIFY" nonexistent
   [ "$status" -eq 1 ]
-  [[ "$output" == *"Unknown notify command"* ]]
+  [[ "$output" == *"Unknown notify command"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -47,7 +47,7 @@ NOTIFY="$PILOT_DIR/adapters/notify.sh"
   run bash "$NOTIFY" thread-start automation "Starting thread"
   [ "$status" -eq 0 ]
   # Our mock curl returns {"ok": true, "ts": "1234567890.123456"}
-  [[ "$output" == *"1234567890.123456"* ]]
+  [[ "$output" == *"1234567890.123456"* ]] || return 1
 }
 
 # bats test_tags=fast

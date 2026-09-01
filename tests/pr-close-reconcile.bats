@@ -54,7 +54,7 @@ _now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 JSON
   run bash "$RECONCILE" --apply
   [ "$status" -eq 0 ]
-  [[ "$output" == *"close #500"* ]]
+  [[ "$output" == *"close #500"* ]] || return 1
   grep -q "CLOSE 500" "$ACTION_LOG"
 }
 
@@ -66,9 +66,9 @@ JSON
 JSON
   run bash "$RECONCILE" --apply
   [ "$status" -eq 0 ]
-  [[ "$output" == *"conflicting issue links"* ]]
-  [[ "$output" == *"title=616"* ]]
-  [[ "$output" == *"body=1064"* ]]
+  [[ "$output" == *"conflicting issue links"* ]] || return 1
+  [[ "$output" == *"title=616"* ]] || return 1
+  [[ "$output" == *"body=1064"* ]] || return 1
   # Nothing at all may be mutated on a conflicted link.
   [ ! -s "$ACTION_LOG" ]
 }
@@ -81,8 +81,8 @@ JSON
 JSON
   run bash "$RECONCILE" --apply
   [ "$status" -eq 0 ]
-  [[ "$output" == *"triage #1064"* ]]
-  [[ "$output" == *"too weak to close"* ]]
+  [[ "$output" == *"triage #1064"* ]] || return 1
+  [[ "$output" == *"too weak to close"* ]] || return 1
   grep -q "EDIT 1064" "$ACTION_LOG"
   ! grep -q "CLOSE" "$ACTION_LOG"
 }
@@ -97,8 +97,8 @@ JSON
 JSON
   run bash "$RECONCILE" --apply
   [ "$status" -eq 0 ]
-  [[ "$output" == *"triage #501"* ]]
-  [[ "$output" == *"no stated verdict"* ]]
+  [[ "$output" == *"triage #501"* ]] || return 1
+  [[ "$output" == *"no stated verdict"* ]] || return 1
   ! grep -q "CLOSE" "$ACTION_LOG"
 }
 
@@ -132,7 +132,7 @@ JSON
 JSON
   run bash "$RECONCILE"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"DRY RUN"* ]]
+  [[ "$output" == *"DRY RUN"* ]] || return 1
   [ ! -s "$ACTION_LOG" ]
 }
 

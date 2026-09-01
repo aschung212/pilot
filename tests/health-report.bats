@@ -107,7 +107,7 @@ if stall_rate > 40:
     anomalies.append(f'High stall rate: {stall_rate:.0f}%')
 print(anomalies[0] if anomalies else 'none')
 ")
-  [[ "$result" == *"High stall rate: 45%"* ]]
+  [[ "$result" == *"High stall rate: 45%"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -156,7 +156,7 @@ print(anomalies[0] if anomalies else 'none')
 
   run bash "$PILOT_DIR/scripts/health-report.sh" --dry-run
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Builder has not run in 5 days"* ]]
+  [[ "$output" == *"Builder has not run in 5 days"* ]] || return 1
 }
 
 # bats test_tags=slow
@@ -173,7 +173,7 @@ print(anomalies[0] if anomalies else 'none')
 
   run bash "$PILOT_DIR/scripts/health-report.sh" --dry-run
   [ "$status" -eq 0 ]
-  [[ "$output" != *"has not run in"* ]]
+  [[ "$output" != *"has not run in"* ]] || return 1
 }
 
 # ── Delivery / flow metrics + GA burndown ────────────────────────────────────
@@ -188,13 +188,13 @@ print(anomalies[0] if anomalies else 'none')
   HEALTH="$PILOT_DIR/scripts/health-report.sh"
   run bash "$HEALTH" --dry-run
   [ "$status" -eq 0 ]
-  [[ "$output" == *"## Delivery"* ]]
-  [[ "$output" == *"PRs merged (7d):"* ]]
-  [[ "$output" == *"## GA Burndown"* ]]
+  [[ "$output" == *"## Delivery"* ]] || return 1
+  [[ "$output" == *"PRs merged (7d):"* ]] || return 1
+  [[ "$output" == *"## GA Burndown"* ]] || return 1
   # The stock gh mock returns non-JSON, so flow metrics must degrade to zeros
   # and the burndown line must fall back to the create-the-milestone hint.
-  [[ "$output" == *"Tokens per merged PR"* || "$output" == *"Output tokens per merged PR"* ]]
-  [[ "$output" == *"not found"* ]]
+  [[ "$output" == *"Tokens per merged PR"* || "$output" == *"Output tokens per merged PR"* ]] || return 1
+  [[ "$output" == *"not found"* ]] || return 1
 }
 
 # bats test_tags=slow
@@ -233,10 +233,10 @@ GHEOF
   HEALTH="$PILOT_DIR/scripts/health-report.sh"
   run bash "$HEALTH" --dry-run
   [ "$status" -eq 0 ]
-  [[ "$output" == *"PRs merged (7d):** 1"* ]]
-  [[ "$output" == *"Merge rate:** 50%"* ]]
-  [[ "$output" == *"Avg time-to-merge:** 24"* ]]
-  [[ "$output" == *"oldest: 10d"* ]]
-  [[ "$output" == *"Review queue aging"* ]]
-  [[ "$output" == *"9/12 closed (75%)"* ]]
+  [[ "$output" == *"PRs merged (7d):** 1"* ]] || return 1
+  [[ "$output" == *"Merge rate:** 50%"* ]] || return 1
+  [[ "$output" == *"Avg time-to-merge:** 24"* ]] || return 1
+  [[ "$output" == *"oldest: 10d"* ]] || return 1
+  [[ "$output" == *"Review queue aging"* ]] || return 1
+  [[ "$output" == *"9/12 closed (75%)"* ]] || return 1
 }

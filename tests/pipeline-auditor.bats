@@ -62,7 +62,7 @@ teardown() {
 @test "auditor: --days rejects non-integer value" {
   run bash "$PILOT_DIR/scripts/pipeline-auditor.sh" --days abc
   [ "$status" -ne 0 ]
-  [[ "$output" == *"Invalid --days value"* ]]
+  [[ "$output" == *"Invalid --days value"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -200,7 +200,7 @@ teardown() {
   csv="$TEST_TMPDIR/audit.csv"
   append_audit_history "$csv" "2026-04-30" "f42" "P2" "stall_rate" "0.4" "0.2" "0.2" "watch next week"
   ROW=$(tail -1 "$csv")
-  [[ "$ROW" == "2026-04-30,f42,P2,stall_rate,0.4,0.2,0.2,\"watch next week\"" ]]
+  [[ "$ROW" == "2026-04-30,f42,P2,stall_rate,0.4,0.2,0.2,\"watch next week\"" ]] || return 1
 }
 
 # bats test_tags=fast
@@ -209,7 +209,7 @@ teardown() {
   append_audit_history "$csv" "2026-04-30" "f99" "P1" "duplicate_prs" "5" "0" "5" "found 5 dups, propose dedup fix"
   ROW=$(tail -1 "$csv")
   # The action field must be quoted so the embedded comma doesn't split fields.
-  [[ "$ROW" == *'"found 5 dups, propose dedup fix"' ]]
+  [[ "$ROW" == *'"found 5 dups, propose dedup fix"' ]] || return 1
   # And the row must still have exactly 8 logical fields when parsed by Python csv.
   COL_COUNT=$(tail -1 "$csv" | python3 -c "import csv,sys; print(len(next(csv.reader(sys.stdin))))")
   [ "$COL_COUNT" -eq 8 ]

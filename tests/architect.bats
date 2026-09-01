@@ -76,13 +76,13 @@ teardown() {
 # bats test_tags=fast
 @test "architect: axis_display_name returns human name for store-coherence" {
   result=$(axis_display_name "store-coherence")
-  [[ "$result" == *"Store"* ]]
+  [[ "$result" == *"Store"* ]] || return 1
 }
 
 # bats test_tags=fast
 @test "architect: axis_display_name returns human name for type-safety" {
   result=$(axis_display_name "type-safety")
-  [[ "$result" == *"Type"* ]]
+  [[ "$result" == *"Type"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -139,7 +139,7 @@ teardown() {
 # bats test_tags=fast
 @test "architect: build_axis_prompt contains repo path" {
   result=$(build_axis_prompt "store-coherence" "/fake/repo")
-  [[ "$result" == *"/fake/repo"* ]]
+  [[ "$result" == *"/fake/repo"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -162,15 +162,15 @@ teardown() {
 # bats test_tags=fast
 @test "architect: build_architect_prompt contains JSON output format" {
   result=$(build_architect_prompt "type-safety" "/fake/repo" "TestProject")
-  [[ "$result" == *'"findings"'* ]]
-  [[ "$result" == *'"title"'* ]]
-  [[ "$result" == *'"priority"'* ]]
+  [[ "$result" == *'"findings"'* ]] || return 1
+  [[ "$result" == *'"title"'* ]] || return 1
+  [[ "$result" == *'"priority"'* ]] || return 1
 }
 
 # bats test_tags=fast
 @test "architect: build_architect_prompt embeds axis display name" {
   result=$(build_architect_prompt "type-safety" "/fake/repo" "TestProject")
-  [[ "$result" == *"Type-Safety"* ]]
+  [[ "$result" == *"Type-Safety"* ]] || return 1
 }
 
 # ── parse_architect_json ──────────────────────────────────────────────────────
@@ -185,13 +185,13 @@ teardown() {
 EOF
   result=$(parse_architect_json "$TEST_TMPDIR/arch-output.json")
   # Should be "count,top_title"
-  [[ "$result" == *"Missing error state"* ]]
+  [[ "$result" == *"Missing error state"* ]] || return 1
 }
 
 # bats test_tags=fast
 @test "architect: parse_architect_json handles missing file" {
   result=$(parse_architect_json "$TEST_TMPDIR/nonexistent.json")
-  [[ "$result" == "0,"* ]]
+  [[ "$result" == "0,"* ]] || return 1
 }
 
 # ── parse_usage_architect ─────────────────────────────────────────────────────
@@ -234,7 +234,7 @@ EOF
 
   run bash "$PILOT_DIR/scripts/architect.sh" --axis "totally-made-up-axis"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"Unknown axis"* ]]
+  [[ "$output" == *"Unknown axis"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -254,7 +254,7 @@ EOF
   # Should exit 0 (or at least not crash hard — Claude mock may skip some paths)
   # In test mode, issue filing is suppressed, Slack is suppressed
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Architect run complete"* ]]
+  [[ "$output" == *"Architect run complete"* ]] || return 1
 }
 
 # bats test_tags=fast

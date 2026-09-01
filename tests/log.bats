@@ -8,9 +8,9 @@ load test_helper
   export LOG_COMPONENT="test-component"
   source "$PILOT_DIR/lib/log.sh"
   output=$(log_info "hello world")
-  [[ "$output" == *"INFO"* ]]
-  [[ "$output" == *"test-component"* ]]
-  [[ "$output" == *"hello world"* ]]
+  [[ "$output" == *"INFO"* ]] || return 1
+  [[ "$output" == *"test-component"* ]] || return 1
+  [[ "$output" == *"hello world"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -18,8 +18,8 @@ load test_helper
   export LOG_COMPONENT="test-component"
   source "$PILOT_DIR/lib/log.sh"
   output=$(log_warn "something off")
-  [[ "$output" == *"WARN"* ]]
-  [[ "$output" == *"something off"* ]]
+  [[ "$output" == *"WARN"* ]] || return 1
+  [[ "$output" == *"something off"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -27,8 +27,8 @@ load test_helper
   export LOG_COMPONENT="test-component"
   source "$PILOT_DIR/lib/log.sh"
   output=$(log_error "bad thing" 2>/dev/null)
-  [[ "$output" == *"ERROR"* ]]
-  [[ "$output" == *"bad thing"* ]]
+  [[ "$output" == *"ERROR"* ]] || return 1
+  [[ "$output" == *"bad thing"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -47,5 +47,5 @@ load test_helper
   source "$PILOT_DIR/lib/log.sh"
   output=$(log_info "timestamped")
   # Should match YYYY-MM-DD HH:MM:SS pattern
-  [[ "$output" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2} ]]
+  [[ "$output" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2} ]] || return 1
 }

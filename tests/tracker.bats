@@ -110,7 +110,7 @@ TRACKER="$PILOT_DIR/adapters/tracker.sh"
   export ISSUE_PREFIX="LIFT"
   run bash "$TRACKER" issue-url LIFT-100
   [ "$status" -eq 0 ]
-  [[ "$output" == *"github.com/test/repo/issues/100"* ]]
+  [[ "$output" == *"github.com/test/repo/issues/100"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -120,7 +120,7 @@ TRACKER="$PILOT_DIR/adapters/tracker.sh"
   export ISSUE_PREFIX="LIFT"
   run bash "$TRACKER" board-url
   [ "$status" -eq 0 ]
-  [[ "$output" == *"github.com/test/repo/issues"* ]]
+  [[ "$output" == *"github.com/test/repo/issues"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -175,7 +175,7 @@ TRACKER="$PILOT_DIR/adapters/tracker.sh"
 @test "tracker: unknown command exits with error" {
   run bash "$TRACKER" nonexistent
   [ "$status" -eq 1 ]
-  [[ "$output" == *"Unknown tracker command"* ]]
+  [[ "$output" == *"Unknown tracker command"* ]] || return 1
 }
 
 # ── close reason normalization ───────────────────────────────────────────────
@@ -210,7 +210,7 @@ GHEOF
   run bash "$PILOT_DIR/adapters/tracker.sh" close TEST-7 not_planned
   [ "$status" -eq 0 ]
   grep -q -- "issue close 7 .*--reason not planned" "$TEST_TMPDIR/gh-writes"
-  [[ "$output" == *"Closed TEST-7 (not planned)"* ]]
+  [[ "$output" == *"Closed TEST-7 (not planned)"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -229,6 +229,6 @@ GHEOF
   chmod +x "$TEST_TMPDIR/bin/gh"
   run bash "$PILOT_DIR/adapters/tracker.sh" close TEST-9 completed
   [ "$status" -ne 0 ]
-  [[ "$output" == *"Close FAILED"* ]]
-  [[ "$output" != *"✓ Closed"* ]]
+  [[ "$output" == *"Close FAILED"* ]] || return 1
+  [[ "$output" != *"✓ Closed"* ]] || return 1
 }

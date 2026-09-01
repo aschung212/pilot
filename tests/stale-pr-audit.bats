@@ -61,7 +61,7 @@ EOF
 @test "stale-pr-audit: rejects an unknown argument" {
   run bash "$AUDIT" --bogus
   [ "$status" -eq 1 ]
-  [[ "$output" == *"Unknown argument"* ]]
+  [[ "$output" == *"Unknown argument"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -71,7 +71,7 @@ EOF
   _mock_gh_prs '[]'
   run bash "$AUDIT"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"not a git repo"* ]]
+  [[ "$output" == *"not a git repo"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -87,8 +87,8 @@ EOF
 
   run bash "$AUDIT"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"PR #1041 adds exercises.plate_count_mode (already in master)"* ]]
-  [[ "$output" == *"finding(s)"* ]]
+  [[ "$output" == *"PR #1041 adds exercises.plate_count_mode (already in master)"* ]] || return 1
+  [[ "$output" == *"finding(s)"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -103,7 +103,7 @@ EOF
 
   run bash "$AUDIT"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"No already-shipped work found"* ]]
+  [[ "$output" == *"No already-shipped work found"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -121,7 +121,7 @@ EOF
 
   run bash "$AUDIT"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"exercises.notes added by PRs [10, 11]"* ]]
+  [[ "$output" == *"exercises.notes added by PRs [10, 11]"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -137,8 +137,8 @@ EOF
 
   run bash "$AUDIT"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"PR #99"* ]]
-  [[ "$output" == *"No-op PRs"* ]]
+  [[ "$output" == *"PR #99"* ]] || return 1
+  [[ "$output" == *"No-op PRs"* ]] || return 1
 }
 
 # bats test_tags=fast

@@ -49,7 +49,7 @@ _run_check() {
   _lc "-	1	com.aaron.pilot-roadmap"
   _run_check
   [ "$status" -eq 1 ]
-  [[ "$output" == *"com.aaron.pilot-roadmap last exited 1"* ]]
+  [[ "$output" == *"com.aaron.pilot-roadmap last exited 1"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -58,8 +58,8 @@ _run_check() {
   _lc "-	126	com.aaron.pilot-tune-budget"
   _run_check
   [ "$status" -eq 1 ]
-  [[ "$output" == *"126"* ]]
-  [[ "$output" == *"not executable"* ]]
+  [[ "$output" == *"126"* ]] || return 1
+  [[ "$output" == *"not executable"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -67,7 +67,7 @@ _run_check() {
   _plist com.aaron.pilot-x x.sh 0
   _lc "-	127	com.aaron.pilot-x"
   _run_check
-  [[ "$output" == *"command not found"* ]]
+  [[ "$output" == *"command not found"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -76,8 +76,8 @@ _run_check() {
   _lc "-	0	com.aaron.pilot-other"
   _run_check
   [ "$status" -eq 1 ]
-  [[ "$output" == *"NOT loaded"* ]]
-  [[ "$output" == *"never runs"* ]]
+  [[ "$output" == *"NOT loaded"* ]] || return 1
+  [[ "$output" == *"never runs"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -86,7 +86,7 @@ _run_check() {
   _lc "-	0	com.aaron.pilot-other"
   _run_check
   [ "$status" -eq 1 ]
-  [[ "$output" == *"unparseable"* ]]
+  [[ "$output" == *"unparseable"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -99,7 +99,7 @@ _run_check() {
   touch -t 202607010000 "$TEST_TMPDIR/logs/pilot-weekly-launchd.log"
   _run_check
   [ "$status" -eq 1 ]
-  [[ "$output" == *"loaded but not firing"* ]]
+  [[ "$output" == *"loaded but not firing"* ]] || return 1
 }
 
 # ── stays quiet when everything is fine ─────────────────────────────────────
@@ -140,5 +140,5 @@ _run_check() {
   : > "$TEST_TMPDIR/logs/pilot-a-launchd.log"
   _run_check
   [ "$status" -eq 0 ]
-  [[ "$output" != *"com.apple"* ]]
+  [[ "$output" != *"com.apple"* ]] || return 1
 }

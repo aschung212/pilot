@@ -71,7 +71,7 @@ EOF
 @test "doc-drift-audit: rejects an unknown argument" {
   run bash "$AUDIT" --bogus
   [ "$status" -eq 1 ]
-  [[ "$output" == *"Unknown argument"* ]]
+  [[ "$output" == *"Unknown argument"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -80,9 +80,9 @@ EOF
   run bash "$AUDIT" --biweekly
   [ "$status" -eq 0 ]
   if [ $((week % 2)) -ne 0 ]; then
-    [[ "$output" == *"skipped"* ]]
+    [[ "$output" == *"skipped"* ]] || return 1
   else
-    [[ "$output" != *"skipped"* ]]
+    [[ "$output" != *"skipped"* ]] || return 1
   fi
 }
 
@@ -92,24 +92,24 @@ EOF
 @test "doc-drift-audit: flags a script no doc mentions" {
   echo '#!/bin/bash' > "$FIXTURE/scripts/undocumented.sh"
   run _check
-  [[ "$output" == *"undocumented.sh"* ]]
-  [[ "$output" == *"Undocumented scripts"* ]]
+  [[ "$output" == *"undocumented.sh"* ]] || return 1
+  [[ "$output" == *"Undocumented scripts"* ]] || return 1
 }
 
 # bats test_tags=fast
 @test "doc-drift-audit: flags a doc naming a script that no longer exists" {
   echo 'Run `ghost.sh` nightly to do the thing.' >> "$FIXTURE/docs/pilot-architecture.md"
   run _check
-  [[ "$output" == *"Dead references"* ]]
-  [[ "$output" == *"ghost.sh"* ]]
+  [[ "$output" == *"Dead references"* ]] || return 1
+  [[ "$output" == *"ghost.sh"* ]] || return 1
 }
 
 # bats test_tags=fast
 @test "doc-drift-audit: flags a plist with no row in the schedule table" {
   _plist "com.test.orphan" "alpha.sh"
   run _check
-  [[ "$output" == *"Unscheduled in docs"* ]]
-  [[ "$output" == *"com.test.orphan"* ]]
+  [[ "$output" == *"Unscheduled in docs"* ]] || return 1
+  [[ "$output" == *"com.test.orphan"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -117,16 +117,16 @@ EOF
   _plist "com.test.broken" "nonexistent.sh"
   echo 'com.test.broken runs at 8:15 AM' >> "$FIXTURE/docs/pilot-architecture.md"
   run _check
-  [[ "$output" == *"Broken plists"* ]]
-  [[ "$output" == *"nonexistent.sh"* ]]
+  [[ "$output" == *"Broken plists"* ]] || return 1
+  [[ "$output" == *"nonexistent.sh"* ]] || return 1
 }
 
 # bats test_tags=fast
 @test "doc-drift-audit: flags an adapter missing from CLAUDE.md" {
   echo '#!/bin/bash' > "$FIXTURE/adapters/notify.sh"
   run _check
-  [[ "$output" == *"Undocumented adapters"* ]]
-  [[ "$output" == *"notify.sh"* ]]
+  [[ "$output" == *"Undocumented adapters"* ]] || return 1
+  [[ "$output" == *"notify.sh"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -144,7 +144,7 @@ EOF
   echo 'The old `adapters/ai-review.sh` was deleted 2026-07-17; see the changelog.' \
     >> "$FIXTURE/docs/pilot-architecture.md"
   run _check
-  [[ "$output" != *"ai-review.sh"* ]]
+  [[ "$output" != *"ai-review.sh"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -153,7 +153,7 @@ EOF
   echo '#!/bin/bash' > "$helper"
   echo "Run $helper to set the token." >> "$FIXTURE/docs/pilot-responsibilities.md"
   run _check
-  [[ "$output" != *"external-helper.sh"* ]]
+  [[ "$output" != *"external-helper.sh"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -166,14 +166,14 @@ EOF
 We used to run `ancient.sh` here, and it claimed 999 tests.
 EOF
   run _check
-  [[ "$output" != *"ancient.sh"* ]]
+  [[ "$output" != *"ancient.sh"* ]] || return 1
 }
 
 # bats test_tags=fast
 @test "doc-drift-audit: a clean fixture reports no drift" {
   run _check
-  [[ "$output" == *"No drift detected"* ]]
-  [[ "$output" == *"TOTALCOUNT=0"* ]]
+  [[ "$output" == *"No drift detected"* ]] || return 1
+  [[ "$output" == *"TOTALCOUNT=0"* ]] || return 1
 }
 
 # ── test counts: read from the files, never by running the suite ────────────

@@ -109,7 +109,7 @@ SUB_ISSUE_5_TITLE: Five"
   else
     guidance="RESCOPE is available"
   fi
-  [[ "$guidance" == "RESCOPE is available" ]]
+  [[ "$guidance" == "RESCOPE is available" ]] || return 1
 
   # Large backlog — prefer enhance
   BACKLOG_COUNT=25
@@ -118,7 +118,7 @@ SUB_ISSUE_5_TITLE: Five"
   else
     guidance="RESCOPE is available"
   fi
-  [[ "$guidance" == "Prefer ENHANCE" ]]
+  [[ "$guidance" == "Prefer ENHANCE" ]] || return 1
 }
 
 # bats test_tags=fast
@@ -168,9 +168,9 @@ SCRIPT
 
   run bash "$TRIAGE"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"DEFERRED"* ]]
-  [[ "$output" == *"Deferred (no verdict): 1"* ]]
-  [[ "$output" == *"TEST-42"* ]]
+  [[ "$output" == *"DEFERRED"* ]] || return 1
+  [[ "$output" == *"Deferred (no verdict): 1"* ]] || return 1
+  [[ "$output" == *"TEST-42"* ]] || return 1
 
   # The whole point: the issue is left untouched. No comment, no state label,
   # no priority — nothing that would gate it behind a human or hide it from
@@ -184,10 +184,10 @@ SCRIPT
   run grep -B6 -A4 'no verdict from Gemini — retrying once' "$PILOT_DIR/scripts/triage.sh"
   [ "$status" -eq 0 ]
   # The retry must re-call the adapter, and must sit before the Sonnet fallback.
-  [[ "$output" == *'AI_RESEARCH" prompt'* ]]
+  [[ "$output" == *'AI_RESEARCH" prompt'* ]] || return 1
   run grep -n 'retrying once\|falling back to Claude Sonnet' "$PILOT_DIR/scripts/triage.sh"
   [ "$status" -eq 0 ]
-  [[ "$(echo "$output" | head -1)" == *"retrying once"* ]]
+  [[ "$(echo "$output" | head -1)" == *"retrying once"* ]] || return 1
 }
 
 # ── metrics CSV schema ───────────────────────────────────────────────────────
@@ -300,8 +300,8 @@ OPTION_2_CONS: loses scannable signal | regression for sighted users
 RECOMMENDATION: Option 1 — icon + color is the standard a11y pattern and keeps existing scannability."
   flag_q=$(echo "$result" | grep -oE 'FLAG_QUESTION: .*' | head -1 | sed 's/FLAG_QUESTION: //')
   rec=$(echo "$result" | grep -oE 'RECOMMENDATION: .*' | head -1 | sed 's/RECOMMENDATION: //')
-  [[ "$flag_q" == "Should the negative-delta arrow keep red"* ]]
-  [[ "$rec" == "Option 1 —"* ]]
+  [[ "$flag_q" == "Should the negative-delta arrow keep red"* ]] || return 1
+  [[ "$rec" == "Option 1 —"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -399,7 +399,7 @@ OPTION_3_CONS: con c"
   run bash "$TRIAGE" --re-triage --dry-run
   [ "$status" -eq 0 ]
   # Re-triage sweep header appears
-  [[ "$output" == *"re-triage sweep"* ]]
+  [[ "$output" == *"re-triage sweep"* ]] || return 1
   if [ -f "$TEST_TMPDIR/mock_calls/linear" ]; then
     ! grep -q "comment add" "$TEST_TMPDIR/mock_calls/linear"
   fi
@@ -515,7 +515,7 @@ COMPLEXITY: small"
   [ "$status" -eq 0 ]
   # First match must be the reconcile wiring, not the triageable query.
   first=$(echo "$output" | head -1)
-  [[ "$first" == *"pr-close-reconcile"* ]]
+  [[ "$first" == *"pr-close-reconcile"* ]] || return 1
 }
 
 @test "triage: reconcile failure does not abort triage" {
@@ -523,17 +523,17 @@ COMPLEXITY: small"
   # letting set -e / a bare call kill the run.
   run grep -A4 'RECONCILE_OUT=\$(bash "\$RECONCILE"' "$PILOT_DIR/scripts/triage.sh"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"continuing with triage"* ]]
+  [[ "$output" == *"continuing with triage"* ]] || return 1
 }
 
 @test "triage: --dry-run propagates to the reconcile sub-step" {
   run grep -B2 -A2 'RECONCILE_MODE="--dry-run"' "$PILOT_DIR/scripts/triage.sh"
   [ "$status" -eq 0 ]
-  [[ "$output" == *'DRY_RUN" = "--dry-run"'* ]]
+  [[ "$output" == *'DRY_RUN" = "--dry-run"'* ]] || return 1
 }
 
 @test "triage: reconcile honours the PR_RECONCILE_ENABLED kill switch" {
   run grep -n 'PR_RECONCILE_ENABLED' "$PILOT_DIR/scripts/triage.sh"
   [ "$status" -eq 0 ]
-  [[ "$output" == *':-1'* ]]
+  [[ "$output" == *':-1'* ]] || return 1
 }

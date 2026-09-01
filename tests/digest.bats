@@ -10,8 +10,8 @@ DIGEST="$PILOT_DIR/scripts/digest.sh"
   run bash "$DIGEST" --dry-run
   [ "$status" -eq 0 ]
   # Should contain project names
-  [[ "$output" == *"Lift"* ]]
-  [[ "$output" == *"Issue Digest"* ]]
+  [[ "$output" == *"Lift"* ]] || return 1
+  [[ "$output" == *"Issue Digest"* ]] || return 1
   # Should NOT have called curl
   [ ! -f "$TEST_TMPDIR/mock_calls/curl" ]
 }
@@ -38,7 +38,7 @@ TEST-101  P3  Backlog    Add thing"
   export SLACK_WEBHOOK_DAILY_REVIEW=""
   run bash "$DIGEST"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"not set"* ]]
+  [[ "$output" == *"not set"* ]] || return 1
 }
 
 # ── Blockers section (standup: what is waiting on a human) ───────────────────
@@ -48,9 +48,9 @@ TEST-101  P3  Backlog    Add thing"
   printf 'TEST-42\nTEST-77\n' > "$OUTPUT_DIR/lift-needs-decision.txt"
   run bash "$DIGEST" --dry-run
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Needs your call"* ]]
-  [[ "$output" == *"TEST-42"* ]]
-  [[ "$output" == *"TEST-77"* ]]
+  [[ "$output" == *"Needs your call"* ]] || return 1
+  [[ "$output" == *"TEST-42"* ]] || return 1
+  [[ "$output" == *"TEST-77"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -58,12 +58,12 @@ TEST-101  P3  Backlog    Add thing"
   rm -f "$OUTPUT_DIR/lift-needs-decision.txt"
   run bash "$DIGEST" --dry-run
   [ "$status" -eq 0 ]
-  [[ "$output" != *"Needs your call"* ]]
+  [[ "$output" != *"Needs your call"* ]] || return 1
 
   : > "$OUTPUT_DIR/lift-needs-decision.txt"
   run bash "$DIGEST" --dry-run
   [ "$status" -eq 0 ]
-  [[ "$output" != *"Needs your call"* ]]
+  [[ "$output" != *"Needs your call"* ]] || return 1
 }
 
 # ── Pilot repo defect queue (issues no agent works) ──────────────────────────
@@ -86,8 +86,8 @@ GHSTUB
   export PATH="$TEST_TMPDIR/bin:$PATH"
   run bash "$DIGEST" --dry-run
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Pilot pipeline"* ]]
-  [[ "$output" == *"pilot#28"* ]]
+  [[ "$output" == *"Pilot pipeline"* ]] || return 1
+  [[ "$output" == *"pilot#28"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -101,7 +101,7 @@ GHSTUB
   export PATH="$TEST_TMPDIR/bin:$PATH"
   run bash "$DIGEST" --dry-run
   [ "$status" -eq 0 ]
-  [[ "$output" != *"Pilot pipeline"* ]]
+  [[ "$output" != *"Pilot pipeline"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -116,6 +116,6 @@ GHSTUB
   export PATH="$TEST_TMPDIR/bin:$PATH"
   run bash "$DIGEST" --dry-run
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Issue Digest"* ]]
-  [[ "$output" != *"Pilot pipeline"* ]]
+  [[ "$output" == *"Issue Digest"* ]] || return 1
+  [[ "$output" != *"Pilot pipeline"* ]] || return 1
 }

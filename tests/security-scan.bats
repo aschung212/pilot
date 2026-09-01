@@ -55,7 +55,7 @@ _diff_with() {
   _diff_with 'exec("rm -rf /tmp/x")'
   run bash "$(SCAN)" main
   [ "$status" -ne 0 ]
-  [[ "$output" == *"Dynamic code execution"* ]]
+  [[ "$output" == *"Dynamic code execution"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -77,7 +77,7 @@ _diff_with() {
   _diff_with 'const f = new Function("return 1")'
   run bash "$(SCAN)" main
   [ "$status" -ne 0 ]
-  [[ "$output" == *"Function constructor"* ]]
+  [[ "$output" == *"Function constructor"* ]] || return 1
 }
 
 # bats test_tags=fast

@@ -72,8 +72,8 @@ for title, ids in by_title.items():
   CLEANUP="$PILOT_DIR/scripts/cleanup.sh"
   run bash "$CLEANUP"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Cleanup:"* ]]
-  [[ "$output" == *"0 closed, 0 merge-closed, 0 deduped"* ]]
+  [[ "$output" == *"Cleanup:"* ]] || return 1
+  [[ "$output" == *"0 closed, 0 merge-closed, 0 deduped"* ]] || return 1
 }
 
 # ── Needs-decision snapshot + rejection-learnings harvest (step 2b) ──────────
@@ -193,7 +193,7 @@ JSON
   CLEANUP="$PILOT_DIR/scripts/cleanup.sh"
   run bash "$CLEANUP" --dry-run
   [ "$status" -eq 0 ]
-  [[ "$output" != *"Would expire"* ]]
+  [[ "$output" != *"Would expire"* ]] || return 1
 }
 
 # ── Merged-PR close path (step 2) ────────────────────────────────────────────
@@ -242,10 +242,10 @@ GHEOF
   [ "$CLOSE_LINE" -lt "$EDIT_LINE" ]
 
   # Reported and counted, not silently swept
-  [[ "$output" == *"1 merge-closed"* ]]
-  [[ "$output" == *"TEST-42 (PR #9001)"* ]]
+  [[ "$output" == *"1 merge-closed"* ]] || return 1
+  [[ "$output" == *"TEST-42 (PR #9001)"* ]] || return 1
   # The old "still state:started with a MERGED PR" backlog note is now clear
-  [[ "$output" != *"still state:started with a MERGED PR"* ]]
+  [[ "$output" != *"still state:started with a MERGED PR"* ]] || return 1
 
   # Sixth CSV column carries the count
   CSV="$OUTPUT_DIR/lift-cleanup-metrics.csv"
@@ -263,7 +263,7 @@ GHEOF
   # In flight — never closed, never recycled, label untouched
   ! grep -q "issue close 43" "$TEST_TMPDIR/gh-writes"
   ! grep -q "remove-label state:started" "$TEST_TMPDIR/gh-writes"
-  [[ "$output" == *"0 merge-closed"* ]]
+  [[ "$output" == *"0 merge-closed"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -274,8 +274,8 @@ GHEOF
   [ "$status" -eq 0 ]
 
   ! grep -q "issue close 44" "$TEST_TMPDIR/gh-writes"
-  [[ "$output" == *"needs your call"* ]]
-  [[ "$output" == *"TEST-44"* ]]
+  [[ "$output" == *"needs your call"* ]] || return 1
+  [[ "$output" == *"TEST-44"* ]] || return 1
   # Snapshot handed to digest.sh
   grep -q "TEST-44" "$OUTPUT_DIR/lift-needs-decision.txt"
 }
@@ -287,7 +287,7 @@ GHEOF
   run bash "$PILOT_DIR/scripts/cleanup.sh" --dry-run
   [ "$status" -eq 0 ]
 
-  [[ "$output" == *"[dry-run] Would close TEST-45 (merged PR #9001)"* ]]
+  [[ "$output" == *"[dry-run] Would close TEST-45 (merged PR #9001)"* ]] || return 1
   ! grep -q "issue close 45" "$TEST_TMPDIR/gh-writes"
   ! grep -q "issue comment 45" "$TEST_TMPDIR/gh-writes"
   ! grep -q "remove-label state:started" "$TEST_TMPDIR/gh-writes"
@@ -319,5 +319,5 @@ GHEOF
 
   run bash "$PILOT_DIR/scripts/cleanup.sh"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"probably TRUNCATED"* ]]
+  [[ "$output" == *"probably TRUNCATED"* ]] || return 1
 }

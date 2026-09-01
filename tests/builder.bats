@@ -65,7 +65,7 @@ EOF
   ALERT_SENT=false; ALERT_THRESHOLD_PCT=80
   run usage_check
   [ "$status" -eq 1 ]
-  [[ "$output" == *"Iteration cap"* ]]
+  [[ "$output" == *"Iteration cap"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -75,7 +75,7 @@ EOF
   ALERT_SENT=false; ALERT_THRESHOLD_PCT=80
   run usage_check
   [ "$status" -eq 1 ]
-  [[ "$output" == *"Token cap"* ]]
+  [[ "$output" == *"Token cap"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -98,7 +98,7 @@ EOF
   STALLS=0; MAX_STALLS=2
   run should_continue
   [ "$status" -eq 1 ]
-  [[ "$output" == *"consecutive failures"* ]]
+  [[ "$output" == *"consecutive failures"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -110,7 +110,7 @@ EOF
   STALLS=2; MAX_STALLS=2
   run should_continue
   [ "$status" -eq 1 ]
-  [[ "$output" == *"no new commits"* ]]
+  [[ "$output" == *"no new commits"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -182,7 +182,7 @@ EOF
   # regardless of the --model flag. The trailer must follow AI_CODE_MODEL.
   run model_display_name 'claude-opus-4-8[1m]'
   [ "$status" -eq 0 ]
-  [[ "$output" != *"4.6"* ]]
+  [[ "$output" != *"4.6"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -440,7 +440,7 @@ https://github.com/aschung212/Lift/pull/99")
   # test cannot drift away from the body the script actually sends.
   BODY_TMPL=$(awk '/<<PRBODY$/{f=1;next} f && /^PRBODY$/{exit} f' "$PILOT_DIR/scripts/builder.sh")
   [ -n "$BODY_TMPL" ]
-  [[ "$BODY_TMPL" == *"## Summary"* ]]
+  [[ "$BODY_TMPL" == *"## Summary"* ]] || return 1
 
   render() {
     PRIMARY_ISSUE="$1" ISSUE_URL="http://x/$1" PLAN="the plan" \
@@ -452,14 +452,14 @@ PRBODY'
   }
 
   OUT=$(render "TEST-1238")
-  [[ "$OUT" == *"Closes #1238"* ]]
-  [[ "$OUT" == *"**Issue:** [TEST-1238]"* ]]
+  [[ "$OUT" == *"Closes #1238"* ]] || return 1
+  [[ "$OUT" == *"**Issue:** [TEST-1238]"* ]] || return 1
   # Bare number only — GitHub's parser does not understand the TEST-/LIFT- prefix
-  [[ "$OUT" != *"Closes #TEST-1238"* ]]
+  [[ "$OUT" != *"Closes #TEST-1238"* ]] || return 1
 
   # A chore/manual PR with no issue must not emit a dangling `Closes #`
   OUT=$(render "")
-  [[ "$OUT" != *"Closes #"* ]]
+  [[ "$OUT" != *"Closes #"* ]] || return 1
 }
 
 # bats test_tags=fast

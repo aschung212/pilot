@@ -9,7 +9,7 @@ AI_CODE="$PILOT_DIR/adapters/ai-code.sh"
 @test "ai-code: unknown command exits with error" {
   run bash "$AI_CODE" nonexistent
   [ "$status" -eq 1 ]
-  [[ "$output" == *"Unknown ai-code command"* ]]
+  [[ "$output" == *"Unknown ai-code command"* ]] || return 1
 }
 
 # bats test_tags=fast

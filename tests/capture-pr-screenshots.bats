@@ -20,7 +20,7 @@ SCRIPT="$PILOT_DIR/scripts/capture-pr-screenshots.sh"
 @test "capture-pr-screenshots: no routes provided exits 0 with skip message" {
   run bash "$SCRIPT" "$BATS_TEST_TMPDIR" "$BATS_TEST_TMPDIR/out"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"No routes provided"* ]]
+  [[ "$output" == *"No routes provided"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -29,5 +29,5 @@ SCRIPT="$PILOT_DIR/scripts/capture-pr-screenshots.sh"
   mkdir -p "$BATS_TEST_TMPDIR/fake-repo"
   run bash "$SCRIPT" "$BATS_TEST_TMPDIR/fake-repo" "$BATS_TEST_TMPDIR/out" "/some/route"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Playwright not installed"* ]]
+  [[ "$output" == *"Playwright not installed"* ]] || return 1
 }

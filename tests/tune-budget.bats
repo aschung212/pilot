@@ -16,7 +16,7 @@ load test_helper
   TUNE="$PILOT_DIR/scripts/tune-budget.sh"
   run bash "$TUNE"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"2/3 nights"* ]] || [[ "$output" == *"Skipping tuning"* ]]
+  [[ "$output" == *"2/3 nights"* ]] || [[ "$output" == *"Skipping tuning"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -145,9 +145,9 @@ EOF
   [ "$status" -eq 0 ]
   # With an empty argv the tuner reads nothing and reports 0 nights. Seeing the
   # seeded nights proves the arguments reached python.
-  [[ "$output" == *"nights=4"* ]]
+  [[ "$output" == *"nights=4"* ]] || return 1
   # And it must never try to execute a CSV as a command.
-  [[ "$output" != *"Permission denied"* ]]
+  [[ "$output" != *"Permission denied"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -157,8 +157,8 @@ EOF
   echo "2026-04-05,1,00:00:00" >> "$OUTPUT_DIR/lift-metrics.csv"
   run bash "$PILOT_DIR/scripts/tune-budget.sh" --dry-run
   [ "$status" -eq 0 ]
-  [[ "$output" != *"TypeError"* ]]
-  [[ "$output" != *"Traceback"* ]]
+  [[ "$output" != *"TypeError"* ]] || return 1
+  [[ "$output" != *"Traceback"* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -175,13 +175,13 @@ EOF
 @test "tune-budget: --dry-run reports the change it would apply" {
   _seed_csvs "$OUTPUT_DIR"
   run bash "$PILOT_DIR/scripts/tune-budget.sh" --dry-run
-  [[ "$output" == *"[dry-run] Would apply:"* ]]
-  [[ "$output" == *"MAX_OUTPUT_TOKENS_PER_NIGHT"* ]]
+  [[ "$output" == *"[dry-run] Would apply:"* ]] || return 1
+  [[ "$output" == *"MAX_OUTPUT_TOKENS_PER_NIGHT"* ]] || return 1
 }
 
 # bats test_tags=fast
 @test "tune-budget: rejects an unknown argument" {
   run bash "$PILOT_DIR/scripts/tune-budget.sh" --bogus
   [ "$status" -eq 1 ]
-  [[ "$output" == *"Unknown argument"* ]]
+  [[ "$output" == *"Unknown argument"* ]] || return 1
 }

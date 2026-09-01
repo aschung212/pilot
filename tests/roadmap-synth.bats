@@ -200,15 +200,15 @@ teardown() {
   touch "$TEST_TMPDIR/MyVault/40_Career/Portfolio/Lift Roadmap.md"
 
   result=$(roadmap_obsidian_url "$TEST_TMPDIR/MyVault/40_Career/Portfolio/Lift Roadmap.md")
-  [[ "$result" == obsidian://* ]]
-  [[ "$result" == *"MyVault"* ]]
+  [[ "$result" == obsidian://* ]] || return 1
+  [[ "$result" == *"MyVault"* ]] || return 1
 }
 
 # bats test_tags=fast
 @test "roadmap-utils: roadmap_obsidian_url falls back to file:// when no vault" {
   touch "$TEST_TMPDIR/some-file.md"
   result=$(roadmap_obsidian_url "$TEST_TMPDIR/some-file.md")
-  [[ "$result" == file://* ]]
+  [[ "$result" == file://* ]] || return 1
 }
 
 # bats test_tags=fast
@@ -232,32 +232,32 @@ teardown() {
 # bats test_tags=fast
 @test "roadmap-utils: roadmap_render_markdown produces valid sections" {
   result=$(roadmap_render_markdown "$FIXTURES_DIR/roadmap-synth-fixture.json" "2026-04-29" "Lift")
-  [[ "$result" == *"# Lift Roadmap"* ]]
-  [[ "$result" == *"## Themes"* ]]
-  [[ "$result" == *"## Proposed Epics"* ]]
-  [[ "$result" == *"## Orphan Issues"* ]]
-  [[ "$result" == *"## Roadmap Risks"* ]]
-  [[ "$result" == *"Updated 2026-04-29 by Roadmap Synthesiser"* ]]
+  [[ "$result" == *"# Lift Roadmap"* ]] || return 1
+  [[ "$result" == *"## Themes"* ]] || return 1
+  [[ "$result" == *"## Proposed Epics"* ]] || return 1
+  [[ "$result" == *"## Orphan Issues"* ]] || return 1
+  [[ "$result" == *"## Roadmap Risks"* ]] || return 1
+  [[ "$result" == *"Updated 2026-04-29 by Roadmap Synthesiser"* ]] || return 1
 }
 
 # bats test_tags=fast
 @test "roadmap-utils: roadmap_render_markdown includes theme names from fixture" {
   result=$(roadmap_render_markdown "$FIXTURES_DIR/roadmap-synth-fixture.json" "2026-04-29" "Lift")
-  [[ "$result" == *"Performance & Bundle Size"* ]]
-  [[ "$result" == *"Accessibility Compliance"* ]]
+  [[ "$result" == *"Performance & Bundle Size"* ]] || return 1
+  [[ "$result" == *"Accessibility Compliance"* ]] || return 1
 }
 
 # bats test_tags=fast
 @test "roadmap-utils: roadmap_render_markdown includes epic names from fixture" {
   result=$(roadmap_render_markdown "$FIXTURES_DIR/roadmap-synth-fixture.json" "2026-04-29" "Lift")
-  [[ "$result" == *"Core Accessibility Pass"* ]]
-  [[ "$result" == *"Performance Budget"* ]]
+  [[ "$result" == *"Core Accessibility Pass"* ]] || return 1
+  [[ "$result" == *"Performance Budget"* ]] || return 1
 }
 
 # bats test_tags=fast
 @test "roadmap-utils: roadmap_render_markdown includes orphan IDs from fixture" {
   result=$(roadmap_render_markdown "$FIXTURES_DIR/roadmap-synth-fixture.json" "2026-04-29" "Lift")
-  [[ "$result" == *"LIFT-3"* ]]
+  [[ "$result" == *"LIFT-3"* ]] || return 1
 }
 
 # ── Envelope extraction (2026-08-28) ────────────────────────────────────────
