@@ -101,7 +101,7 @@ Aaron's Pilot pipeline is a decomposed multi-agent pipeline that discovers, tria
 ### 2. Triage Agent
 **Script:** `~/Documents/Scripts/lift-triage.sh`
 **Schedule:** Nightly after discovery (second stage)
-**Model:** Gemini 2.5 Flash (via the Gemini REST API, no grounding — reasons over the prompt) with Claude Sonnet fallback. Pinned by `AI_TRIAGE_MODEL`, **not** inherited from `AI_RESEARCH_MODEL` — triage and discovery tune their models independently.
+**Model:** Gemini 2.5 Flash (via the Gemini REST API, no grounding — reasons over the prompt) with a Claude Sonnet 5 fallback (`AI_PLANNING_MODEL`). Pinned by `AI_TRIAGE_MODEL`, **not** inherited from `AI_RESEARCH_MODEL` — triage and discovery tune their models independently.
 
 **What it does:**
 - Reviews every untriaged backlog issue
@@ -132,7 +132,7 @@ This replaces a `VERDICT=${VERDICT:-FLAG}` default that made a model error indis
 **Script:** `~/development/pilot/scripts/builder.sh`
 **Shared lib:** `~/development/pilot/lib/builder-utils.sh` (budget guards, verdict logic, review formatting)
 **Schedule:** Nightly after triage (third stage, runs until 7 AM)
-**Model:** Claude Opus 5 (1M context, max effort) — pinned via `AI_CODE_MODEL`/`AI_CODE_EFFORT` in `project.env`
+**Model:** Claude Opus 5.5 (1M context, max effort) — pinned via `AI_CODE_MODEL`/`AI_CODE_EFFORT` in `project.env`
 
 **What it does:**
 - **Auth preflight (before the loop):** one cheap `claude` probe down the real code path. If the keychain OAuth token is expired/logged-out, every iteration would 401; rather than burn the loop silently, the builder aborts immediately and alerts #lift-automation. Auth failures are classified by `is_auth_failure()` in `builder-utils.sh`; transient/network errors are *not* auth signatures and fall through to normal per-iteration handling. Skippable with `SKIP_AUTH_PREFLIGHT=1`. (Added 2026-06-23 after two silent zero-PR nights.)
@@ -538,11 +538,12 @@ Pipeline is fully decomposed — each service has its own launchd plist. No orch
 | Agent | Model | Rationale |
 |---|---|---|
 | Discovery (research) | **Claude Sonnet 5** + `WebSearch`/`WebFetch` (`AI_RESEARCH_CLAUDE_MODEL`), Gemini 2.5 Flash as fallback | Cites its sources: 24 URLs / 14 domains vs Gemini's 0 on the same prompt, with App Store data verifying exactly against Apple's API. Not Opus — 1187s vs 137s for a marginal precision gain. Gemini stays as the free fallback and keeps its whole daily bucket for triage. |
-| Discovery (analysis) | Claude Opus 5 (1M, max effort) | Best at codebase reasoning + issue creation |
-| Triage | Gemini 2.5 Flash via Gemini API — `AI_TRIAGE_MODEL` (Claude Sonnet fallback) | Good at planning; free-tier Flash via `GEMINI_API_KEY`. **Not** Google AI Pro — that consumer subscription grants no API access. Pinned separately from discovery's `AI_RESEARCH_MODEL` so retuning research cannot silently move triage. |
-| Builder | Claude Opus 5 (1M, max effort) | Best coding model, complex multi-file changes |
-| Architect | Claude Fable 5 (1M default, max effort) — `AI_ARCHITECT_MODEL`, falls back to `AI_CODE_MODEL` | Deepest whole-codebase reasoning in the pipeline; weekly cadence bounds the 2× price |
-| Review (commit) | Claude Sonnet (`PILOT_REVIEW_MODEL` overridable) | Inline via post-commit hook — adversarial review of full branch diff, independent from the Opus builder. Single model, single pass. Re-platformed off the retired Gemini CLI on 2026-07-16; uses the builder's Claude auth (no extra billing). |
+| Discovery (analysis) | Claude Opus 5.5 (1M, max effort) | Best at codebase reasoning + issue creation |
+| Triage | Gemini 2.5 Flash via Gemini API — `AI_TRIAGE_MODEL` (Claude Sonnet 5 fallback — `AI_PLANNING_MODEL`) | Good at planning; free-tier Flash via `GEMINI_API_KEY`. **Not** Google AI Pro — that consumer subscription grants no API access. Pinned separately from discovery's `AI_RESEARCH_MODEL` so retuning research cannot silently move triage. |
+| Builder | Claude Opus 5.5 (1M, max effort) | Best coding model, complex multi-file changes |
+| Architect | Claude Fable 5.1 (1M default, max effort) — `AI_ARCHITECT_MODEL`, falls back to `AI_CODE_MODEL` | Deepest whole-codebase reasoning in the pipeline; weekly cadence bounds the 2× price |
+| Roadmap synth, auditor digest | Claude Sonnet 5 — `AI_PLANNING_MODEL` | Summarization over structured input; no need for Opus-tier reasoning |
+| Review (commit) | Claude Sonnet 5 (`PILOT_REVIEW_MODEL` overridable) | Inline via post-commit hook — adversarial review of full branch diff, independent from the Opus builder. Single model, single pass. Re-platformed off the retired Gemini CLI on 2026-07-16; uses the builder's Claude auth (no extra billing). |
 | Cover letter review | Gemini 2.5 Flash | Second opinion, zero extra cost |
 
 ---
@@ -628,6 +629,14 @@ See [Pilot Responsibilities](pilot-responsibilities.md) for the complete list of
 ---
 
 ## Changelog
+
+### 2026-09-28 — Model audit: Opus 5.5 for Opus-tier, Fable 5.1 for the architect, planning calls pinned
+
+- `AI_CODE_MODEL` `claude-opus-5[1m]` → `claude-opus-5-5[1m]` (builder, discovery analysis, code-gen, architect fallback). Every hardcoded `${AI_CODE_MODEL:-…}` fallback in `builder.sh`, `discover.sh`, `architect.sh`, and `adapters/ai-code.sh` moved with it. `AI_CODE_EFFORT` stays `max`, and every call passes it explicitly. That matters on Opus 5.5 because its API default effort drops to `medium`.
+- `AI_ARCHITECT_MODEL` `claude-fable-5` → `claude-fable-5-1`.
+- **Wired `AI_PLANNING_MODEL`, which nothing read.** The live `project.env` defined it with a comment saying it pinned triage's Claude fallback, roadmap synth, and the auditor digest. All three still passed the bare `--model sonnet` alias, the same pattern that let the `opus` alias drift to 4.6/4.7 before 2026-05-28. They now use `${AI_PLANNING_MODEL:-claude-sonnet-5}`. The auditor's "Sonnet 4.6" log label now prints the real model. Added to `project.env.example` and `init.sh`.
+- Sonnet 5 (research backend, reviewer default in `review-router.sh`) is already the current Sonnet and is unchanged. Haiku is not used anywhere in the pipeline. Gemini models are out of scope; their pins are grounding-quota decisions (see the `AI_RESEARCH_MODEL` notes).
+- Both new IDs verified live with a `claude -p` probe before cutover; they were reported back in `modelUsage` as `claude-opus-5-5[1m]` and `claude-fable-5-1`. `model_display_name` already handles two-part versions (`claude-opus-5-5[1m]` → "Claude Opus 5.5"). The tests now pin that case and `claude-fable-5-1`.
 
 ### 2026-08-30 — Nothing was watching the target repo's default branch
 

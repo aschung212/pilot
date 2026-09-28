@@ -141,7 +141,7 @@ if [ -z "${_PILOT_TEST_MODE:-}" ]; then
   claude \
     --allowedTools "Read,Bash(gh:*)" \
     --output-format json \
-    --model sonnet \
+    --model "${AI_PLANNING_MODEL:-claude-sonnet-5}" \
     --effort "${AI_ROADMAP_EFFORT:-high}" \
     --max-turns "${ROADMAP_MAX_TURNS:-3}" \
     -p "$CLUSTER_PROMPT" > "$SYNTH_JSON" 2>&1
