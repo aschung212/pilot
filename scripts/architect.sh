@@ -78,7 +78,7 @@ build_architect_prompt "$AXIS" "$REPO" "${PROJECT_NAME:-Lift}" > "$PROMPT_FILE"
 # ── Run Claude (read-only) ────────────────────────────────────────────────────
 # The architect gets its own model knob: weekly cadence + deepest whole-codebase
 # reasoning justify the top-tier model. Falls back to AI_CODE_MODEL when unset.
-ARCHITECT_MODEL="${AI_ARCHITECT_MODEL:-${AI_CODE_MODEL:-claude-opus-5[1m]}}"
+ARCHITECT_MODEL="${AI_ARCHITECT_MODEL:-${AI_CODE_MODEL:-claude-opus-5-5[1m]}}"
 ARCHITECT_JSON="$OUTPUT_DIR/architect-$DATE-output.json"
 ARCHITECT_ALLOWED_TOOLS="Read,Grep,Glob,Bash(git log:*),Bash(git diff:*),Bash(rg:*),Bash(find:*),Bash(wc:*),Bash(ls:*)"
 

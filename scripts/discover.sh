@@ -365,7 +365,7 @@ DISCOVER_JSON="$OUTPUT_DIR/lift-discover-$DATE-output.json"
 # 'SEARCH:WebSearch ... — BLOCKED (tool not permitted this run)'. Do not remove these
 # without also rewording the fallback message in Phase 1.
 DISCOVER_ALLOWED_TOOLS="Read,Glob,Grep,WebSearch,WebFetch,Bash(gh:*),Bash(git log:*),Bash(git diff:*),Bash(git show:*),Bash(ls:*),Bash(cat:*),Bash(wc:*)"
-if ! claude --allowedTools "$DISCOVER_ALLOWED_TOOLS" --model "${AI_CODE_MODEL:-claude-opus-5[1m]}" --effort "${AI_CODE_EFFORT:-max}" --output-format json -p "$(cat "$PROMPT_FILE")" --max-turns "${DISCOVER_MAX_TURNS:-30}" 2>&1 > "$DISCOVER_JSON"; then
+if ! claude --allowedTools "$DISCOVER_ALLOWED_TOOLS" --model "${AI_CODE_MODEL:-claude-opus-5-5[1m]}" --effort "${AI_CODE_EFFORT:-max}" --output-format json -p "$(cat "$PROMPT_FILE")" --max-turns "${DISCOVER_MAX_TURNS:-30}" 2>&1 > "$DISCOVER_JSON"; then
   echo "  ❌ Claude analysis failed (exit code $?)" | tee -a "$RUN_LOG"
   slack_send "🚨 *Discovery Agent — Claude analysis failed*
 Focus: $FOCUS | Date: $DATE

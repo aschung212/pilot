@@ -822,8 +822,8 @@ Generate a Slack digest in Slack mrkdwn. Constraints:
 - Do NOT invent metrics not in the JSON above
 EOF
 )
-  log_info "Running AI synthesis (Sonnet 4.6)…"
-  SYNTHESIS=$(claude --model sonnet \
+  log_info "Running AI synthesis (${AI_PLANNING_MODEL:-claude-sonnet-5})…"
+  SYNTHESIS=$(claude --model "${AI_PLANNING_MODEL:-claude-sonnet-5}" \
     --allowedTools "Read,Grep,Bash(gh:*)" \
     --output-format json \
     -p "$AI_PROMPT" 2>/dev/null \

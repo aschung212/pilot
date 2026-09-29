@@ -222,17 +222,17 @@ else
   fail "Claude CLI not found. Install: https://docs.anthropic.com/en/docs/claude-code"
 fi
 
-ask "Code generation model [claude-opus-5[1m]]: "
+ask "Code generation model [claude-opus-5-5[1m]]: "
 read -r AI_CODE_MODEL
-AI_CODE_MODEL="${AI_CODE_MODEL:-claude-opus-5[1m]}"
+AI_CODE_MODEL="${AI_CODE_MODEL:-claude-opus-5-5[1m]}"
 
 ask "Code reasoning effort — low/medium/high/max [max]: "
 read -r AI_CODE_EFFORT
 AI_CODE_EFFORT="${AI_CODE_EFFORT:-max}"
 
-ask "Architect model — weekly deep review [claude-fable-5]: "
+ask "Architect model — weekly deep review [claude-fable-5-1]: "
 read -r AI_ARCHITECT_MODEL
-AI_ARCHITECT_MODEL="${AI_ARCHITECT_MODEL:-claude-fable-5}"
+AI_ARCHITECT_MODEL="${AI_ARCHITECT_MODEL:-claude-fable-5-1}"
 
 if [ -n "${GEMINI_API_KEY:-}" ]; then
   ok "GEMINI_API_KEY found — Gemini available for triage and as the research fallback"
@@ -400,6 +400,7 @@ AI_CODE_MODEL="$AI_CODE_MODEL"
 AI_CODE_EFFORT="$AI_CODE_EFFORT"
 AI_ARCHITECT_MODEL="$AI_ARCHITECT_MODEL"
 AI_RESEARCH_MODEL="$AI_RESEARCH_MODEL"
+AI_PLANNING_MODEL="claude-sonnet-5"
 AI_RESEARCH_CLAUDE_MODEL="claude-sonnet-5"
 DISCOVER_RESEARCH_BACKEND="$DISCOVER_RESEARCH_BACKEND"
 AI_TRIAGE_MODEL="$AI_TRIAGE_MODEL"

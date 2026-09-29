@@ -170,10 +170,10 @@ parse_stop_time() {
 # identifies as its training-cutoff model — historically "Opus 4.6" — regardless
 # of the --model flag in use), so we derive the name from $AI_CODE_MODEL and
 # instruct the builder to use it verbatim. Single source of truth: project.env.
-#   claude-opus-5[1m]          -> Claude Opus 5
+#   claude-opus-5-5[1m]        -> Claude Opus 5.5
 #   claude-sonnet-4-6          -> Claude Sonnet 4.6
 #   claude-haiku-4-5-20251001  -> Claude Haiku 4.5
-#   claude-fable-5             -> Claude Fable 5
+#   claude-fable-5-1           -> Claude Fable 5.1
 # Input: $1 = model ID. Output: prints display name to stdout.
 model_display_name() {
   local id="${1:-}"

@@ -407,7 +407,7 @@ Falling back to Claude Sonnet for triage this run (higher token cost). Check GEM
     # recurred on LIFT-1223/1179/1098/1096 ("Error: Reached max turns (6)").
     # The architect-filed issues that trip this are the ones needing the most
     # codebase reading before the structured block can be written.
-    TRIAGE_RESULT=$(claude --allowedTools "$TRIAGE_ALLOWED_TOOLS" --model sonnet --effort "${AI_TRIAGE_EFFORT:-high}" -p "$TRIAGE_PROMPT" --max-turns "${TRIAGE_MAX_TURNS:-12}" 2>&1 || true)
+    TRIAGE_RESULT=$(claude --allowedTools "$TRIAGE_ALLOWED_TOOLS" --model "${AI_PLANNING_MODEL:-claude-sonnet-5}" --effort "${AI_TRIAGE_EFFORT:-high}" -p "$TRIAGE_PROMPT" --max-turns "${TRIAGE_MAX_TURNS:-12}" 2>&1 || true)
   fi
 
   # Parse verdict.
