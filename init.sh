@@ -547,7 +547,7 @@ PLIST_DAY
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:$HOME/.npm-global/bin</string>
+        <string>$HOME/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:$HOME/.npm-global/bin</string>
         <key>HOME</key>
         <string>$HOME</string>
     </dict>

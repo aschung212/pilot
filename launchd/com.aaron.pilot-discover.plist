@@ -46,7 +46,7 @@
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:/Users/aaron/.npm-global/bin</string>
+        <string>/Users/aaron/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/Users/aaron/.npm-global/bin</string>
         <key>HOME</key>
         <string>/Users/aaron</string>
     </dict>

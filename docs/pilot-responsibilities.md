@@ -149,7 +149,7 @@ A green result means the next run of any agent will authenticate. This fixes the
 **Verify manually** the way launchd sees it (clean env + source `~/.zshenv`, no inherited credentials):
 
 ```bash
-env -i HOME="$HOME" PATH="/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:$HOME/.npm-global/bin" \
+env -i HOME="$HOME" USER="$USER" LOGNAME="$USER" PATH="$HOME/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:$HOME/.npm-global/bin" \
   bash -c 'source ~/.zshenv 2>/dev/null; claude -p "Reply with exactly: AUTH_OK" --max-turns 1'
 ```
 
@@ -1538,3 +1538,11 @@ Repaired `lift-metrics.csv` in place (one-shot script reconstructed 46 split row
 - **New responsibilities for Aaron.** (1) Merge the four PRs (any order; CI is green). (2) Enroll at developer.apple.com. (3) Supabase → Email Templates → Reset Password: add `{{ .Token }}` or Forgot password cannot complete in the app. (4) Follow `docs/app-store/README.md`: reserve the name, create the record, enter the App Privacy answers, screenshots from his own iPhone 17 Pro Max (exactly 1320×2868), archive from `master`, TestFlight internal → external public link, submit. (5) After enrollment, switch the Xcode team in the committed project to the paid team and commit it.
 - **Tests.** 4549 (reset branch) / 4542 (legal branch) green; lint 0 errors; typecheck clean; native bundle verified on the iPhone 17 Pro Simulator for #1429 (manifest in the .app, Lift icon on the home screen, app boots) and #1431 (no Google, reset form against the real backend).
 - **Merged 2026-09-15** (squash, in order): #1429 → 4c9c62f, #1431 → 0087d3c, #1432 → 8aff870, #1433 → bd0c262. Issues #531, #536, #538, #1430, #537, #1427 closed by the merges; #216 checklist ticked. Master deploy for 8aff870 watched for the verified-live ping.
+
+### 2026-10-05 — Pilot: launchd agents moved off the Intel (Rosetta) toolchain; native claude on every agent's PATH
+
+- **What.** All 10 `launchd/*.plist` files, and the template in `init.sh`, had `PATH=/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:…`. `/usr/local` is a leftover **Intel** Homebrew, so every agent except the builder's `claude` children (which use `BUILDER_PATH`) ran Intel `claude` 2.1.86, Python 3.14, node 25, `gh` and `git` under Rosetta. The PATH also had no `~/.local/bin`, so the native claude CLI was never reachable from it. The new order matches `BUILDER_PATH`: `~/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:~/.npm-global/bin`. All 10 agents were reloaded with `launchctl bootout`/`bootstrap`.
+- **Why now.** Apple ends full Rosetta 2 support after macOS 27, and both Homebrew copies of claude were removed today. Without this fix, discover, triage and the other non-builder agents would have found no `claude` at all on their next run (discover/triage Tue 22:00).
+- **Root cause of the "CPU lacks AVX" Bun preamble.** It came from that Intel claude: Rosetta exposes no AVX. Earlier notes blamed the `/opt/homebrew` copy. The tolerant JSON parsing stays, because other stderr noise can still land in `2>&1` captures (CLAUDE.md updated).
+- **Verification.** Under a launchd-equivalent env (`env -i` with the plist PATH plus HOME/USER/LOGNAME), every tool resolves to an arm64 build: claude 2.1.289 (`~/.local/bin`), python3 3.14.8, node 26.10.0, gh, and git 2.56.0. All Pilot Python is standard library, so the switch to the arm64 Python needs no packages. Lift's `node_modules` already has arm64 native binaries (esbuild, rollup). `bats tests/` passes 384/384 with the plist PATH. A live `claude -p … --output-format json` returns valid JSON starting at byte 0.
+- **New responsibility for Aaron.** None. To verify by hand, the auth-check command earlier in this doc now uses the new PATH and passes `USER`/`LOGNAME`. Without them, `env -i` reports "Not logged in" because claude can't reach its Keychain login.

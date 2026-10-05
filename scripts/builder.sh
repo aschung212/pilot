@@ -68,14 +68,13 @@ BUILDER_ALLOWED_TOOLS="Read,Edit,Write,Glob,Grep,Bash(git add:*),Bash(git commit
 # August trying to pin the binary anyway. Making PATH explicit removes the
 # ambiguity that provokes it.
 #
-# $HOME/.local/bin MUST COME FIRST, and this is not cosmetic. Two claude CLIs are
-# installed on this machine:
-#   ~/.local/bin/claude    -> 2.1.218  (current; what every run has used)
-#   /opt/homebrew/bin/claude -> 2.1.112  (April, stale, and the build that emits
-#                                        the Bun "CPU lacks AVX" preamble)
-# `env PATH=... claude` re-resolves the binary against THIS list, so a
-# homebrew-first order would silently downgrade the builder by 106 versions and
-# reintroduce the Bun-preamble JSON corruption documented in CLAUDE.md.
+# $HOME/.local/bin MUST COME FIRST, and this is not cosmetic. It holds the
+# native, self-updating claude CLI. `env PATH=... claude` re-resolves the binary
+# against THIS list, so any other claude found earlier would silently replace it.
+# Until 2026-10-05 there were two stale Homebrew cask copies, in /opt/homebrew/bin
+# and /usr/local/bin. The /usr/local one was an Intel build running under
+# Rosetta (no AVX), which is what emitted the Bun preamble described in CLAUDE.md.
+# Both are uninstalled. The launchd plists now use this same order.
 BUILDER_PATH="${BUILDER_PATH:-$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
 
 # Builder DISALLOWED tools — explicitly deny subagent invocation so Claude does
