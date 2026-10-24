@@ -106,6 +106,16 @@ MAX_FIX_ATTEMPTS="${MAX_FIX_ATTEMPTS:-1}"
 # waiting on Aaron (0 disables). See wip_gate_active in lib/builder-utils.sh.
 MAX_OPEN_PRS="${MAX_OPEN_PRS:-8}"
 
+# Work-phase pick filter. Since 2026-10-23 feature work and bug fixes on Lift
+# are paused for a code-cleanup phase: only issues carrying this label (plus
+# hand-filed origin:aaron issues, which always pass) are pickable. Everything
+# else stays open in the backlog, untouched, for when the phase ends. Discovery,
+# the architect, and the builder's own ISSUE_DISCOVER path all file cleanup
+# work under this label. Set PICK_REQUIRE_LABEL="" in project.env to lift the
+# filter. Deliberately deterministic: a prompt-only "prefer refactors" rule
+# would still let the pre-pick choose a P2 bug over a P3 refactor.
+PICK_REQUIRE_LABEL="${PICK_REQUIRE_LABEL-type:refactor}"
+
 # Wall-clock timeouts (seconds) for the builder's `claude` calls. A hung call
 # with no timeout silently blocked the launchd builder for 5 days (2026-07-09),
 # because StartCalendarInterval skips scheduled runs while a prior instance is
@@ -453,11 +463,26 @@ $detail
   # prompt only.
   #
   # One API call, not one per issue.
-  BACKLOG_FOR_PROMPT="$BACKLOG_ISSUES"
   _label_map=$(gh issue list --repo "$GITHUB_ISSUES_REPO" --state open \
     --limit "${GH_OPEN_LIMIT:-1000}" --json number,labels \
     --jq '.[] | "'"${ISSUE_PREFIX}"'-\(.number)\t\([.labels[].name
-          | select(startswith("priority:") or startswith("origin:"))] | join(",") )"' 2>/dev/null || true)
+          | select(startswith("priority:") or startswith("origin:") or startswith("type:"))] | join(",") )"' 2>/dev/null || true)
+
+  # ── Work-phase filter (PICK_REQUIRE_LABEL) ──────────────────────────────
+  # Keep only issues carrying the phase label or origin:aaron. See
+  # filter_backlog_by_label in lib/builder-utils.sh. If the label map could not
+  # be fetched the pool comes back empty and the night ends with
+  # NO_IMPROVEMENTS_REMAINING, rather than letting the paused backlog through.
+  if [ -n "$PICK_REQUIRE_LABEL" ]; then
+    _phase_before=$(echo "$BACKLOG_ISSUES" | grep -cE "${ISSUE_PREFIX}-[0-9]+" | tr -d ' \n')
+    BACKLOG_ISSUES=$(filter_backlog_by_label "$BACKLOG_ISSUES" "$_label_map" "$PICK_REQUIRE_LABEL")
+    _phase_after=$(echo "$BACKLOG_ISSUES" | grep -cE "${ISSUE_PREFIX}-[0-9]+" | tr -d ' \n')
+    echo "  🧽 Work-phase filter: ${_phase_before} pickable → ${_phase_after} labeled ${PICK_REQUIRE_LABEL} or origin:aaron" | tee -a "$RUN_LOG"
+    [ -z "$_label_map" ] && \
+      echo "  ⚠️ Label lookup returned nothing — the work-phase filter emptied the pool (fail-closed)" | tee -a "$RUN_LOG"
+  fi
+
+  BACKLOG_FOR_PROMPT="$BACKLOG_ISSUES"
   if [ -n "$_label_map" ]; then
     BACKLOG_FOR_PROMPT=$(BACKLOG="$BACKLOG_ISSUES" LABELS="$_label_map" python3 <<'PYEOF'
 import os
@@ -553,9 +578,9 @@ ${SKIPPED_ISSUES:-None}
 
 Pick the highest-priority unstarted issue that is NOT in any of the do-not-pick lists above. Priority labels (priority:1-urgent / 2-high / 3-medium / 4-low) appear in brackets at the end of each row.
 
-**An issue labeled \`origin:aaron\` outranks everything else.** Aaron filed it by hand rather than an agent proposing it, and the standing rule is that his own tickets get addressed first. If any such issue is pickable, pick it — regardless of how it compares to the GA-readiness preferences below, and regardless of whether it looks feature-shaped. If several are, take the one listed first.
+**An issue labeled \`origin:aaron\` outranks everything else.** Aaron filed it by hand rather than an agent proposing it, and the standing rule is that his own tickets get addressed first. If any such issue is pickable, pick it — regardless of how it compares to the cleanup preferences below, and regardless of whether it looks feature-shaped. If several are, take the one listed first.
 
-Otherwise: $PROJECT_NAME is stabilizing for a GA release, so if two issues are equal priority, prefer user-facing bug fixes first, then performance/reliability fixes, then UI/UX and accessibility polish. Put refactors, test-only additions, and anything feature-shaped last. That ordering applies only to issues WITHOUT the \`origin:aaron\` label.
+Otherwise: $PROJECT_NAME is in a code-cleanup phase — feature work and bug fixes are paused, and the backlog above has already been filtered to behavior-preserving cleanup issues. If two are equal priority, prefer the one that deletes the most code (dead code, duplication) over one that only restructures it. That ordering applies only to issues WITHOUT the \`origin:aaron\` label.
 
 You do NOT need to read the issue bodies or the codebase in this stage — just pick from titles and priorities. The next stage has the full context.
 
@@ -714,7 +739,7 @@ $PREVIOUS_SUMMARIES
 
 ## Issue backlog (UNSTARTED issues for $PROJECT_NAME — these are pickable)
 
-Each row is \`${ISSUE_PREFIX}-N Title  [labels]\`, pre-sorted with hand-filed (\`origin:aaron\`) issues first, then by priority. An \`origin:aaron\` issue is one Aaron wrote himself and outranks everything else, including the GA-readiness preferences.
+Each row is \`${ISSUE_PREFIX}-N Title  [labels]\`, pre-sorted with hand-filed (\`origin:aaron\`) issues first, then by priority. An \`origin:aaron\` issue is one Aaron wrote himself and outranks everything else, including the cleanup-phase preferences.
 
 $BACKLOG_FOR_PROMPT
 
@@ -760,14 +785,13 @@ $ASSIGNED_BLOCK
 
 ## Discovery (every iteration)
 
-While reading the codebase, actively look for problems. For each discovery, output an ISSUE_DISCOVER line (see output format). $PROJECT_NAME is feature-complete and stabilizing for GA, so report ONLY defects and refinements of existing behavior — do NOT file feature ideas, and do NOT file test-coverage gaps (the suite is already extensive; new tests belong inside bug fixes as regression proof). Look for:
-- Functional bugs (unhandled errors, race conditions, data loss paths, broken edge cases: empty data, offline, rapid input)
-- UI bugs (contrast issues, layout shifts, broken themes, missing aria attributes)
-- UX friction in existing flows (missing loading/error/empty states, inconsistent spacing or copy, dead ends)
-- Performance issues (large bundles, unnecessary re-renders, unoptimized images)
-- Accessibility violations (missing labels, low contrast, keyboard traps)
-- CLAUDE.md checklist violations (hardcoded colors, wrong spacing, missing safe-area-inset)
-- Dependency vulnerabilities (check package.json for outdated or insecure deps)
+While reading the codebase, note cleanup opportunities. For each discovery, output an ISSUE_DISCOVER line (see output format); the pipeline files it with the \`${PICK_REQUIRE_LABEL:-type:refactor}\` label, so it will be built later as a pure refactor. $PROJECT_NAME is in a code-cleanup phase, so report ONLY behavior-preserving cleanups — never bugs, features, UX changes, or test-coverage gaps (a bug filed here would be mislabeled as a refactor; mention a real bug in your Summary prose instead). Look for:
+- Dead code: unused exports, components, files, props, store state, CSS, commented-out code, finished-migration shims
+- Duplication: the same logic implemented in more than one place
+- Complexity: oversized components/functions, deep nesting, pass-through abstraction layers
+- Inconsistency: several patterns for the same job (error handling, formatting, Supabase access) where one should win
+- Loose types: \`any\`, unchecked casts, untyped props/emits/store state
+- Unused dependencies and config that restates defaults
 
 Do NOT fix discoveries in the same iteration — just create an issue. Fix them in a future iteration when they are the highest priority.
 
@@ -798,6 +822,7 @@ After your final push completes, you MUST emit the full structured response belo
 - NEVER fabricate, guess, or invent URLs, domains, API keys, or external identifiers. If you need the deployment URL, read CLAUDE.md (the "Live:" field). If you need a repo URL, use the git remote. If you cannot find the authoritative value, SKIP the task — do not make one up.
 - **Run shell commands in their plain form.** Your PATH is already correct: \`node\`, \`npm\`, \`npx\`, \`git\`, and \`gh\` all resolve to the right binaries, and node is v25.8.2 — the same one the repo's node_modules was built against. The tool allowlist matches on a command's literal prefix, so \`npm run typecheck\` is permitted but \`PATH=... npm run typecheck\`, \`env PATH=... npm run typecheck\`, \`/opt/homebrew/bin/npm run typecheck\`, and \`node node_modules/.bin/vitest\` are all DENIED — the prefix no longer matches. Across the 51 runs in August 2026 this wasted 187 denied tool calls, and on 2026-08-30 it burned an entire 100-turn budget and lost a finished feature. If a command is denied, do NOT retry it with a PATH prefix, an absolute path, or an \`env\` wrapper; that is the one change guaranteed not to help. Use the plain form, or say in your final message that you could not run it.
 - Pick ONE issue — do not mix multiple unrelated changes in one iteration
+- **Cleanup phase — behavior must not change.** Unless the issue is labeled \`origin:aaron\`, the issue you work on is a refactor, and a refactor that changes behavior is a failed iteration. Keep the UI pixel-identical, keep every storage key, route, event name, and data shape the same, and fix no bugs along the way (note any you find in your Summary instead). Existing tests are the proof: they must pass, and you may only touch a test to follow a moved or renamed import — never to change what it asserts. If the cleanup cannot be done without a behavior change, stop and output ISSUE_SKIPPED with the reason. Prefer deleting code to adding it; a refactor that grows the codebase needs a clear reason in the PR.
 - Do NOT redo work from previous iterations — if tests exist, don't rewrite them
 - Do NOT break existing functionality — run tests after each change
 - Quality over quantity — fully implement the issue rather than doing it halfway
@@ -1082,7 +1107,7 @@ $PRIMARY_ISSUE"
         # ── Create new issues for discoveries ─────────────────────
         { grep -oE 'ISSUE_DISCOVER:[1-4]:.*' "$RUN_LOG" 2>/dev/null || true; } | sort -u | while IFS=: read -r _ priority title; do
           echo "  📋 Discovered issue: $title (priority $priority)" | tee -a "$RUN_LOG"
-          bash "$TRACKER" create "$title" "$priority" 2>&1 | tee -a "$RUN_LOG"
+          bash "$TRACKER" create "$title" "$priority" ${PICK_REQUIRE_LABEL:+--label "$PICK_REQUIRE_LABEL"} 2>&1 | tee -a "$RUN_LOG"
         done
 
         # Create new issues for work not in the backlog (already done)
@@ -1246,6 +1271,8 @@ This issue will close automatically when the PR merges." 2>&1 | tee -a "$RUN_LOG
           perf)     PR_LABEL_ARGS="--label type:perf" ;;
           feat)     PR_LABEL_ARGS="--label type:feature" ;;
           style)    PR_LABEL_ARGS="--label type:style" ;;
+          refactor) PR_LABEL_ARGS="--label type:refactor" ;;
+          chore)    PR_LABEL_ARGS="--label type:chore" ;;
           *)        PR_LABEL_ARGS="" ;;
         esac
 

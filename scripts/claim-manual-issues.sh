@@ -17,6 +17,11 @@
 #   2. builder.sh's pre-pick sorts "anything feature-shaped last".
 #   3. The builder only runs Mon-Fri 23:00, so a weekend filing waits anyway.
 #
+# Since 2026-10-23 there is a fourth: the code-cleanup phase's pick filter
+# (builder.sh PICK_REQUIRE_LABEL) admits only type:refactor issues. origin:aaron
+# is the one other label it lets through, so this promotion is also what keeps
+# a hand-filed bug or feature buildable during the cleanup phase.
+#
 # Net effect: an issue Aaron wrote by hand was demoted within hours of filing
 # and never picked. This script closes that gap BEFORE triage can demote it.
 #
@@ -135,7 +140,7 @@ if [ -n "$APPLY" ] && [ -z "${_PILOT_TEST_MODE:-}" ]; then
   gh label create "$ORIGIN_LABEL" \
     --repo "$GITHUB_ISSUES_REPO" \
     --color "B60205" \
-    --description "Filed by hand by Aaron — GA-policy exempt, top priority" \
+    --description "Filed by hand by Aaron — exempt from the work-phase policy, top priority" \
     2>/dev/null || true
 fi
 
@@ -196,12 +201,13 @@ while IFS=$'\t' read -r num title; do
 **Promoted by Pilot** ($DATE) — 🙋 hand-filed by @${MANUAL_ISSUE_AUTHOR}
 
 This issue was filed by hand rather than by a Pilot agent, so it is exempt from
-the GA-readiness policy and has been moved to the front of the queue:
+the current work-phase policy (the code-cleanup phase pauses everything else)
+and has been moved to the front of the queue:
 \`$MANUAL_CLAIM_PRIORITY_LABEL\` + \`$ORIGIN_LABEL\` + \`state:unstarted\`.
 
 Standing rule (2026-08-30): if Aaron takes the time to file a ticket himself, it
-gets addressed ASAP — including net-new features that the GA policy would
-otherwise defer until post-GA.
+gets addressed ASAP — including bug fixes and net-new features that the policy
+would otherwise hold back.
 
 Triage still reviews this issue normally and may add implementation guidance;
 what it may **not** do is SKIP it for being feature-shaped.
@@ -221,7 +227,7 @@ if [ -n "$DO_NOTIFY" ] && [ "$CLAIMED" -gt 0 ] && [ -z "${_PILOT_TEST_MODE:-}" ]
   bash "$NOTIFY" send-async automation "🙋 *Hand-filed issues promoted* — $DATE
 
 $(printf '%b' "$CLAIMED_LIST")
-_Filed by hand, so exempt from the GA-readiness policy and queued at top priority._" >/dev/null 2>&1 || true
+_Filed by hand, so exempt from the work-phase policy and queued at top priority._" >/dev/null 2>&1 || true
 fi
 
 exit 0

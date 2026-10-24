@@ -30,50 +30,44 @@ RUN_LOG="$OUTPUT_DIR/lift-discover-$DATE.md"
 mkdir -p "$OUTPUT_DIR"
 touch "$SEARCH_LOG"
 
-# Weighted round robin — GA-readiness rotation (2026-08-21).
-# Lift is feature-complete and in beta; the pipeline's job now is stabilization
-# for a general-availability release. The rotation covers ONLY bug-finding,
-# performance, UI/UX refinement, accessibility, PWA reliability, and security.
-# Feature-hunting focuses (competitors, monetization, marketing, growth,
-# seo-aso, onboarding, data-viz, ui-trends, dx-cicd, testing) are retired from
-# the rotation but keep their case branches below for manual one-off runs
-# (./discover.sh competitors).
+# Weighted round robin — code-cleanup rotation (2026-10-23).
+# Feature work and bug fixes on Lift are paused. The pipeline's job now is
+# behavior-preserving cleanup: delete dead weight, collapse duplication, split
+# oversized modules, make patterns consistent, tighten types. Every focus in
+# the rotation files `type:refactor` issues, the only label the builder picks
+# (see PICK_REQUIRE_LABEL in builder.sh).
 #
-# 20-slot cycle at 3 runs/week (Sun/Tue/Thu) ≈ 6.5 weeks:
-#   5x/cycle (~1.3 weeks apart): bug-hunt — the GA priority
-#   4x/cycle (~1.6 weeks apart): performance, ux-polish
-#   3x/cycle (~2 weeks apart):   accessibility
-#   2x/cycle (~3 weeks apart):   pwa-reliability, security-deps
+# The GA-era focuses (bug-hunt, ux-polish, performance, accessibility,
+# pwa-reliability, security-deps) and the older feature-hunting ones keep
+# their case branches below for manual one-off runs (./discover.sh bug-hunt),
+# but they are out of the rotation.
+#
+# 12-slot cycle at 3 runs/week (Sun/Tue/Thu) = 4 weeks:
+#   3x/cycle: dead-code, duplication — the biggest bloat reducers
+#   2x/cycle: complexity, consistency
+#   1x/cycle: type-safety, dependency-pruning
 QUEUE_FILE="$OUTPUT_DIR/lift-discovery-queue.txt"
 
 # Bump this when the rotation changes shape. A live queue written by an older
 # rotation is discarded on the next run so stale focus areas never run again.
 # init.sh reads this value (grep) and stamps it when seeding a fresh queue.
-QUEUE_VERSION="2026-08-21-ga"
+QUEUE_VERSION="2026-10-23-cleanup"
 QUEUE_VERSION_FILE="$OUTPUT_DIR/lift-discovery-queue.version"
 
 refill_queue() {
   cat >> "$QUEUE_FILE" <<'QUEUE'
-bug-hunt
-performance
-ux-polish
-accessibility
-bug-hunt
-pwa-reliability
-ux-polish
-performance
-bug-hunt
-security-deps
-ux-polish
-accessibility
-bug-hunt
-performance
-pwa-reliability
-ux-polish
-bug-hunt
-accessibility
-performance
-security-deps
+dead-code
+duplication
+complexity
+consistency
+dead-code
+type-safety
+duplication
+complexity
+dependency-pruning
+dead-code
+duplication
+consistency
 QUEUE
 }
 
@@ -137,10 +131,28 @@ DECISIONS_FILE="${PRODUCT_DECISIONS_FILE:-$HOME/Documents/Obsidian Vault/20_Lear
 PRODUCT_DECISIONS=$(cat "$DECISIONS_FILE" 2>/dev/null || echo "No product decisions file found")
 
 # Focus-specific search instructions.
-# GA rotation focuses (bug-hunt, ux-polish, performance, accessibility,
-# pwa-reliability, security-deps) come first; retired feature-hunting focuses
+# Cleanup rotation focuses come first; the GA-era and feature-hunting focuses
 # below them remain available for manual runs only.
+CLEANUP_FOCUSES="dead-code duplication complexity consistency type-safety dependency-pruning"
 case "$FOCUS" in
+  dead-code)
+    SEARCH_PROMPT="Find code in $PROJECT_NAME that can be deleted without changing behavior. Skip the web search unless you need to confirm how a specific tool reports unused code. Read the codebase and look for: exported functions, components, composables, stores, and types that nothing imports; files no route or import reaches; props, emits, store state, and options that are never set or read; CSS classes and theme tokens nothing references; commented-out code; feature flags and fallbacks for conditions that can no longer happen; and leftover migration or compatibility shims whose migration has finished. Prove each candidate is dead with a repo-wide search for every way it could be referenced (imports, dynamic imports, string keys, templates, tests). Cite the file and symbol for every finding."
+    ;;
+  duplication)
+    SEARCH_PROMPT="Find duplicated logic in $PROJECT_NAME that should exist exactly once. Skip the web search unless a specific pattern needs it. Read the codebase and look for: the same computation (volume, 1RM, unit conversion, date bucketing, formatting) implemented in more than one component, store, or composable; copy-pasted component markup that differs only in a label or prop; parallel helpers that do the same thing under different names; and repeated Supabase query or persistence boilerplate. For each finding, name every copy (file + function), confirm the copies really behave identically (or state exactly where they differ), and say where the single shared version should live."
+    ;;
+  complexity)
+    SEARCH_PROMPT="Find the hardest-to-understand code in $PROJECT_NAME and propose behavior-preserving simplifications. Skip the web search unless a specific Vue 3 pattern needs it. Read the codebase and look for: components or stores over ~400 lines that mix several responsibilities; functions over ~60 lines or nested more than three levels deep; long if/else or switch chains that a lookup table would replace; watchers and computed chains that are hard to follow; and abstraction layers that only forward calls. For each finding, cite the file and function, say what makes it hard to follow, and describe the split or simplification concretely: what moves where and what gets deleted."
+    ;;
+  consistency)
+    SEARCH_PROMPT="Find places where $PROJECT_NAME does the same kind of thing in several different ways, and propose converging on the one the codebase uses most. Skip the web search unless you need to confirm an idiomatic Vue 3 / Pinia convention. Read the codebase and look for: mixed Options API and Composition API, or mixed store styles; several error-handling or toast patterns; several ways of reading settings, formatting dates or weights, or calling Supabase; inconsistent file and symbol naming; and inconsistent folder placement for the same kind of module. For each finding, list the competing variants with a file for each, name the one to keep, and list what changes."
+    ;;
+  type-safety)
+    SEARCH_PROMPT="Find loose typing in $PROJECT_NAME that can be tightened without changing runtime behavior. Skip the web search unless a TypeScript or Vue typing question needs it. Read the codebase and look for: any, as any, as unknown, and non-null assertions that hide a real type; untyped props, emits, and store state; Supabase results that are not typed from the generated types; and duplicated hand-written types that should be derived from one source. Only report changes that are type-level: no runtime logic changes. Cite the file and symbol for every finding."
+    ;;
+  dependency-pruning)
+    SEARCH_PROMPT="Find dependencies, config, and tooling in $PROJECT_NAME that can be removed or simplified without changing behavior. Read package.json, the lockfile, vite/tsconfig/eslint/vitest config, and the scripts folder. Look for: packages nothing imports; packages that duplicate each other or a few lines of code; polyfills for browsers the app no longer supports; config options that restate defaults; npm scripts and build steps nothing runs; and stale generated or vendored files. You may search the web to confirm what a package is for or whether a config option is a default. Prove each removal with a repo-wide search. Cite the file for every finding."
+    ;;
   bug-hunt)
     SEARCH_PROMPT="Hunt for real, reachable bugs in the $PROJECT_NAME codebase. First search the web for known pitfall patterns in the exact stack ($TECH_STACK — check package.json for versions): Vue 3 reactivity edge cases, Pinia state bugs, Supabase auth/session pitfalls, service-worker cache bugs, IndexedDB/localStorage quota and corruption issues. Then read the codebase and audit for: unhandled promise rejections, race conditions (rapid taps, concurrent sync, component unmount during async work), stale or corrupted persisted state, timezone/DST and date-boundary errors in workout history, unit-conversion errors (kg/lb), empty-state and null-data crashes, off-by-one errors in streaks/PRs/aggregates, and error paths that swallow failures silently. Every discovery must cite the specific file and line pattern — a bug report without a code location is not actionable."
     ;;
@@ -197,9 +209,36 @@ case "$FOCUS" in
     # entry that survived a rotation change). Under set -u an unset
     # SEARCH_PROMPT would kill the script later with a confusing error.
     echo "❌ Unknown focus area: '$FOCUS'" | tee -a "$RUN_LOG" >&2
-    echo "   Valid: bug-hunt ux-polish performance accessibility pwa-reliability security-deps" >&2
-    echo "   Manual-only (retired from rotation): competitors ui-trends testing pwa-patterns seo-aso data-viz onboarding dx-cicd monetization marketing growth" >&2
+    echo "   Valid: $CLEANUP_FOCUSES" >&2
+    echo "   Manual-only (retired from rotation): bug-hunt ux-polish performance accessibility pwa-reliability security-deps competitors ui-trends testing pwa-patterns seo-aso data-viz onboarding dx-cicd monetization marketing growth" >&2
     exit 1
+    ;;
+esac
+
+# Rules and examples depend on the mode. Rotation (cleanup) focuses get the
+# behavior-preserving rules; a manual run of a GA-era focus keeps the GA rules.
+case " $CLEANUP_FOCUSES " in
+  *" $FOCUS "*)
+    MODE_RULES="**CODE-CLEANUP MODE (as of 2026-10-23):** Feature work and bug fixes on $PROJECT_NAME are paused. The pipeline now ships ONLY behavior-preserving cleanup that makes the code smaller, simpler, and easier to understand. Every discovery you file is labeled \`type:refactor\` and will be built as a pure refactor.
+
+- Every discovery must leave the app's behavior exactly as it is: same UI, same data written, same storage keys, same routes, same database schema and queries' results. If a change would alter anything a user or the database could observe, it is not a cleanup — do not file it.
+- Do NOT file bugs, performance fixes, UX changes, accessibility fixes, or features, even ones you are sure of — they would be mislabeled as refactors. Mention a real bug you notice in the Search Summary prose only.
+- Do NOT propose test-only additions. Do NOT propose rewriting working tests; tests are the proof that a refactor preserved behavior.
+- Prefer findings that delete code. A good cleanup issue names what gets removed or merged and roughly how many lines go away; a rename or reshuffle with no reduction in size or complexity is churn — skip it.
+- Each discovery must be one coherent change a reviewer can verify in a single PR — split sprawling cleanups by module."
+    PRIORITY_GUIDE="2=high-leverage cleanup (hundreds of dead or duplicated lines, a module so tangled it slows every change near it); 3=solid cleanup with clear payoff; 4=small tidy-up"
+    DISCOVER_EXAMPLES="ISSUE_DISCOVER:2:Collapse the three e1RM implementations into one helper|useProgress.ts (estimate1RM), PRBadge.vue (calcOneRepMax), and stores/history.ts (oneRm) each implement the Epley formula; the store's version also rounds to 0.5. Keep one pure function in src/lib/strength.ts with an explicit rounding argument, point all three callers at it, delete the copies (~45 lines). Existing PR and progress tests must pass unchanged.
+ISSUE_DISCOVER:3:Delete unused LegacyExportDialog and its store slice|LegacyExportDialog.vue has no importer since the settings rewrite; stores/export.ts state 'legacyFormat' is read only by it. Repo-wide search for the component name, its route name, and the state key finds no other reference. Delete both (~210 lines)."
+    ;;
+  *)
+    MODE_RULES="**GA-READINESS MODE (as of 2026-08):** $PROJECT_NAME is feature-complete and in beta, stabilizing for a general-availability release. Your job is finding defects and refinement opportunities in what EXISTS — not proposing what could be added.
+
+- Do NOT propose net-new features, new screens, new integrations, or monetization/growth/marketing work — these will be rejected. If you notice a compelling feature idea, mention it in the Search Summary prose only; do not create an issue for it.
+- Do NOT propose test-only additions — the suite is already extensive. New tests are welcome only bundled into a bug-fix issue as regression proof for that bug.
+- Every discovery must be a bug fix, a performance improvement, a UX refinement of an existing flow, an accessibility fix, or a security fix."
+    PRIORITY_GUIDE="1=crash, data loss, or security vulnerability; 2=user-visible bug, broken flow, or significant performance problem; 3=UX friction or polish with clear user benefit; 4=minor cosmetic issue"
+    DISCOVER_EXAMPLES="ISSUE_DISCOVER:2:Fix lost set data when app is backgrounded mid-rest-timer|WorkoutView.vue persists the active session only on explicit save; iOS kills backgrounded PWAs after ~30s, so sets logged before a rest timer are lost. Repro: log set, background app during timer, reopen. Fix: persist activeWorkout to localStorage on every mutation.
+ISSUE_DISCOVER:3:Debounce weight input in SetRow to stop cursor jumps|SetRow.vue writes to the store on every keystroke and the store round-trips the formatted value back into the input, resetting cursor position mid-typing. Debounce or write-through only on blur."
     ;;
 esac
 
@@ -245,11 +284,7 @@ $PREVIOUS_SEARCHES
 
 ## Rules
 
-**GA-READINESS MODE (as of 2026-08):** $PROJECT_NAME is feature-complete and in beta, stabilizing for a general-availability release. Your job is finding defects and refinement opportunities in what EXISTS — not proposing what could be added.
-
-- Do NOT propose net-new features, new screens, new integrations, or monetization/growth/marketing work — these will be rejected. If you notice a compelling feature idea, mention it in the Search Summary prose only; do not create an issue for it.
-- Do NOT propose test-only additions — the suite is already extensive. New tests are welcome only bundled into a bug-fix issue as regression proof for that bug.
-- Every discovery must be a bug fix, a performance improvement, a UX refinement of an existing flow, an accessibility fix, or a security fix.
+$MODE_RULES
 - **NEVER** recommend features that match canceled issues or their variations — these were explicitly rejected
 - Do NOT duplicate open backlog items or completed issues
 - Do NOT repeat searches from the previous log — find new angles, new sources, new insights
@@ -257,7 +292,7 @@ $PREVIOUS_SEARCHES
 - Ground every discovery in the actual codebase: cite the file (and component/function) it applies to
 - Include the source URL or reasoning for each discovery
 - Aim for 2-6 high-quality discoveries per run. Fewer is fine — **zero is a valid result** if nothing meets the bar. Do not pad the list to hit a quota.
-- Priority guide: 1=crash, data loss, or security vulnerability; 2=user-visible bug, broken flow, or significant performance problem; 3=UX friction or polish with clear user benefit; 4=minor cosmetic issue
+- Priority guide: $PRIORITY_GUIDE
 
 ## Output format
 
@@ -272,8 +307,7 @@ ISSUE_DISCOVER:priority:title|description with source URL or reasoning
 (If nothing met the bar, write "No discoveries met the bar this run" here instead — that is a valid result.)
 
 Example:
-ISSUE_DISCOVER:2:Fix lost set data when app is backgrounded mid-rest-timer|WorkoutView.vue persists the active session only on explicit save; iOS kills backgrounded PWAs after ~30s, so sets logged before a rest timer are lost. Repro: log set, background app during timer, reopen. Fix: persist activeWorkout to localStorage on every mutation.
-ISSUE_DISCOVER:3:Debounce weight input in SetRow to stop cursor jumps|SetRow.vue writes to the store on every keystroke and the store round-trips the formatted value back into the input, resetting cursor position mid-typing. Debounce or write-through only on blur.
+$DISCOVER_EXAMPLES
 
 ## Search Log
 List the specific queries and URLs you searched (for the search log):
@@ -307,7 +341,18 @@ case "$DISCOVER_RESEARCH_BACKEND" in
     ;;
 esac
 
-echo "  🔍 Phase 1: web research ($FOCUS) — backend order: $RESEARCH_ORDER" | tee -a "$RUN_LOG"
+# Cleanup focuses are answered by reading the repo, which the research backends
+# cannot do, so Phase 1 is skipped for them instead of paying for a web pass
+# that has nothing to find. Phase 2 can still use WebSearch for a specific question.
+case " $CLEANUP_FOCUSES " in
+  *" $FOCUS "*) RESEARCH_ORDER="" ;;
+esac
+
+if [ -z "$RESEARCH_ORDER" ]; then
+  echo "  ⏭️  Phase 1: web research skipped ($FOCUS is a codebase-only cleanup focus)" | tee -a "$RUN_LOG"
+else
+  echo "  🔍 Phase 1: web research ($FOCUS) — backend order: $RESEARCH_ORDER" | tee -a "$RUN_LOG"
+fi
 RESEARCH_PROMPT="You are a product research assistant. $SEARCH_PROMPT Be specific — include URLs, app names, version numbers, Reddit post links, dates. Structure your findings as a numbered list. Do NOT make recommendations — just report what you find."
 RESEARCH_ERR=$(mktemp)
 RESEARCH_BACKEND_USED=""
@@ -323,7 +368,10 @@ for _backend in $RESEARCH_ORDER; do
   : > "$RESEARCH_FILE"
 done
 
-if [ -z "$RESEARCH_BACKEND_USED" ]; then
+if [ -z "$RESEARCH_ORDER" ]; then
+  RESEARCH_BACKEND_USED="skipped"
+  echo "Web research was skipped: this is a codebase-only cleanup focus." > "$RESEARCH_FILE"
+elif [ -z "$RESEARCH_BACKEND_USED" ]; then
   echo "  ⚠️ All research backends failed. Claude self-researches in Phase 2 via WebSearch/WebFetch." | tee -a "$RUN_LOG"
   echo "Web research was unavailable for this run (${RESEARCH_REASON:-unknown})." > "$RESEARCH_FILE"
   # FAIL LOUD — a silent research outage (the retired Gemini OAuth CLI) degraded
@@ -434,8 +482,12 @@ DISCOVER_END=$(date +%s)
 DISCOVER_DURATION=$((DISCOVER_END - DISCOVER_START))
 
 # Map focus area to issue label
+# Cleanup focuses map to type:refactor, the label builder.sh's
+# PICK_REQUIRE_LABEL filter admits into the picking pool.
 focus_to_label() {
   case "$1" in
+    dead-code|duplication|complexity|consistency|type-safety|dependency-pruning)
+                     echo "type:refactor" ;;
     bug-hunt)        echo "bug" ;;
     ux-polish)       echo "UI/UX" ;;
     pwa-reliability) echo "PWA" ;;

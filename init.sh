@@ -341,15 +341,23 @@ echo "  14) growth           — user acquisition, retention, referrals"
 echo "  15) bug-hunt         — codebase bug hunting: races, edge cases, data loss"
 echo "  16) ux-polish        — refine existing flows: states, consistency, friction"
 echo "  17) pwa-reliability  — offline sync correctness, SW update flow, cache bugs"
+echo "  18) dead-code        — unused files, exports, props, CSS, finished shims"
+echo "  19) duplication      — logic implemented more than once"
+echo "  20) complexity       — oversized modules, deep nesting, pass-through layers"
+echo "  21) consistency      — several patterns for one job; converge on one"
+echo "  22) type-safety      — any, unchecked casts, untyped props/state"
+echo "  23) dependency-pruning — unused packages, config that restates defaults"
 echo ""
 echo "  Tip: for a mature app stabilizing toward release, pick 15,16,2,4,17,6"
 echo "  (the GA-readiness set — no feature-hunting focuses)."
+echo "  For a behavior-preserving cleanup phase, pick 18,19,20,21,22,23 and keep"
+echo "  PICK_REQUIRE_LABEL=\"type:refactor\" so the builder only picks cleanup work."
 echo ""
 ask "Enter numbers to include (comma-separated) [1,2,3,4,5,6]: "
 read -r FOCUS_CHOICES
 FOCUS_CHOICES="${FOCUS_CHOICES:-1,2,3,4,5,6}"
 
-FOCUS_MAP=("" "competitors" "performance" "ui-trends" "accessibility" "testing" "security-deps" "pwa-patterns" "seo-aso" "data-viz" "onboarding" "dx-cicd" "monetization" "marketing" "growth" "bug-hunt" "ux-polish" "pwa-reliability")
+FOCUS_MAP=("" "competitors" "performance" "ui-trends" "accessibility" "testing" "security-deps" "pwa-patterns" "seo-aso" "data-viz" "onboarding" "dx-cicd" "monetization" "marketing" "growth" "bug-hunt" "ux-polish" "pwa-reliability" "dead-code" "duplication" "complexity" "consistency" "type-safety" "dependency-pruning")
 FOCUS_AREAS=""
 IFS=',' read -ra CHOICES <<< "$FOCUS_CHOICES"
 for c in "${CHOICES[@]}"; do
@@ -419,8 +427,9 @@ ROADMAP_MAX_TURNS=3
 MAX_CONSECUTIVE_FAILURES=3
 MAX_STALLS=2
 MAX_FIX_ATTEMPTS=1
-# Flow / backlog policies (WIP limit, backlog expiry, release burndown):
+# Flow / backlog policies (WIP limit, work-phase pick filter, backlog expiry, release burndown):
 MAX_OPEN_PRS=8
+PICK_REQUIRE_LABEL="type:refactor"
 BACKLOG_EXPIRY_DAYS=56
 GA_MILESTONE="GA"
 # Sonnet planning-agent effort (creativity / quality) — low|medium|high|max:

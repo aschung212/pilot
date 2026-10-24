@@ -12,12 +12,15 @@
 # fixes. Replaced by "error-resilience", which hunts the failure paths users
 # actually hit. Historical test-architecture rows in the history CSV are
 # harmless; select_axis simply no longer counts them.
+# 2026-10-23 (code-cleanup phase): "error-resilience" retired the same way —
+# it hunted bugs, and bug fixes are paused. Replaced by "duplication", which
+# finds logic implemented more than once. Its old history rows are harmless.
 ARCHITECT_AXES=(
   "store-coherence"
   "composable-quality"
   "component-boundaries"
   "type-safety"
-  "error-resilience"
+  "duplication"
   "pwa-offline"
   "theme-invariants"
   "supabase-rls"
@@ -73,7 +76,7 @@ axis_display_name() {
     composable-quality)   echo "Composable Abstraction Quality" ;;
     component-boundaries) echo "Component Layer Boundaries" ;;
     type-safety)          echo "Type-Safety Gaps" ;;
-    error-resilience)     echo "Error-Path Resilience" ;;
+    duplication)          echo "Cross-Module Duplication" ;;
     pwa-offline)          echo "PWA / Offline Path" ;;
     theme-invariants)     echo "Theme System Invariants" ;;
     supabase-rls)         echo "Supabase RLS / Data-Shape Drift" ;;
@@ -210,19 +213,19 @@ Hunt for runtime type hazards in \`$repo/src/\`:
 Scan: all \`.ts\` and \`.vue\` files under \`$repo/src/\`.
 AXIS
       ;;
-    error-resilience)
+    duplication)
       cat <<AXIS
-## Axis: Error-Path Resilience
+## Axis: Cross-Module Duplication
 
-Investigate what happens when things FAIL — the paths users hit when the network drops, a write races, or Supabase errors:
+Hunt for logic that exists more than once and should exist exactly once:
 
-1. **Unhandled rejections** — async actions (store actions, composables, event handlers) without try/catch or \`.catch\`. Each is a silent-failure or white-screen risk.
-2. **User-visible failure UX** — when a save/sync/load fails, does the user see an error state with a retry path, or does the UI pretend it worked? Silent data loss is the worst GA bug class.
-3. **Global error capture** — is there an app-level \`onErrorCaptured\` / \`window.onerror\` / unhandledrejection handler, or do errors vanish into the console?
-4. **Partial-write consistency** — multi-step writes (e.g. workout + sets) that can fail halfway and leave stores/DB inconsistent, with no rollback or reconciliation.
-5. **Retry and recovery** — are transient failures retried (with backoff), and does recovering (back online, re-auth) resume cleanly without a manual refresh?
+1. **Repeated domain math** — volume, estimated 1RM, unit conversion, PR detection, streaks, date bucketing implemented separately in components, stores, and composables.
+2. **Parallel helpers** — two or more utilities that do the same job under different names (formatters, date helpers, debounce/throttle wrappers, ID generators).
+3. **Copy-pasted components** — near-identical templates or components that differ only in a label, icon, or prop and should be one component.
+4. **Persistence boilerplate** — the same Supabase query, localStorage read/write, or sync wrapper written out at each call site.
+5. **Divergent copies** — duplicates that have already drifted apart. Name exactly where they differ; converging them must not change what any caller observes.
 
-Scan: \`$repo/src/stores/**\`, \`$repo/src/composables/**\`, \`$repo/src/main.ts\`, \`$repo/src/App.vue\`, \`$repo/src/lib/**\`.
+Scan: all \`.ts\` and \`.vue\` files under \`$repo/src/\`.
 AXIS
       ;;
     pwa-offline)
@@ -321,8 +324,8 @@ You MUST respond with a valid JSON block (and nothing else outside it). The JSON
 ## Rules
 
 - Return **3-7 findings** — quality over quantity. If you find fewer real issues, return fewer.
-- **GA-readiness lens:** $project is feature-complete and stabilizing for a general-availability release. Prefer findings that manifest as user-visible bugs, data loss, performance problems, or broken failure paths. Deprioritize purely structural refactors (naming, file organization, abstraction taste) — report those only at priority 4, or not at all.
-- Priority: 1=architectural risk (data loss / security), 2=high structural debt, 3=medium improvement, 4=low polish.
+- **Code-cleanup lens:** feature work and bug fixes on $project are paused; the pipeline ships only behavior-preserving refactors that make the code smaller, simpler, and easier to understand. Every finding is filed as a \`type:refactor\` issue and built as a pure refactor, so each one MUST be achievable without changing anything a user or the database can observe. Prefer findings that delete or merge code over ones that only move it. If you find a real bug, say so in the summary — do NOT file it as a finding.
+- Priority: 2=high structural debt (slows every change near it), 3=medium improvement, 4=low polish. Do not use priority 1 — risks severe enough for it are bugs, which belong in the summary.
 - Each finding must reference at least one real file path you actually read.
 - Do NOT report trivial issues: unused imports, typos, style nits — those belong to the Discovery agent.
 - Focus on SYSTEM-LEVEL patterns: things that affect multiple components, cause future brittleness, or create hidden coupling.

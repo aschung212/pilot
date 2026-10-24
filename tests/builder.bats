@@ -533,3 +533,32 @@ PRBODY'
   grep -q 'PRIMARY_ISSUE_NUM="${PRIMARY_ISSUE##\*-}"' "$PILOT_DIR/scripts/builder.sh"
   grep -q 'Closes #\$PRIMARY_ISSUE_NUM' "$PILOT_DIR/scripts/builder.sh"
 }
+
+# ── filter_backlog_by_label (work-phase pick filter) ─────────────────────────
+
+# bats test_tags=fast
+@test "builder: filter_backlog_by_label keeps the phase label and origin:aaron only" {
+  local backlog=$'TEST-1 Collapse duplicate helpers\nTEST-2 Fix a bug\nTEST-3 Hand-filed feature\nTEST-4 Near-miss label\nTEST-5 No labels\nTEST-11 Delete dead code'
+  local map=$'TEST-1\tpriority:2-high,type:refactor\nTEST-2\tpriority:1-urgent,bug\nTEST-3\torigin:aaron,priority:1-urgent\nTEST-4\ttype:refactoring\nTEST-11\ttype:refactor'
+  run filter_backlog_by_label "$backlog" "$map" "type:refactor"
+  [ "$status" -eq 0 ]
+  [ "$output" = $'TEST-1 Collapse duplicate helpers\nTEST-3 Hand-filed feature\nTEST-11 Delete dead code' ]
+}
+
+# bats test_tags=fast
+@test "builder: filter_backlog_by_label does not admit TEST-1 via TEST-11" {
+  run filter_backlog_by_label $'TEST-1 Bug\nTEST-11 Refactor' $'TEST-1\tbug\nTEST-11\ttype:refactor' "type:refactor"
+  [ "$output" = "TEST-11 Refactor" ]
+}
+
+# bats test_tags=fast
+@test "builder: filter_backlog_by_label fails closed on an empty label map" {
+  run filter_backlog_by_label $'TEST-1 Anything\nTEST-2 Else' "" "type:refactor"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+# bats test_tags=fast
+@test "builder: PICK_REQUIRE_LABEL defaults to type:refactor and can be disabled with an empty value" {
+  grep -q 'PICK_REQUIRE_LABEL="${PICK_REQUIRE_LABEL-type:refactor}"' "$PILOT_DIR/scripts/builder.sh"
+}

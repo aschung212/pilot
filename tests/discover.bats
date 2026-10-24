@@ -3,55 +3,49 @@
 
 load test_helper
 
+# Pull a function definition out of the real script, so these tests exercise
+# discover.sh itself rather than a pasted copy that can drift from it.
+_load_discover_fn() {
+  local def
+  def=$(sed -n '/^'"$1"'() {$/,/^}$/p' "$PILOT_DIR/scripts/discover.sh")
+  [ -n "$def" ] || { echo "function $1 not found in discover.sh" >&2; return 1; }
+  eval "$def"
+}
+
 # bats test_tags=fast
-@test "discover: queue refill produces correct GA focus areas" {
-  # Mirror the GA-readiness refill queue from discover.sh (2026-08-21)
+@test "discover: queue refill produces the code-cleanup rotation" {
   QUEUE_FILE="$TEST_TMPDIR/queue.txt"
-  cat > "$QUEUE_FILE" <<'QUEUE'
-bug-hunt
-performance
-ux-polish
-accessibility
-bug-hunt
-pwa-reliability
-ux-polish
-performance
-bug-hunt
-security-deps
-ux-polish
-accessibility
-bug-hunt
-performance
-pwa-reliability
-ux-polish
-bug-hunt
-accessibility
-performance
-security-deps
-QUEUE
+  : > "$QUEUE_FILE"
+  _load_discover_fn refill_queue
+  refill_queue
 
-  # Pop first item — bug-hunt leads the GA rotation
-  FOCUS=$(head -1 "$QUEUE_FILE")
-  [ "$FOCUS" = "bug-hunt" ]
+  # dead-code leads the rotation
+  [ "$(head -1 "$QUEUE_FILE")" = "dead-code" ]
+  [ "$(wc -l < "$QUEUE_FILE" | tr -d ' ')" -eq 12 ]
+  [ "$(grep -cx dead-code "$QUEUE_FILE")" -eq 3 ]
+  [ "$(grep -cx duplication "$QUEUE_FILE")" -eq 3 ]
+  [ "$(grep -cx complexity "$QUEUE_FILE")" -eq 2 ]
+  [ "$(grep -cx consistency "$QUEUE_FILE")" -eq 2 ]
+  [ "$(grep -cx type-safety "$QUEUE_FILE")" -eq 1 ]
+  [ "$(grep -cx dependency-pruning "$QUEUE_FILE")" -eq 1 ]
 
-  # Count total items
-  COUNT=$(wc -l < "$QUEUE_FILE" | tr -d ' ')
-  [ "$COUNT" -eq 20 ]
+  # GA-era and feature-hunting focuses are out of the rotation entirely
+  ! grep -qE "bug-hunt|ux-polish|performance|accessibility|pwa-reliability|security-deps|competitors|monetization|marketing|growth|testing" "$QUEUE_FILE"
+}
 
-  # bug-hunt appears 5 times (highest weight)
-  BUG_COUNT=$(grep -c "bug-hunt" "$QUEUE_FILE")
-  [ "$BUG_COUNT" -eq 5 ]
-
-  # ux-polish appears 4 times
-  UX_COUNT=$(grep -c "ux-polish" "$QUEUE_FILE")
-  [ "$UX_COUNT" -eq 4 ]
-
-  # security-deps appears twice (lowest weight)
-  SEC_COUNT=$(grep -c "security-deps" "$QUEUE_FILE")
-  [ "$SEC_COUNT" -eq 2 ]
-
-  # Feature-hunting focuses are retired from the rotation entirely
-  ! grep -qE "competitors|monetization|marketing|growth|testing|ui-trends|onboarding|data-viz|seo-aso|dx-cicd" "$QUEUE_FILE"
+# bats test_tags=fast
+@test "discover: every rotation focus has a case branch and maps to type:refactor" {
+  QUEUE_FILE="$TEST_TMPDIR/queue.txt"
+  : > "$QUEUE_FILE"
+  _load_discover_fn refill_queue
+  _load_discover_fn focus_to_label
+  refill_queue
+  for focus in $(sort -u "$QUEUE_FILE"); do
+    grep -qE "^  ${focus}\)" "$PILOT_DIR/scripts/discover.sh" \
+      || { echo "no SEARCH_PROMPT branch for $focus" >&2; false; }
+    [ "$(focus_to_label "$focus")" = "type:refactor" ] \
+      || { echo "$focus does not map to type:refactor" >&2; false; }
+  done
 }
 
 # bats test_tags=fast
@@ -59,9 +53,9 @@ QUEUE
   # Mirror the version-guard logic from discover.sh
   QUEUE_FILE="$TEST_TMPDIR/queue.txt"
   QUEUE_VERSION_FILE="$TEST_TMPDIR/queue.version"
-  QUEUE_VERSION="2026-08-21-ga"
+  QUEUE_VERSION="2026-10-23-cleanup"
 
-  # Simulate a live queue left over from the pre-GA rotation (no version file)
+  # Simulate a live queue left over from an older rotation (no version file)
   printf 'testing\nmonetization\n' > "$QUEUE_FILE"
 
   if [ "$(cat "$QUEUE_VERSION_FILE" 2>/dev/null)" != "$QUEUE_VERSION" ]; then
@@ -74,39 +68,18 @@ QUEUE
   [ "$(cat "$QUEUE_VERSION_FILE")" = "$QUEUE_VERSION" ]
 
   # A second run with a matching version leaves the queue alone
-  printf 'bug-hunt\n' > "$QUEUE_FILE"
+  printf 'dead-code\n' > "$QUEUE_FILE"
   if [ "$(cat "$QUEUE_VERSION_FILE" 2>/dev/null)" != "$QUEUE_VERSION" ]; then
     : > "$QUEUE_FILE"
   fi
-  [ "$(head -1 "$QUEUE_FILE")" = "bug-hunt" ]
+  [ "$(head -1 "$QUEUE_FILE")" = "dead-code" ]
 }
 
 # bats test_tags=fast
 @test "discover: focus_to_label maps correctly" {
-  # Test the label mapping function from discover.sh
-  focus_to_label() {
-    case "$1" in
-      bug-hunt)        echo "bug" ;;
-      ux-polish)       echo "UI/UX" ;;
-      pwa-reliability) echo "PWA" ;;
-      performance)     echo "Performance" ;;
-      accessibility)   echo "Accessibility" ;;
-      ui-trends)       echo "UI/UX" ;;
-      testing)         echo "Testing" ;;
-      security-deps)   echo "Security" ;;
-      pwa-patterns)    echo "PWA" ;;
-      competitors)     echo "Improvement" ;;
-      data-viz)        echo "UI/UX" ;;
-      onboarding)      echo "UI/UX" ;;
-      dx-cicd)         echo "Infrastructure" ;;
-      seo-aso)         echo "Growth" ;;
-      monetization)    echo "Growth" ;;
-      marketing)       echo "Marketing" ;;
-      growth)          echo "Growth" ;;
-      *)               echo "" ;;
-    esac
-  }
+  _load_discover_fn focus_to_label
 
+  [ "$(focus_to_label dead-code)" = "type:refactor" ]
   [ "$(focus_to_label bug-hunt)" = "bug" ]
   [ "$(focus_to_label ux-polish)" = "UI/UX" ]
   [ "$(focus_to_label pwa-reliability)" = "PWA" ]

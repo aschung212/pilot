@@ -46,7 +46,7 @@ teardown() {
 # bats test_tags=fast
 @test "architect: all expected axes are present" {
   local expected=("store-coherence" "composable-quality" "component-boundaries"
-                  "type-safety" "error-resilience" "pwa-offline"
+                  "type-safety" "duplication" "pwa-offline"
                   "theme-invariants" "supabase-rls")
   for ax in "${expected[@]}"; do
     local found=0

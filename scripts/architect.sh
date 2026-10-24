@@ -359,6 +359,7 @@ $FINDING_BODY" 2>/dev/null || true
           "$FINDING_PRIORITY" \
           --state "unstarted" \
           --label "architect:" \
+          --label "type:refactor" \
           --description "$FINDING_BODY" \
           2>&1 | tee -a "$RUN_LOG" || true
       else

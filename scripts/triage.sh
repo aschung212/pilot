@@ -64,7 +64,7 @@ mkdir -p "$OUTPUT_DIR"
 echo "🚥 Triage Agent — $DATE${RETRIAGE:+ (re-triage sweep)}" | tee "$TRIAGE_LOG"
 
 # Start Slack thread for this triage session
-THREAD_TS=$(bash "$NOTIFY" --as triage thread-start automation "🚥 *Triage — $DATE*${RETRIAGE:+ — GA re-triage sweep}")
+THREAD_TS=$(bash "$NOTIFY" --as triage thread-start automation "🚥 *Triage — $DATE*${RETRIAGE:+ — re-triage sweep}")
 THREAD_TS=$(echo "$THREAD_TS" | tr -d ' \n')
 
 # Load product decisions for context
@@ -103,9 +103,9 @@ fi
 # ── Promote issues Aaron filed by hand ───────────────────────────────────
 # Also BEFORE the triageable query, and after reconcile: an issue Aaron filed
 # through the GitHub UI has no state:* label, so it is already triageable —
-# but it has no priority either, and the GA-readiness policy below would SKIP
+# but it has no priority either, and the triage policy below would SKIP
 # it to priority:4-low if it proposes a feature. This pre-step stamps
-# origin:aaron + priority:1-urgent first, so the GA carve-out keyed on
+# origin:aaron + priority:1-urgent first, so the carve-out keyed on
 # origin:aaron fires during this same run.
 #
 # Pre-step, not a gate — a failure must never stop triage. Kill switch:
@@ -258,7 +258,7 @@ for issue_id in $UNTRIAGED_IDS; do
   # Load triage learnings (self-improving context from past corrections)
   TRIAGE_LEARNINGS=$(cat "$OUTPUT_DIR/lift-triage-learnings.md" 2>/dev/null | head -40 | tr '\n' ' ' || echo "No learnings yet.")
 
-  # ── GA-policy carve-out for hand-filed issues ──────────────────────────
+  # ── Policy carve-out for hand-filed issues ──────────────────────────
   # Read the label off the API rather than grepping ISSUE_DETAIL: the marker
   # comment claim-manual-issues.sh leaves contains the literal string
   # "origin:aaron", so a substring match over the issue text would false-
@@ -272,11 +272,11 @@ for issue_id in $UNTRIAGED_IDS; do
 
   if [ -n "$MANUAL_FILED" ]; then
     GA_CARVEOUT="
-OVERRIDE — THIS ISSUE IS EXEMPT FROM THE GA-READINESS POLICY ABOVE. It carries the \`origin:aaron\` label, meaning Aaron filed it by hand rather than a Pilot agent proposing it. Standing rule (2026-08-30): if Aaron takes the time to file a ticket himself, it gets addressed ASAP. Therefore:
+OVERRIDE — THIS ISSUE IS EXEMPT FROM THE CODE-CLEANUP POLICY ABOVE. It carries the \`origin:aaron\` label, meaning Aaron filed it by hand rather than a Pilot agent proposing it. Standing rule (2026-08-30): if Aaron takes the time to file a ticket himself, it gets addressed ASAP. Therefore:
 - You MUST NOT return SKIP on the grounds that it is a net-new feature, a new screen, a new integration, or growth/monetization work. 'Deferred until post-GA' does NOT apply to this issue.
 - Treat it as APPROVE or ENHANCE. Prefer ENHANCE when the issue is loosely specified — tighten the scope and add implementation guidance rather than punting.
 - Leave SUGGESTED_PRIORITY at 1. It has already been promoted to priority:1-urgent deliberately; do not lower it.
-- SKIP remains valid ONLY for reasons unrelated to the GA policy — e.g. it is a true duplicate of an existing issue, or it is already implemented. Say which, explicitly.
+- SKIP remains valid ONLY for reasons unrelated to the policy above — e.g. it is a true duplicate of an existing issue, or it is already implemented. Say which, explicitly.
 - FLAG remains valid if there is a genuine product decision only Aaron can make, subject to the two-concrete-options rule below."
   else
     GA_CARVEOUT=""
@@ -292,12 +292,12 @@ CRITICAL RULES FROM PAST CORRECTIONS: $TRIAGE_LEARNINGS
 Issue: $ISSUE_TITLE
 Details: $(echo "$ISSUE_DETAIL" | head -20 | tr '\n' ' ')
 
-GA-READINESS POLICY (in effect since 2026-08, supersedes any older triage verdict in the issue's comments): $PROJECT_NAME is feature-complete and in beta, stabilizing for a general-availability release. The pipeline now ships ONLY: bug fixes, performance improvements, UI/UX refinement of existing flows, accessibility fixes, and security fixes.
+CODE-CLEANUP POLICY (in effect since 2026-10-23, supersedes any older triage verdict in the issue's comments): feature work and bug fixes on $PROJECT_NAME are paused while the codebase is cleaned up. The builder now only picks issues labeled \`type:refactor\` (plus hand-filed ones); every other issue simply waits in the backlog until the phase ends. So triage every issue honestly, for when it will eventually be built:
+- Refactor / cleanup issues (dead code, duplication, complexity, consistency, type tightening, dependency pruning): APPROVE or ENHANCE only if the change is behavior-preserving — same UI, same stored data and keys, same routes, same results. SKIP churn that renames or reshuffles code without making it smaller or simpler. For these, ACCEPTANCE_CRITERIA must be verifiable without a behavior change, e.g. \"existing tests pass with no assertion changes | the Workout screen renders identically | src/lib/legacy.ts is deleted\".
+- Bug reports, perf issues, UX polish, a11y, and security issues: triage normally under the rules below and keep their honest priority. Do NOT SKIP or deprioritize them because of the pause — the builder's label filter already holds them back.
 - SKIP any issue proposing a net-new feature, new screen, new integration, or monetization/growth/marketing/SEO work. In the REASON, say 'deferred until post-GA' — these are not bad ideas, just not now.
-- SKIP issues that only add test coverage or tooling without fixing a user-facing defect (the suite is already extensive). Tests are welcome only inside a bug-fix issue as regression proof.
-- Large refactors: APPROVE only if they directly unblock a bug, performance, or reliability fix — not for cleanliness alone.
-- Bug reports, perf issues, UX polish, a11y, and security issues triage normally under the rules below.
-- SUGGESTED_PRIORITY under this policy: 1=crash/data loss/security, 2=user-visible bug or significant perf problem, 3=UX friction/polish, 4=cosmetic or deferred.
+- SKIP issues that only add test coverage or tooling without fixing a defect (the suite is already extensive).
+- SUGGESTED_PRIORITY: 1=crash/data loss/security, 2=user-visible bug, significant perf problem, or high-leverage cleanup, 3=UX friction/polish or solid cleanup, 4=cosmetic, small tidy-up, or deferred.
 $GA_CARVEOUT
 
 $RESCOPE_GUIDANCE
@@ -509,15 +509,15 @@ $REASON
 
 ---
 _Automated triage — can be overridden by moving to Unstarted._" || true
-      # Deterministic backstop for the GA carve-out. The prompt tells the model
+      # Deterministic backstop for the hand-filed carve-out. The prompt tells the model
       # not to SKIP an origin:aaron issue, but a prompt is a request, not a
       # guarantee — and the demotion to priority:4 is exactly what buries a
       # hand-filed issue for good. Keep the SKIP comment (the reasoning may be
       # worth reading) but refuse the demotion.
       if [ -n "$MANUAL_FILED" ]; then
-        echo "    ⚠️  SKIP verdict on hand-filed $issue_id — keeping priority:1-urgent (GA carve-out)" | tee -a "$TRIAGE_LOG"
+        echo "    ⚠️  SKIP verdict on hand-filed $issue_id — keeping priority:1-urgent (hand-filed carve-out)" | tee -a "$TRIAGE_LOG"
         log_warn "triage returned SKIP on origin:aaron issue $issue_id; demotion suppressed"
-        bash "$TRACKER" comment-add "$issue_id" "⚠️ The SKIP above was **not** applied to this issue's priority. It carries \`origin:aaron\` (filed by hand), so the GA-readiness policy does not defer it and it stays at \`priority:1-urgent\`. If this really should be dropped, remove the \`origin:aaron\` label." || true
+        bash "$TRACKER" comment-add "$issue_id" "⚠️ The SKIP above was **not** applied to this issue's priority. It carries \`origin:aaron\` (filed by hand), so the triage policy does not defer it and it stays at \`priority:1-urgent\`. If this really should be dropped, remove the \`origin:aaron\` label." || true
       else
         bash "$TRACKER" update "$issue_id" --priority 4 || true
       fi

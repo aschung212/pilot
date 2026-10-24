@@ -111,6 +111,27 @@ is_auth_failure() {
   echo "$output" | grep -qiE 'authentication_error|Invalid authentication|Not logged in|Please run /login|API Error: 401'
 }
 
+# ── filter_backlog_by_label ──────────────────────────────────────────────────
+# The work-phase pick filter (PICK_REQUIRE_LABEL in builder.sh). Keeps only the
+# backlog rows whose issue carries the required label or origin:aaron, which
+# always passes. Labels are compared whole, so "type:refactor" does not match
+# "type:refactoring", and IDs are compared whole, so LIFT-1 does not admit
+# LIFT-11. An empty label map keeps nothing: the filter fails closed rather
+# than letting a paused backlog through.
+# Input: $1 = backlog, one "PREFIX-N Title" row per line
+#        $2 = label map, one "PREFIX-N<TAB>label,label,..." row per line
+#        $3 = required label
+# Output: the kept backlog rows, original order
+filter_backlog_by_label() {
+  local backlog="$1" label_map="$2" want="$3" ids
+  ids=$(printf '%s\n' "$label_map" | awk -F'\t' -v want="$want" '
+    { n = split($2, l, ","); for (i = 1; i <= n; i++) if (l[i] == want || l[i] == "origin:aaron") { print $1; next } }')
+  # IDs go through ENVIRON, not -v: BSD awk rejects a newline in a -v value.
+  printf '%s\n' "$backlog" | IDS="$ids" awk '
+    BEGIN { n = split(ENVIRON["IDS"], a, "\n"); for (i = 1; i <= n; i++) if (a[i] != "") keep[a[i]] = 1 }
+    ($1 in keep)'
+}
+
 # ── wip_gate_active ───────────────────────────────────────────────────────────
 # Kanban-style WIP limit on the human review queue. Aaron is the merge
 # bottleneck: when open PRs pile up unreviewed, more overnight PRs just age,
