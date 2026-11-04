@@ -12,6 +12,8 @@ updated: 2026-04-06
 > [!info] How the Pilot pipeline works end-to-end.
 > For Aaron's responsibilities within this pipeline, see [Pilot Responsibilities](pilot-responsibilities.md).
 
+> [!warning] **Pilot is OFF (paused since 2026-11-03).** All 10 launchd agents are unloaded and `launchctl disable`d, so none of the schedules below run. This doc describes the pipeline as it runs when enabled. The restart procedure is in the 2026-11-03 changelog entry of [Pilot Responsibilities](pilot-responsibilities.md).
+
 ---
 
 ## Pipeline Overview

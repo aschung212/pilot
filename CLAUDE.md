@@ -1,6 +1,8 @@
 # Pilot — Claude Guidelines
 
 ## About This Project
+> **Pilot is OFF (paused 2026-11-03, until further notice).** All 10 launchd agents are booted out and `launchctl disable`d to save tokens. Do not re-enable them, run `builder.sh`, or start any agent unless Aaron explicitly asks. The restart procedure is in the 2026-11-03 changelog entry of `docs/pilot-responsibilities.md`.
+
 Pilot is an autonomous multi-agent pipeline that discovers, triages, implements, and reviews improvements to the Lift workout tracker. It runs overnight via launchd, creating PRs that Aaron reviews in the morning.
 
 **Repo:** github.com/aschung212/pilot

@@ -4,7 +4,7 @@ tags:
   - pilot
   - automation
   - responsibilities
-updated: 2026-05-08
+updated: 2026-11-03
 ---
 
 # Aaron's Pilot Responsibilities
@@ -12,6 +12,9 @@ updated: 2026-05-08
 > [!info] This is the source of truth for what Aaron does manually vs. what is automated.
 > All Claude instances are instructed to keep this updated when workflows change.
 > For the full pipeline architecture and agent details, see [Pilot Architecture](pilot-architecture.md).
+
+> [!warning] **Pilot is OFF — paused since 2026-11-03, until further notice.**
+> All 10 launchd agents are unloaded **and** `launchctl disable`d, so nothing runs — not after a reboot or login either. Reason: token cost after a Claude subscription downgrade, and Lift is mature enough not to need constant development. **Nothing below is a current daily or weekly responsibility while paused.** See *Restarting Pilot* in the 2026-11-03 changelog entry.
 
 ---
 
@@ -1560,3 +1563,16 @@ Repaired `lift-metrics.csv` in place (one-shot script reconstructed 46 split row
   2. **Review refactor PRs for behavior drift.** The diff should be mostly deletions and moves, and tests should be unchanged apart from import paths. Close any PR that changes behavior, with a comment; the learning is harvested into the builder prompt.
   3. **Ending the phase:** set `PICK_REQUIRE_LABEL=""` in `project.env` and ask for the discovery rotation, triage policy, and prompts to be re-aimed.
   4. **Paused-bug expiry:** cleanup still auto-closes `priority:4-low` issues untouched for 56 days (`BACKLOG_EXPIRY_DAYS`). Paused P4 bugs will start expiring in about 8 weeks unless the phase ends sooner or the setting is raised.
+
+### 2026-11-03 — Pilot: turned off until further notice
+
+- **What.** Every Pilot launchd agent was stopped with `launchctl bootout` and then `launchctl disable`d: architect, auditor, builder, discover, doc-drift, health, roadmap, stale-pr-audit, triage, tune-budget (all 10). The disable is persistent, so none of them reload at login or after a reboot. No Pilot process was running when it was done, so no build was cut off. The plists stay in `launchd/` and in `~/Library/LaunchAgents/`. No code, config, issues, or `data/` were changed or deleted.
+- **Why.** Aaron moved to a lower Claude subscription tier, and the builder and other agents were using too many tokens for it. Lift is also mature enough that it no longer needs constant development.
+- **Side effects while paused.** No nightly PRs, Slack summaries, health reports, discovery, triage, or backlog cleanup. That includes the 56-day `priority:4-low` backlog expiry, which only runs inside cleanup, so open Lift issues just sit unchanged. The code-cleanup phase settings (`PICK_REQUIRE_LABEL=type:refactor`) are untouched and take effect again on restart.
+- **New responsibilities for Aaron.** None. The daily and weekly procedures in this doc are suspended. Lift work, if any, is manual.
+- **Restarting Pilot.** First check builder auth (see *Builder Auth* above) and decide whether the code-cleanup phase still applies. Then:
+  ```bash
+  for p in ~/Library/LaunchAgents/com.aaron.pilot-*.plist; do l=$(basename "$p" .plist); launchctl enable gui/$(id -u)/$l; launchctl bootstrap gui/$(id -u) "$p"; done
+  launchctl list | grep pilot   # expect 10
+  ```
+  For a cheaper restart, enable only a subset (for example, the builder with a lower iteration budget), and remove the OFF banners from README, CLAUDE.md, and both docs.

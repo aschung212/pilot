@@ -2,7 +2,7 @@
 
 An autonomous multi-agent pipeline that discovers, triages, implements, and reviews improvements to your software — running overnight while you sleep.
 
-> **Status**: Active development. Project-agnostic pipeline — configure for any repo via `init.sh`.
+> **Status**: **Paused since 2026-11-03.** All launchd agents are unloaded and disabled to save token cost, and Lift no longer needs constant development. The restart steps are in `docs/pilot-responsibilities.md` (changelog, 2026-11-03). Project-agnostic pipeline — configure for any repo via `init.sh`.
 
 ## What It Does
 
